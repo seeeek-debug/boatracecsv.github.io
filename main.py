@@ -66,20 +66,31 @@ def judge_race_condition(wave_height, wind_speed):
     else:
         return "rough"
 
-def calculate_boat_scores(boat_data_list, condition_type):
+def calculate_boat_scores(boat_data_list, condition_type, stadium_id):
     scores = {}
-    # イン有利を少し和らげ、モーターと選手能力（級別・ST）の比重を上げる
-    if condition_type == "solid":
-        w_frame, w_stat, w_motor = 1.2, 1.8, 2.0
-    elif condition_type == "medium":
-        w_frame, w_stat, w_motor = 0.8, 1.8, 2.5
+    
+    high_in_stadiums = [17, 20, 23]
+    low_in_stadiums = [1, 2, 3, 4, 5, 6, 11, 14]
+    
+    if stadium_id in high_in_stadiums:
+        in_bias_multiplier = 1.3
+    elif stadium_id in low_in_stadiums:
+        in_bias_multiplier = 0.7
     else:
-        w_frame, w_stat, w_motor = 0.3, 1.5, 3.0
+        in_bias_multiplier = 1.0
+
+    if condition_type == "solid":
+        w_frame, w_stat, w_motor = 1.2 * in_bias_multiplier, 1.8, 2.0
+    elif condition_type == "medium":
+        w_frame, w_stat, w_motor = 0.8 * in_bias_multiplier, 1.8, 2.5
+    else:
+        w_frame, w_stat, w_motor = 0.3 * in_bias_multiplier, 1.5, 3.0
 
     for data in boat_data_list:
         boat = data['boat_number']
-        # 枠番バイアスをマイルドにする
-        frame_bias = (7 - boat) * 0.8 if condition_type != "rough" else (boat if boat >= 4 else 3)
+        extra_in_bonus = 1.5 if (boat == 1 and stadium_id in high_in_stadiums) else 1.0
+        
+        frame_bias = ((7 - boat) * 0.8 * extra_in_bonus) if condition_type != "rough" else (boat if boat >= 4 else 3)
         st_score = max(0.25 - data['avg_st'], 0) * 20
         stat_score = data['class_bonus'] + st_score - data['f_penalty']
         motor_score = data['motor_power'] * w_motor
@@ -89,7 +100,7 @@ def calculate_boat_scores(boat_data_list, condition_type):
         
     return scores
 
-def generate_sanrentan_bets(scores, condition_type):
+def generate_dynamic_bets(scores, condition_type):
     total_score = sum(scores.values())
     probs = {boat: score / total_score for boat, score in scores.items()}
     
@@ -103,114 +114,145 @@ def generate_sanrentan_bets(scores, condition_type):
                 p2 = probs[b2] / (1 - p1) if (1 - p1) > 0 else 0
                 p3 = probs[b3] / (1 - p1 - probs[b2]) if (1 - p1 - probs[b2]) > 0 else 0
                 combo_prob = p1 * p2 * p3
-                bets.append((f"{b1}-{b2}-{b3}", combo_prob))
+                est_odds = 0.75 / combo_prob if combo_prob > 0 else 100.0
+                bets.append((f"{b1}-{b2}-{b3}", combo_prob, est_odds))
                 
     bets.sort(key=lambda x: x[1], reverse=True)
+    top_prob = bets[0][1] if bets else 0.2
     
-    if condition_type == "solid":
-        return bets[:6]
-    elif condition_type == "medium":
-        return bets[:8]
+    if top_prob >= 0.30:
+        race_type = "固め"
+        filtered = [b for b in bets if b[2] >= 6.0]
+        num_bets = max(1, min(5, len(filtered)))
+        selected = filtered[:num_bets]
+        if not selected: selected = bets[:3]
+    elif top_prob >= 0.15:
+        race_type = "中穴"
+        filtered = [b for b in bets if b[2] >= 12.0]
+        num_bets = max(6, min(12, len(filtered)))
+        selected = filtered[:num_bets]
+        if not selected: selected = bets[:8]
     else:
-        return bets[:10]
+        race_type = "穴"
+        filtered = [b for b in bets if b[2] >= 20.0]
+        num_bets = max(13, min(20, len(filtered)))
+        selected = filtered[:num_bets]
+        if not selected: selected = bets[:15]
+            
+    return [(combo, prob) for combo, prob, odds in selected], race_type
 
-def run_backtest(target_date_str="20260901"):
-    year = target_date_str[:4]
-    month = target_date_str[4:6]
-    day = target_date_str[6:]
-    
-    result_path = f"data/results/payouts/{year}/{month}/{day}.csv"
-    race_card_path = f"data/programs/race_cards/{year}/{month}/{day}.csv"
-    
-    if not os.path.exists(result_path):
-        print(f"結果データが見つかりません: {result_path}")
-        return
-    if not os.path.exists(race_card_path):
-        print(f"出走表データが見つかりません: {race_card_path}")
-        return
-
-    results_df = pd.read_csv(result_path)
+def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     motor_df = load_motor_abilities()
-    races_dict = load_race_cards(race_card_path, motor_df)
+    dates = pd.date_range(start=start_date, end=end_date, freq="D")
     
     total_investment = 0
     total_payout = 0
     hit_count = 0
     total_races = 0
     
-    print(f"=== 実データバックテスト実行中 ({target_date_str}) ===")
+    type_stats = {"固め": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
+                  "中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
+                  "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
     
-    for idx, row in results_df.iterrows():
-        # レースコードの取得
-        race_code = ""
-        for col in results_df.columns:
-            if 'レースコード' in str(col) or 'race_code' in str(col).lower() or 'race_id' in str(col).lower():
-                race_code = str(row.get(col, '')).strip()
-                break
-        if not race_code:
-            race_code = str(row.get('レースコード', idx + 1))
+    print(kf := f"=== 2026年 8月度 月間一括バックテスト実行中 ===")
+    
+    for single_date in dates:
+        year = single_date.strftime("%Y")
+        month = single_date.strftime("%m")
+        day = single_date.strftime("%d")
+        target_date_str = f"{year}{month}{day}"
         
-        # 3連単の着順を正確に取得（'3連単_組番' カラムから取得し、'=' を '-' に変換してフォーマットを合わせる）
-        winning_combo = ""
-        if '3連単_組番' in row and pd.notna(row['3連単_組番']):
-            raw_combo = str(row['3連単_組番']).strip()
-            winning_combo = raw_combo.replace('=', '-')
+        result_path = f"data/results/payouts/{year}/{month}/{day}.csv"
+        race_card_path = f"data/programs/race_cards/{year}/{month}/{day}.csv"
         
-        # 払戻金データの取得
-        payout_yen = 0.0
-        if '3連単_払戻金' in row and pd.notna(row['3連単_払戻金']):
-            try:
-                payout_yen = float(row['3連単_払戻金'])
-            except ValueError:
-                payout_yen = 0.0
-        
-        if race_code not in races_dict:
+        if not os.path.exists(result_path) or not os.path.exists(race_card_path):
             continue
             
-        boats = races_dict[race_code]
+        results_df = pd.read_csv(result_path)
+        races_dict = load_race_cards(race_card_path, motor_df)
         
-        wave_height = 4  
-        wind_speed = 2   
-        condition_type = judge_race_condition(wave_height, wind_speed)
-        
-        scores = calculate_boat_scores(boats, condition_type)
-        recommended_bets = generate_sanrentan_bets(scores, condition_type)
-        
-        investment = len(recommended_bets) * 100
-        total_investment += investment
-        total_races += 1
-        
-        hit = False
-        predicted_combos = [combo for combo, prob in recommended_bets]
-        
-        for combo, prob in recommended_bets:
-            if combo == winning_combo:
-                hit = True
-                total_payout += (payout_yen / 100) * 100
-                break
-        
-        if hit:
-            hit_count += 1
-            print(f"[{race_code}] 【的中】 予想上位: {predicted_combos[:3]} | 正解: {winning_combo} | 払戻: {payout_yen}円")
-        else:
-            if total_races <= 10:
-                print(f"[{race_code}] 【不的中】 予想上位: {predicted_combos[:3]} vs 正解: '{winning_combo}'")
+        for idx, row in results_df.iterrows():
+            race_code = ""
+            for col in results_df.columns:
+                if 'レースコード' in str(col) or 'race_code' in str(col).lower() or 'race_id' in str(col).lower():
+                    race_code = str(row.get(col, '')).strip()
+                    break
+            if not race_code:
+                race_code = str(row.get('レースコード', idx + 1))
+                
+            stadium_id = 12
+            for col in results_df.columns:
+                if 'レース場' in str(col) or 'stadium' in str(col).lower():
+                    try:
+                        stadium_id = int(row.get(col, 12))
+                    except ValueError:
+                        pass
+                    break
+            
+            winning_combo = ""
+            if '3連単_組番' in row and pd.notna(row['3連単_組番']):
+                raw_combo = str(row['3連単_組番']).strip()
+                winning_combo = raw_combo.replace('=', '-')
+            
+            payout_yen = 0.0
+            if '3連単_払戻金' in row and pd.notna(row['3連単_払戻金']):
+                try:
+                    payout_yen = float(row['3連単_払戻金'])
+                except ValueError:
+                    payout_yen = 0.0
+            
+            if race_code not in races_dict:
+                continue
+                
+            boats = races_dict[race_code]
+            
+            wave_height = 4  
+            wind_speed = 2   
+            condition_type = judge_race_condition(wave_height, wind_speed)
+            
+            scores = calculate_boat_scores(boats, condition_type, stadium_id)
+            recommended_bets, race_type = generate_dynamic_bets(scores, condition_type)
+            
+            investment = len(recommended_bets) * 100
+            total_investment += investment
+            total_races += 1
+            
+            type_stats[race_type]["count"] += 1
+            type_stats[race_type]["inv"] += investment
+            
+            hit = False
+            for combo, prob in recommended_bets:
+                if combo == winning_combo:
+                    hit = True
+                    payout_added = (payout_yen / 100) * 100
+                    total_payout += payout_added
+                    type_stats[race_type]["pay"] += payout_added
+                    break
+            
+            if hit:
+                hit_count += 1
+                type_stats[race_type]["hits"] += 1
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0
     hit_rate = (hit_count / total_races * 100) if total_races > 0 else 0
     net_profit = total_payout - total_investment
     
-    print("\n" + "="*30)
-    print(f" 🎯 バックテスト最終結果")
-    print("="*30)
-    print(f" 検証レース数 : {total_races} レース")
-    print(f" 的中レース数 : {hit_count} レース (的中率: {hit_rate:.2f}%)")
-    print(f" 総投資額     : {total_investment:,.0f} 円")
-    print(f" 総払戻金     : {total_payout:,.0f} 円")
-    print(f" 収支         : {net_profit:+,.0f} 円")
-    print(f" 回収率 (ROI) : {roi:.2f}%")
-    print("="*30)
+    print("\n" + "="*50)
+    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果")
+    print("="*50)
+    for r_type, st in type_stats.items():
+        t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
+        t_hit = (st["hits"] / st["count"] * 100) if st["count"] > 0 else 0
+        print(f"■ 【{r_type}】 レース数: {st['count']} | 的中数: {st['hits']} ({t_hit:.1f}%) | 投資: {st['inv']:,}円 | 払戻: {st['pay']:,}円 | 回収率: {t_roi:.1f}%")
+    print("-" * 50)
+    print(f" 総検証レース数 : {total_races} レース")
+    print(f" 的中レース数   : {hit_count} レース (的中率: {hit_rate:.2f}%)")
+    print(f" 総投資額       : {total_investment:,.0f} 円")
+    print(f" 総払戻金       : {total_payout:,.0f} 円")
+    print(f" 収支           : {net_profit:+,.0f} 円")
+    print(f" 総合回収率 (ROI) : {roi:.2f}%")
+    print("="*50)
 
 if __name__ == "__main__":
-    run_backtest("20260901")
+    run_monthly_backtest("2026-08-01", "2026-08-31")
 
