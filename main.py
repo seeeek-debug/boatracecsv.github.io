@@ -137,7 +137,6 @@ def load_original_exhibition_data(file_path):
     return orig_dict
 
 def calculate_combination_probabilities(boat_data_list, stt_info, orig_info, stadium_id):
-    # 1号艇の基礎バイアスを強化し、インの信頼度を適正化
     base_frame_win_bias = {1: 0.60, 2: 0.15, 3: 0.11, 4: 0.08, 5: 0.04, 6: 0.02}
     
     boat_scores = {}
@@ -192,11 +191,10 @@ def calculate_combination_probabilities(boat_data_list, stt_info, orig_info, sta
 def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig_info, stadium_id):
     combo_probs = calculate_combination_probabilities(boat_data_list, stt_info, orig_info, stadium_id)
     
-    if race_actual_odds:
-        min_odds = min(race_actual_odds.values())
-    else:
-        min_odds = 10.0
+    if not race_actual_odds:
+        return None, "見送り"
 
+    min_odds = min(race_actual_odds.values()) if race_actual_odds else 10.0
     if min_odds < 8.0:
         return None, "見送り"
 
@@ -211,25 +209,28 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
 
     valid_bets = []
     for combo, combo_prob in combo_probs.items():
-        if race_actual_odds and combo in race_actual_odds:
-            actual_odds = race_actual_odds[combo]
-        else:
-            actual_odds = 0.75 / combo_prob if combo_prob > 0 else 100.0
-            
+        if combo not in race_actual_odds:
+            continue
+        actual_odds = race_actual_odds[combo]
         expected_value = combo_prob * actual_odds
         
         if actual_odds < 15.0:
             continue
             
-        # 期待値のハードルを 1.15 に厳格化してゴミ馬券を排除
-        if expected_value >= 1.15:
+        # 期待値のハードルをさらに引き上げ
+        if expected_value >= 1.25:
             valid_bets.append((combo, combo_prob, actual_odds, expected_value))
                 
     if not valid_bets:
         return None, "見送り"
         
+    # レース全体の中で「最も高い期待値」が 1.35 未満のレースは、自信がないため見送り！
+    max_ev = max(bet[3] for bet in valid_bets)
+    if max_ev < 1.35:
+        return None, "見送り"
+        
     valid_bets.sort(key=lambda x: x[3], reverse=True)
-    selected_candidates = valid_bets[:3]
+    selected_candidates = valid_bets[:2]  # 買う点数も2点に絞り込む
     
     allocated_bets = []
     total_inv = 0
@@ -266,7 +267,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     type_stats = {"中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
                   "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
     
-    print("=== 2026年 8月度 月間一括テスト（イン強化・期待値厳格化版） ===")
+    print("=== 2026年 8月度 月間一括テスト（厳選・勝負レース絞り込み版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -357,7 +358,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（イン強化・期待値厳格化版）")
+    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（厳選・勝負レース絞り込み版）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
@@ -366,7 +367,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     print("-" * 50)
     print(f" 見送りレース数 : {skipped_races} レース")
     print(f" 購入レース数   : {total_races} レース")
-    print(f" 的中レース数   : {hit_count} レース (的中率: {hit_rate:.2f}%)")
+    print(f" 的中数         : {hit_count} レース (的中率: {hit_rate:.2f}%)")
     print(f" 総投資額       : {total_investment:,.0f} 円")
     print(f" 総払戻金       : {total_payout:,.0f} 円")
     print(f" 収支           : {net_profit:+,.0f} 円")
