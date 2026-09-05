@@ -136,7 +136,7 @@ def generate_target_return_bets(scores, race_actual_odds):
     total_score = sum(scores.values())
     probs = {boat: score / total_score for boat, score in scores.items()}
     
-    bets = []
+    valid_bets = []
     for b1 in range(1, 7):
         for b2 in range(1, 7):
             if b2 == b1: continue
@@ -153,45 +153,41 @@ def generate_target_return_bets(scores, race_actual_odds):
                 else:
                     actual_odds = 0.75 / combo_prob if combo_prob > 0 else 100.0
                     
-                bets.append((combo, combo_prob, actual_odds))
+                # --- 期待値計算 (確率 × オッズ) ---
+                expected_value = combo_prob * actual_odds
                 
-    bets.sort(key=lambda x: x[1], reverse=True)
-    
-    if len(bets) < 3:
+                # 期待値が1.2以上のものだけを候補にする
+                if expected_value >= 1.2:
+                    valid_bets.append((combo, combo_prob, actual_odds, expected_value))
+                
+    # 期待値が1.2以上の買い目が一つもない場合はレース見送り
+    if not valid_bets:
         return None, "見送り"
         
-    top_combo, top_prob, top_odds = bets[0]
-
-    # --- 調整：回収率の悪い「穴」を減らし、「固め」「中穴」に寄せる ---
-    if top_odds < 22.0:
+    # 期待値が高い順にソート
+    valid_bets.sort(key=lambda x: x[3], reverse=True)
+    
+    top_combo, top_prob, top_odds, top_ev = valid_bets[0]
+    
+    if top_odds < 20.0:
         race_type = "固め"
-        min_odds, max_odds = 3.0, 35.0
-        target_payout = 4500
+        target_payout = 4000
         max_inv = 1000
-    elif top_odds < 55.0:
+    elif top_odds < 60.0:
         race_type = "中穴"
-        min_odds, max_odds = 12.0, 80.0
-        target_payout = 7000
+        target_payout = 6000
         max_inv = 1000
     else:
-        # 穴レースは回収率が低すぎるため、確率の裏付けがない場合は思い切って見送りにする
-        if top_prob < 0.12:
-            return None, "見送り"
         race_type = "穴"
-        min_odds, max_odds = 30.0, 150.0
-        target_payout = 10000
+        target_payout = 8000
         max_inv = 800
 
-    target_bets = [b for b in bets if min_odds <= b[2] < max_odds]
-    if len(target_bets) < 2:
-        target_bets = bets[:3]
-        
-    selected_candidates = target_bets[:4] # 買い目を少し絞る（点数を減らして回収率アップ）
+    selected_candidates = valid_bets[:3] # 上位3点まで
     
     allocated_bets = []
     total_inv = 0
     
-    for combo, prob, odds in selected_candidates:
+    for combo, prob, odds, ev in selected_candidates:
         if odds <= 0: continue
         raw_w = target_payout / odds
         w = max(100, round(raw_w / 100) * 100)
@@ -224,7 +220,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
                   "中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
                   "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
     
-    print("=== 2026年 8月度 月間一括バックテスト実行中（回収率改善・絞り込み版） ===")
+    print("=== 2026年 8月度 月間一括バックテスト実行中（期待値1.2以上・厳選版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -314,7 +310,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（回収率改善・絞り込み版）")
+    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（期待値1.2以上・厳選版）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
