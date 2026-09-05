@@ -136,8 +136,41 @@ def load_original_exhibition_data(file_path):
         orig_dict[race_code] = boat_orig
     return orig_dict
 
+def get_stadium_bias(stadium_id):
+    # レース場ごとの1号艇の基礎勝率バイアス（全国平均をベースに補正）
+    # インが強い場（大村、徳山など）、インが弱い場（戸田、平和島、江戸川など）
+    # stadium_id が数値や文字列で渡されることを考慮
+    try:
+        s_id = int(stadium_id)
+    except:
+        s_id = 12 # デフォルト住之江など
+        
+    # インが強い場 (大村=23, 徳山=17, 芦屋=20 など) -> 1号艇のバイアスを高めに
+    strong_in = [17, 20, 23]
+    # インが弱い場 (戸田=2, 江戸川=3, 平和島=4 など) -> 1号艇のバイアスを下げ、2〜4号艇を相対的に上げる
+    weak_in = [2, 3, 4]
+    
+    base = {1: 0.58, 2: 0.15, 3: 0.12, 4: 0.09, 5: 0.04, 6: 0.02}
+    
+    if s_id in strong_in:
+        base[1] = 0.65
+        base[2] = 0.14
+        base[3] = 0.10
+        base[4] = 0.07
+        base[5] = 0.03
+        base[6] = 0.01
+    elif s_id in weak_in:
+        base[1] = 0.50
+        base[2] = 0.18
+        base[3] = 0.14
+        base[4] = 0.11
+        base[5] = 0.05
+        base[6] = 0.02
+        
+    return base
+
 def calculate_combination_probabilities(boat_data_list, stt_info, orig_info, stadium_id):
-    base_frame_win_bias = {1: 0.60, 2: 0.15, 3: 0.11, 4: 0.08, 5: 0.04, 6: 0.02}
+    base_frame_win_bias = get_stadium_bias(stadium_id)
     
     boat_scores = {}
     for data in boat_data_list:
@@ -201,18 +234,18 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
             
         actual_odds = race_actual_odds[combo]
         
-        # オッズの下限を15倍に引き上げ、高配当ゾーン（15倍〜50倍）に特化
+        # 15倍〜50倍の中穴スイートスポット
         if not (15.0 <= actual_odds <= 50.0):
             continue
             
-        # 確率のノイズカット（3.0%以上）
-        if combo_prob < 0.030:
+        # 確率ノイズカットを少し緩めてヒットの取りこぼしを防ぐ (2.5%以上)
+        if combo_prob < 0.025:
             continue
             
         expected_value = combo_prob * actual_odds
         
-        # 期待値ハードル 1.30
-        if expected_value >= 1.30:
+        # 期待値ハードル 1.25
+        if expected_value >= 1.25:
             valid_bets.append((combo, combo_prob, actual_odds, expected_value))
                 
     if not valid_bets:
@@ -220,13 +253,12 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
         
     valid_bets.sort(key=lambda x: x[3], reverse=True)
     
-    race_type = "中穴特化"
+    race_type = "中穴特化（場別補正版）"
     
-    # 買い目を上位2点に絞る
+    # 上位2点に絞る
     selected_candidates = valid_bets[:2]
     
     allocated_bets = []
-    # 1番期待値が高い本線を少し厚く（400円）、2番手を200円にするメリハリ配分
     for i, (combo, prob, odds, ev) in enumerate(selected_candidates):
         amount = 400 if i == 0 else 200
         allocated_bets.append((combo, amount, odds))
@@ -246,11 +278,9 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     total_races = 0
     skipped_races = 0
     
-    type_stats = {
-        "中穴特化": {"count": 0, "hits": 0, "inv": 0, "pay": 0}
-    }
+    stadium_stats = {}
     
-    print("=== 2026年 8月度 月間一括テスト（15〜50倍・上位2点メリハリ配分モード） ===")
+    print("=== 2026年 8月度 月間一括テスト（レース場別バイアス適応版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -283,12 +313,15 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
                 
             stadium_id = 12
             for col in results_df.columns:
-                if 'レース場' in str(col) or 'stadium' in str(col).lower():
+                if 'レース場' in str(col) or 'stadium' in str(col).lower() or '場コード' in str(col):
                     try:
                         stadium_id = int(row.get(col, 12))
                     except ValueError:
                         pass
                     break
+            
+            if stadium_id not in stadium_stats:
+                stadium_stats[stadium_id] = {"count": 0, "hits": 0, "inv": 0, "pay": 0}
             
             winning_combo = ""
             if '3連単_組番' in row and pd.notna(row['3連単_組番']):
@@ -320,8 +353,8 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
             total_investment += investment
             total_races += 1
             
-            type_stats[race_type]["count"] += 1
-            type_stats[race_type]["inv"] += investment
+            stadium_stats[stadium_id]["count"] += 1
+            stadium_stats[stadium_id]["inv"] += investment
             
             hit = False
             for combo, amount, odds in allocated_bets:
@@ -329,24 +362,26 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
                     hit = True
                     payout_added = (payout_yen / 100) * amount
                     total_payout += payout_added
-                    type_stats[race_type]["pay"] += payout_added
+                    stadium_stats[stadium_id]["pay"] += payout_added
                     break
             
             if hit:
                 hit_count += 1
-                type_stats[race_type]["hits"] += 1
+                stadium_stats[stadium_id]["hits"] += 1
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0
     hit_rate = (hit_count / total_races * 100) if total_races > 0 else 0
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（15〜50倍・メリハリ配分）")
+    print(f" 🎯 2026年 8月度 月間テスト最終結果（場別バイアス適応版）")
     print("="*50)
-    for r_type, st in type_stats.items():
-        t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
-        t_hit = (st["hits"] / st["count"] * 100) if st["count"] > 0 else 0
-        print(f"■ 【{r_type}】 レース数: {st['count']} | 的中数: {st['hits']} ({t_hit:.1f}%) | 投資: {st['inv']:,}円 | 払戻: {st['pay']:,}円 | 回収率: {t_roi:.1f}%")
+    print("■ 【レース場別成績】")
+    for s_id, st in sorted(stadium_stats.items(), key=lambda x: x[1]['count'], reverse=True):
+        if st["count"] > 0:
+            t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
+            t_hit = (st["hits"] / st["count"] * 100) if st["count"] > 0 else 0
+            print(f"  - 場コード {s_id:2d} | 購入: {st['count']:3d} | 的中: {st['hits']:2d} ({t_hit:4.1f}%) | 収支: {st['pay'] - st['inv']:+7,.0f}円 | 回収率: {t_roi:5.1f}%")
     print("-" * 50)
     print(f" 見送りレース数 : {skipped_races} レース")
     print(f" 購入レース数   : {total_races} レース")
