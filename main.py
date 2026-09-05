@@ -194,51 +194,46 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
     if not race_actual_odds:
         return None, "見送り"
 
-    min_odds = min(race_actual_odds.values()) if race_actual_odds else 10.0
-    if min_odds < 8.0:
-        return None, "見送り"
-
-    if min_odds < 30.0:
-        race_type = "中穴"
-        target_payout = 5000
-        max_inv = 1000
-    else:
-        race_type = "穴"
-        target_payout = 8000
-        max_inv = 800
-
     valid_bets = []
     for combo, combo_prob in combo_probs.items():
         if combo not in race_actual_odds:
             continue
             
-        # ★【超重要】確率が 1.5% 未満の「カス確率の大穴」は、オッズが高くても絶対に対象外にする
-        if combo_prob < 0.015:
+        actual_odds = race_actual_odds[combo]
+        
+        # 1. オッズは 10倍〜50倍 の中穴ゾーンに限定
+        if not (10.0 <= actual_odds <= 50.0):
             continue
             
-        actual_odds = race_actual_odds[combo]
+        # 2. 確率が低すぎるノイズ（3%未満）は除外
+        if combo_prob < 0.03:
+            continue
+            
         expected_value = combo_prob * actual_odds
         
-        if actual_odds < 15.0:
-            continue
-            
-        if expected_value >= 1.20:
+        # 3. 期待値が 1.25 以上のもの
+        if expected_value >= 1.25:
             valid_bets.append((combo, combo_prob, actual_odds, expected_value))
                 
     if not valid_bets:
         return None, "見送り"
         
+    # 4. 期待値が高い順にソートし、上位「4点」までを厳選して採用
     valid_bets.sort(key=lambda x: x[3], reverse=True)
-    selected_candidates = valid_bets[:2]
+    selected_candidates = valid_bets[:4]
     
     allocated_bets = []
     total_inv = 0
+    max_inv = 1200  // 4点で最大1,200円まで（1点あたり300円上限）
     
     for combo, prob, odds, ev in selected_candidates:
         if odds <= 0: continue
-        raw_w = target_payout / odds
+        # 1点あたり1,000円前後の払戻を狙う配分
+        raw_w = 1000 / odds
         w = max(100, round(raw_w / 100) * 100)
-        
+        if w > 300:
+            w = 300
+            
         if total_inv + w <= max_inv:
             allocated_bets.append((combo, w, odds))
             total_inv += w
@@ -251,6 +246,9 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
     if not allocated_bets:
         return None, "見送り"
         
+    avg_odds = sum(o for _, _, o in allocated_bets) / len(allocated_bets)
+    race_type = "中穴" if avg_odds < 30.0 else "穴"
+    
     return allocated_bets, race_type
 
 def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
@@ -266,7 +264,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     type_stats = {"中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
                   "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
     
-    print("=== 2026年 8月度 月間一括テスト（確率フィルター導入・厳選版） ===")
+    print("=== 2026年 8月度 月間一括テスト（厳選4点買いモード） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -357,7 +355,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（確率フィルター導入版）")
+    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（厳選4点買いモード）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
