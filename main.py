@@ -40,7 +40,6 @@ def load_race_cards(file_path, motor_df):
                 if not matched_motor.empty:
                     motor_power = float(matched_motor.iloc[0].get('ability_score', 1.0))
             
-            # 級別の影響度を少し上げる
             class_bonus = {"A1": 2.0, "A2": 1.2, "B1": 0.5, "B2": 0.0}.get(class_type, 0.0)
             f_penalty = f_count * 0.8  
             
@@ -69,7 +68,6 @@ def judge_race_condition(wave_height, wind_speed):
 
 def calculate_boat_scores(boat_data_list, condition_type):
     scores = {}
-    # モーターと選手の能力がしっかり反映されるようにウェイトを調整
     if condition_type == "solid":
         w_frame, w_stat, w_motor = 1.5, 1.5, 1.5
     elif condition_type == "medium":
@@ -79,7 +77,6 @@ def calculate_boat_scores(boat_data_list, condition_type):
 
     for data in boat_data_list:
         boat = data['boat_number']
-        # 枠番バイアスを少しマイルドにして、実力差が出るようにする
         frame_bias = (7 - boat) if condition_type != "rough" else (boat if boat >= 4 else 3)
         st_score = max(0.25 - data['avg_st'], 0) * 15
         stat_score = data['class_bonus'] + st_score - data['f_penalty']
@@ -131,6 +128,15 @@ def run_backtest(target_date_str="20260901"):
         return
 
     results_df = pd.read_csv(result_path)
+    
+    # デバッグ用：実際の列名と1行目のデータを強制出力して確認する
+    print("=== 結果CSVの列名一覧 ===")
+    print(list(results_df.columns))
+    if not results_df.empty:
+        print("=== 1行目のデータサンプル ===")
+        print(results_df.iloc[0].to_dict())
+    print("=========================\n")
+
     motor_df = load_motor_abilities()
     races_dict = load_race_cards(race_card_path, motor_df)
     
@@ -142,24 +148,45 @@ def run_backtest(target_date_str="20260901"):
     print(f"=== 実データバックテスト実行中 ({target_date_str}) ===")
     
     for idx, row in results_df.iterrows():
-        race_code = str(row.get('レースコード', ''))
+        # レースコードの取得
+        race_code = ""
+        for col in results_df.columns:
+            if 'レースコード' in str(col) or 'race_code' in str(col).lower() or 'race_id' in str(col).lower():
+                race_code = str(row.get(col, '')).strip()
+                break
+        if not race_code:
+            race_code = str(row.get('レースコード', idx + 1))
         
-        # 柔軟に着順データを取得できるようにする
+        # 着順データ（ハイフンを含み数字で構成される文字列を動的に探す）
         winning_combo = ""
-        for col in ['3連単_着順', '3連単着順', '着順', '3連単', 'sanrentan']:
-            if col in row and pd.notna(row[col]):
-                winning_combo = str(row[col]).strip()
+        for col in results_df.columns:
+            val = str(row.get(col, '')).strip()
+            if '-' in val and any(char.isdigit() for char in val):
+                winning_combo = val
                 break
-                
-        # 払戻金データを取得
+        if not winning_combo:
+            for col in ['3連単_着順', '3連単着順', '着順', '3連単']:
+                if col in row and pd.notna(row[col]):
+                    winning_combo = str(row[col]).strip()
+                    break
+
+        # 払戻金データの取得
         payout_yen = 0.0
-        for col in ['3連単_払戻金', '3連単払戻金', '払戻金', 'payout']:
-            if col in row and pd.notna(row[col]):
+        for col in results_df.columns:
+            if '払戻' in str(col) or 'payout' in str(col).lower():
                 try:
-                    payout_yen = float(row[col])
+                    payout_yen = float(row.get(col, 0))
+                    break
                 except ValueError:
-                    payout_yen = 0.0
-                break
+                    pass
+        if payout_yen == 0.0:
+            for col in ['3連単_払戻金', '3連単払戻金', '払戻金']:
+                if col in row and pd.notna(row[col]):
+                    try:
+                        payout_yen = float(row[col])
+                    except ValueError:
+                        payout_yen = 0.0
+                    break
         
         if race_code not in races_dict:
             continue
@@ -191,9 +218,7 @@ def run_backtest(target_date_str="20260901"):
             print(f"[{race_code}] 【的中】 予想: {predicted_combos[:3]} | 正解: {winning_combo} | 払戻: {payout_yen}円")
         else:
             if total_races <= 10:
-                print(f"[{race_code}] 【不。」 予想上位: {predicted_combos[:3]} vs 正解: '{winning_combo}'")
-            else:
-                pass
+                print(f"[{race_code}] 【不的中】 予想上位: {predicted_combos[:3]} vs 正解: '{winning_combo}'")
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0
     hit_rate = (hit_count / total_races * 100) if total_races > 0 else 0
