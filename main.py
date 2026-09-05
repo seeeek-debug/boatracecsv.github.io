@@ -155,35 +155,41 @@ def generate_target_return_bets(scores, race_actual_odds):
                     
                 expected_value = combo_prob * actual_odds
                 
-                if expected_value >= 1.2:
-                    valid_bets.append((combo, combo_prob, actual_odds, expected_value))
+                # --- オッズ帯ごとに期待値の閾値を柔軟に設定 ---
+                if actual_odds < 20.0 and expected_value >= 1.05:
+                    valid_bets.append((combo, combo_prob, actual_odds, expected_value, "固め"))
+                elif 20.0 <= actual_odds < 60.0 and expected_value >= 1.10:
+                    valid_bets.append((combo, combo_prob, actual_odds, expected_value, "中穴"))
+                elif actual_odds >= 60.0 and expected_value >= 1.20:
+                    valid_bets.append((combo, combo_prob, actual_odds, expected_value, "穴"))
                 
     if not valid_bets:
         return None, "見送り"
         
+    # 期待値が高い順にソートして上位3点を選択
     valid_bets.sort(key=lambda x: x[3], reverse=True)
     selected_candidates = valid_bets[:3]
     
-    # --- 修正：購入する買い目の平均オッズでレースタイプを判定 ---
-    avg_selected_odds = sum(odds for _, _, odds, _ in selected_candidates) / len(selected_candidates)
-    
-    if avg_selected_odds < 20.0:
-        race_type = "固め"
+    # 選択された買い目の大半のタイプをレースタイプとする
+    types_count = {"固め": 0, "中穴": 0, "穴": 0}
+    for _, _, _, _, r_type in selected_candidates:
+        types_count[r_type] += 1
+    race_type = max(types_count, key=types_count.get)
+
+    if race_type == "固め":
         target_payout = 4000
         max_inv = 1000
-    elif avg_selected_odds < 60.0:
-        race_type = "中穴"
+    elif race_type == "中穴":
         target_payout = 6000
         max_inv = 1000
     else:
-        race_type = "穴"
         target_payout = 8000
         max_inv = 800
 
     allocated_bets = []
     total_inv = 0
     
-    for combo, prob, odds, ev in selected_candidates:
+    for combo, prob, odds, ev, _ in selected_candidates:
         if odds <= 0: continue
         raw_w = target_payout / odds
         w = max(100, round(raw_w / 100) * 100)
@@ -216,7 +222,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
                   "中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
                   "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
     
-    print("=== 2026年 8月度 月間一括バックテスト実行中（期待値1.2以上・分類修正版） ===")
+    print("=== 2026年 8月度 月間一括バックテスト実行中（オッズ帯別期待値フィルター版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -306,7 +312,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（期待値1.2以上・分類修正版）")
+    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（オッズ帯別期待値フィルター版）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
