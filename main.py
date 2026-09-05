@@ -149,19 +149,14 @@ def load_original_exhibition_data(file_path):
     return orig_dict
 
 def calculate_course_scores_from_sui_params(stadium_id, row_data, sui_params_df):
-    """
-    sui_params.csv の係数と気象・水面データを使って各コースの基礎スコアを算出する
-    """
     stadium_name = STADIUM_ID_TO_NAME.get(stadium_id, "住之江")
     match = sui_params_df[sui_params_df['stadium'] == stadium_name]
     
-    # パラメータが見つからない場合のフォールバック
     if match.empty:
         return {1: 0.58, 2: 0.15, 3: 0.12, 4: 0.09, 5: 0.04, 6: 0.02}
     
     p_row = match.iloc[0]
     
-    # 気象・水面データの抽出（存在しない場合はデフォルト値）
     wave_cm = float(row_data.get('波高', 2.0)) if pd.notna(row_data.get('波高', 2.0)) else 2.0
     wind_speed = float(row_data.get('風速', 2.0)) if pd.notna(row_data.get('風速', 2.0)) else 2.0
     wind_dir_raw = str(row_data.get('風向', '追い'))
@@ -176,19 +171,12 @@ def calculate_course_scores_from_sui_params(stadium_id, row_data, sui_params_df)
 
     scores = {}
     for i in range(1, 7):
-        # 1. ベース値
         score = p_row.get(f'base_c{i}', 0.1)
-        
-        # 2. 波高補正
         score += p_row.get(f'wave_cm_c{i}', 0) * wave_cm
-        
-        # 3. 風向風速補正
         if wind_type == 'tail':
             score += p_row.get(f'wind_tail_ms_c{i}', 0) * wind_speed
         else:
             score += p_row.get(f'wind_head_ms_c{i}', 0) * wind_speed
-            
-        # 4. 天候補正
         if weather == 'cloudy':
             score += p_row.get(f'is_cloudy_c{i}', 0)
         elif weather == 'rainy':
@@ -199,7 +187,7 @@ def calculate_course_scores_from_sui_params(stadium_id, row_data, sui_params_df)
     return scores
 
 def calculate_combination_probabilities(boat_data_list, stt_info, orig_info, stadium_id, row_data, sui_params_df):
-    base_frame_win_bias = calculate_course_scores_from_sui_params(stadium_id, row_data, sui_params_df)
+    base_frame_scores = calculate_course_scores_from_sui_params(stadium_id, row_data, sui_params_df)
     
     boat_scores = {}
     for data in boat_data_list:
@@ -208,20 +196,21 @@ def calculate_combination_probabilities(boat_data_list, stt_info, orig_info, sta
         ex_st = 0.15
         if stt_info and boat in stt_info:
             ex_st = stt_info[boat]['st']
-        st_score = max(0.25 - ex_st, 0) * 35 if ex_st > 0 else -15.0 
+        st_score = max(0.25 - ex_st, 0) * 20 if ex_st > 0 else -10.0 
         
         orig_bonus = 0.0
         if orig_info and boat in orig_info:
             val = orig_info[boat]['val1']
             if 35.0 <= val <= 40.0:
-                orig_bonus = (40.0 - val) * 0.6
+                orig_bonus = (40.0 - val) * 0.4
         
         stat_score = data['class_bonus'] + st_score - data['f_penalty'] + orig_bonus
-        motor_score = data['motor_power'] * 3.0
+        motor_score = data['motor_power'] * 2.0
         
-        # sui_paramsから算出されたコースバイアスを反映
-        bias_val = base_frame_win_bias.get(boat, 0.1)
-        raw_power = (bias_val * 15) + stat_score + motor_score
+        # sui_paramsの値を適切なバランスで加算（大きすぎないように調整）
+        stadium_bias = base_frame_scores.get(boat, 4.0) * 0.5
+        
+        raw_power = stadium_bias + stat_score + motor_score
         boat_scores[boat] = max(raw_power, 0.1)
         
     total_score = sum(boat_scores.values())
@@ -265,16 +254,16 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
             
         actual_odds = race_actual_odds[combo]
         
-        # 15倍〜50倍の中穴スイートスポット
-        if not (15.0 <= actual_odds <= 50.0):
+        # 10倍〜60倍に少し広げてヒット率を確保
+        if not (10.0 <= actual_odds <= 60.0):
             continue
             
-        if combo_prob < 0.025:
+        if combo_prob < 0.015:
             continue
             
         expected_value = combo_prob * actual_odds
         
-        if expected_value >= 1.25:
+        if expected_value >= 1.05: # 期待値のハードルも少し現実的に
             valid_bets.append((combo, combo_prob, actual_odds, expected_value))
                 
     if not valid_bets:
@@ -282,12 +271,12 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
         
     valid_bets.sort(key=lambda x: x[3], reverse=True)
     
-    race_type = "sui_params連携型"
+    race_type = "sui_params調整型"
     selected_candidates = valid_bets[:2]
     
     allocated_bets = []
     for i, (combo, prob, odds, ev) in enumerate(selected_candidates):
-        amount = 400 if i == 0 else 200
+        amount = 300 if i == 0 else 100
         allocated_bets.append((combo, amount, odds))
             
     if not allocated_bets:
@@ -308,7 +297,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     
     stadium_stats = {}
     
-    print("=== 2026年 8月度 月間テスト（sui_params.csv 完全連携版） ===")
+    print("=== 2026年 8月度 月間テスト（sui_paramsバランス調整版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -376,6 +365,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
             )
             
             if allocated_bets is None:
+                skipped_ressions = skipped_races + 1
                 skipped_races += 1
                 continue
             
@@ -404,7 +394,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間テスト最終結果（sui_params完全連携版）")
+    print(f" 🎯 2026年 8月度 月間テスト最終結果（sui_paramsバランス調整版）")
     print("="*50)
     print("■ 【レース場別成績】")
     for s_id, st in sorted(stadium_stats.items(), key=lambda x: x[1]['count'], reverse=True):
