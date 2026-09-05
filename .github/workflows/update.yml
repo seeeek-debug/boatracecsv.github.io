@@ -33,6 +33,7 @@ jobs:
           git config --global pull.rebase false
 
       - name: Run data update script
+        continue-on-error: true
         run: |
           python scripts/preview-realtime.py
 
