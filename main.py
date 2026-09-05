@@ -15,7 +15,6 @@ def load_race_cards(file_path, motor_df):
     parsed_races = {}
     
     for idx, row in df.iterrows():
-        # 出走表側のレースコードを特定（列名が異なる場合も考慮）
         race_code = None
         for col in ['レースコード', 'race_id', 'race_code', 'R_code']:
             if col in df.columns:
@@ -144,7 +143,6 @@ def run_backtest(target_date_str="20260901"):
         winning_combo = str(row.get('3連単_着順', ''))
         payout_yen = float(row.get('3連単_払戻金', 0))
         
-        # レースコードが一致する出走データを取得
         if race_code not in races_dict:
             continue
             
@@ -162,6 +160,8 @@ def run_backtest(target_date_str="20260901"):
         total_races += 1
         
         hit = False
+        predicted_combos = [combo for combo, prob in recommended_bets]
+        
         for combo, prob in recommended_bets:
             if combo == winning_combo:
                 hit = True
@@ -172,7 +172,11 @@ def run_backtest(target_date_str="20260901"):
             hit_count += 1
             print(f"[{race_code}] 【的中】 正解: {winning_combo} | 払戻: {payout_yen}円")
         else:
-            print(f"[{race_code}] 【不的中】 正解: {winning_combo}")
+            # 最初の数レースだけでも予想と正解のギャップを確認できるようにする
+            if total_races <= 10:
+                print(f"[{race_code}] 【不的中】 予想上位: {predicted_combos[:3]} ... vs 正解: {winning_combo}")
+            else:
+                print(f"[{race_code}] 【不的中】 正解: {winning_combo}")
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0
     hit_rate = (hit_count / total_races * 100) if total_races > 0 else 0
