@@ -9,12 +9,21 @@ def load_motor_abilities(file_path="data/estimate/motor_ability_score_v4.csv"):
 
 def load_race_cards(file_path, motor_df):
     if not os.path.exists(file_path):
-        return []
+        return {}
     
     df = pd.read_csv(file_path)
-    parsed_races = []
+    parsed_races = {}
     
     for idx, row in df.iterrows():
+        # 出走表側のレースコードを特定（列名が異なる場合も考慮）
+        race_code = None
+        for col in ['レースコード', 'race_id', 'race_code', 'R_code']:
+            if col in df.columns:
+                race_code = str(row.get(col))
+                break
+        if not race_code:
+            race_code = str(row.get('race_id', idx + 1))
+
         boat_data_list = []
         for boat_num in range(1, 7):
             prefix = f"艇{boat_num}_"
@@ -46,10 +55,7 @@ def load_race_cards(file_path, motor_df):
                 'motor_power': motor_power
             })
             
-        parsed_races.append({
-            'race_id': row.get('race_id', idx + 1),
-            'boats': boat_data_list
-        })
+        parsed_races[race_code] = boat_data_list
         
     return parsed_races
 
@@ -124,7 +130,7 @@ def run_backtest(target_date_str="20260901"):
 
     results_df = pd.read_csv(result_path)
     motor_df = load_motor_abilities()
-    races = load_race_cards(race_card_path, motor_df)
+    races_dict = load_race_cards(race_card_path, motor_df)
     
     total_investment = 0
     total_payout = 0
@@ -133,16 +139,16 @@ def run_backtest(target_date_str="20260901"):
     
     print(f"=== 実データバックテスト実行中 ({target_date_str}) ===")
     
-    for idx, race in enumerate(races):
-        if idx >= len(results_df):
-            break
-            
-        match_res = results_df.iloc[idx]
-        race_code = match_res.get('レースコード', idx + 1)
-        winning_combo = str(match_res.get('3連単_着順', ''))
-        payout_yen = float(match_res.get('3連単_払戻金', 0))
+    for idx, row in results_df.iterrows():
+        race_code = str(row.get('レースコード', ''))
+        winning_combo = str(row.get('3連単_着順', ''))
+        payout_yen = float(row.get('3連単_払戻金', 0))
         
-        boats = race['boats']
+        # レースコードが一致する出走データを取得
+        if race_code not in races_dict:
+            continue
+            
+        boats = races_dict[race_code]
         
         wave_height = 4  
         wind_speed = 2   
