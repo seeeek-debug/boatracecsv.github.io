@@ -91,7 +91,6 @@ def load_preview_odds(file_path):
     return odds_dict
 
 def load_stt_data(file_path):
-    """展示スタートタイム（ST）および展示コースの読み込み"""
     if not os.path.exists(file_path):
         return {}
     df = pd.read_csv(file_path)
@@ -116,7 +115,6 @@ def load_stt_data(file_path):
     return stt_dict
 
 def load_original_exhibition_data(file_path):
-    """オリジナル展示タイム（まわり足、直線など）の読み込み"""
     if not os.path.exists(file_path):
         return {}
     df = pd.read_csv(file_path)
@@ -132,46 +130,35 @@ def load_original_exhibition_data(file_path):
         
         boat_orig = {}
         for b in range(1, 7):
-            # 艇ごとの値1, 値2, 値3（まわり足や直線タイム等）
             v1 = float(row.get(f"艇{b}_値1", 0)) if pd.notna(row.get(f"艇{b}_値1", 0)) else 0.0
             v2 = float(row.get(f"艇{b}_値2", 0)) if pd.notna(row.get(f"艇{b}_値2", 0)) else 0.0
             boat_orig[b] = {'val1': v1, 'val2': v2}
         orig_dict[race_code] = boat_orig
     return orig_dict
 
-def judge_race_condition(wave_height, wind_speed):
-    if wave_height <= 5 and wind_speed <= 3:
-        return "solid"
-    elif wave_height <= 10 and wind_speed <= 5:
-        return "medium"
-    else:
-        return "rough"
-
 def calculate_combination_probabilities(boat_data_list, stt_info, orig_info, stadium_id):
-    base_frame_win_bias = {1: 0.52, 2: 0.16, 3: 0.13, 4: 0.11, 5: 0.05, 6: 0.03}
+    # 1号艇の基礎バイアスを強化し、インの信頼度を適正化
+    base_frame_win_bias = {1: 0.60, 2: 0.15, 3: 0.11, 4: 0.08, 5: 0.04, 6: 0.02}
     
     boat_scores = {}
     for data in boat_data_list:
         boat = data['boat_number']
         
-        # 直前展示STの評価（早いほどプラス、F持ちや極端な遅れはマイナス）
         ex_st = 0.15
         if stt_info and boat in stt_info:
             ex_st = stt_info[boat]['st']
-        st_score = max(0.25 - ex_st, 0) * 30 if ex_st > 0 else -10.0 # F（マイナスST）は危険
+        st_score = max(0.25 - ex_st, 0) * 35 if ex_st > 0 else -15.0 
         
-        # オリジナル展示（まわり足等の気配）のボーナス
         orig_bonus = 0.0
         if orig_info and boat in orig_info:
-            # 値が小さいほうが優秀な場合が多いが、簡易的に評価値として加味
             val = orig_info[boat]['val1']
-            if 35.0 <= val <= 40.0:  # タイム系の一般的なレンジの補正
-                orig_bonus = (40.0 - val) * 0.5
+            if 35.0 <= val <= 40.0:
+                orig_bonus = (40.0 - val) * 0.6
         
         stat_score = data['class_bonus'] + st_score - data['f_penalty'] + orig_bonus
-        motor_score = data['motor_power'] * 2.5
+        motor_score = data['motor_power'] * 3.0
         
-        raw_power = (base_frame_win_bias[boat] * 12) + stat_score + motor_score
+        raw_power = (base_frame_win_bias[boat] * 15) + stat_score + motor_score
         boat_scores[boat] = max(raw_power, 0.1)
         
     total_score = sum(boat_scores.values())
@@ -234,7 +221,8 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
         if actual_odds < 15.0:
             continue
             
-        if expected_value >= 1.05:
+        # 期待値のハードルを 1.15 に厳格化してゴミ馬券を排除
+        if expected_value >= 1.15:
             valid_bets.append((combo, combo_prob, actual_odds, expected_value))
                 
     if not valid_bets:
@@ -278,7 +266,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     type_stats = {"中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
                   "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
     
-    print("=== 2026年 8月度 月間一括テスト（直前展示データ完全統合版） ===")
+    print("=== 2026年 8月度 月間一括テスト（イン強化・期待値厳格化版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -369,7 +357,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（直前展示データ統合版）")
+    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（イン強化・期待値厳格化版）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
