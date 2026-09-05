@@ -211,26 +211,25 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
     for combo, combo_prob in combo_probs.items():
         if combo not in race_actual_odds:
             continue
+            
+        # ★【超重要】確率が 1.5% 未満の「カス確率の大穴」は、オッズが高くても絶対に対象外にする
+        if combo_prob < 0.015:
+            continue
+            
         actual_odds = race_actual_odds[combo]
         expected_value = combo_prob * actual_odds
         
         if actual_odds < 15.0:
             continue
             
-        # 期待値のハードルをさらに引き上げ
-        if expected_value >= 1.25:
+        if expected_value >= 1.20:
             valid_bets.append((combo, combo_prob, actual_odds, expected_value))
                 
     if not valid_bets:
         return None, "見送り"
         
-    # レース全体の中で「最も高い期待値」が 1.35 未満のレースは、自信がないため見送り！
-    max_ev = max(bet[3] for bet in valid_bets)
-    if max_ev < 1.35:
-        return None, "見送り"
-        
     valid_bets.sort(key=lambda x: x[3], reverse=True)
-    selected_candidates = valid_bets[:2]  # 買う点数も2点に絞り込む
+    selected_candidates = valid_bets[:2]
     
     allocated_bets = []
     total_inv = 0
@@ -267,7 +266,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     type_stats = {"中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
                   "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
     
-    print("=== 2026年 8月度 月間一括テスト（厳選・勝負レース絞り込み版） ===")
+    print("=== 2026年 8月度 月間一括テスト（確率フィルター導入・厳選版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -358,7 +357,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（厳選・勝負レース絞り込み版）")
+    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（確率フィルター導入版）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
