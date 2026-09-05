@@ -164,41 +164,36 @@ def generate_target_return_bets(scores, race_actual_odds):
     top_combo, top_prob, top_odds = top3[0]
     sec_combo, sec_prob, sec_odds = top3[1]
     
-    # --- 【重要】厳格な見送りフィルター ---
-    # 1. 上位の確率差が小さすぎる（大混戦・軸が定まらない）場合は見送り
-    if (top_prob - sec_prob) < 0.05:
+    # --- 【緩和版】見送りフィルター ---
+    # 極端に確率差がなさすぎる混戦（0.005未満）だけ弾く
+    if (top_prob - sec_prob) < 0.005:
         return None, "見送り"
         
-    # 2. 1番人気のオッズが低すぎる（ガチガチすぎて旨味がない）場合は見送り
-    if top_odds < 8.0:
-        return None, "見送り"
-        
-    # 3. オッズが高すぎる（大荒れ・難解すぎる）場合は見送り
-    if top_odds > 120.0:
+    # オッズが極端すぎる場合（300倍超の超大穴や、1.2倍未満のガチガチすぎるレース）だけ弾く
+    if top_odds < 2.0 or top_odds > 300.0:
         return None, "見送り"
 
-    # --- レースタイプの判定とオッズ帯の割り当て ---
-    if top_odds < 25.0:
+    # --- レースタイプの判定とオッズ帯の割り当て（幅を広げる） ---
+    if top_odds < 20.0:
         race_type = "固め"
-        min_odds, max_odds = 8.0, 30.0
-        target_payout = 5000
+        min_odds, max_odds = 4.0, 35.0
+        target_payout = 4000
         max_inv = 1000
-    elif top_odds < 70.0:
+    elif top_odds < 60.0:
         race_type = "中穴"
-        min_odds, max_odds = 30.0, 80.0
-        target_payout = 10000
-        max_inv = 1500
+        min_odds, max_odds = 15.0, 90.0
+        target_payout = 8000
+        max_inv = 1200
     else:
         race_type = "穴"
-        min_odds, max_odds = 80.0, 250.0
-        target_payout = 20000
-        max_inv = 1500
+        min_odds, max_odds = 40.0, 250.0
+        target_payout = 15000
+        max_inv = 1200
 
     target_bets = [b for b in bets if min_odds <= b[2] < max_odds]
     
-    # 狙いたいオッズ帯に旨味のある買い目が上位になければ見送り
-    if len(target_bets) < 2:
-        return None, "見送り"
+    if len(target_bets) < 1:
+        target_bets = bets[:3] # 該当オッズ帯がなくても上位からフォールバック
         
     selected_candidates = target_bets[:5]
     if not selected_candidates:
@@ -240,7 +235,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
                   "中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
                   "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
     
-    print("=== 2026年 8月度 月間一括バックテスト実行中（見送り厳選＆適正バランス版） ===")
+    print("=== 2026年 8月度 月間一括バックテスト実行中（フィルター緩和・適正バランス版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -330,7 +325,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（見送り厳選＆適正バランス版）")
+    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（フィルター緩和・適正バランス版）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
