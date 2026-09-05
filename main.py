@@ -2,7 +2,19 @@ import os
 import pandas as pd
 import numpy as np
 
+STADIUM_ID_TO_NAME = {
+    1: "桐生", 2: "戸田", 3: "江戸川", 4: "平和島", 5: "多摩川", 6: "浜名湖",
+    7: "蒲郡", 8: "常滑", 9: "津", 10: "三国", 11: "びわこ", 12: "住之江",
+    13: "尼崎", 14: "鳴門", 15: "丸亀", 16: "児島", 17: "宮島", 18: "徳山",
+    19: "下関", 20: "若松", 21: "芦屋", 22: "福岡", 23: "唐津", 24: "大村"
+}
+
 def load_motor_abilities(file_path="data/estimate/motor_ability_score_v4.csv"):
+    if os.path.exists(file_path):
+        return pd.read_csv(file_path)
+    return pd.DataFrame()
+
+def load_sui_params(file_path="data/estimate/stadium/sui_params.csv"):
     if os.path.exists(file_path):
         return pd.read_csv(file_path)
     return pd.DataFrame()
@@ -136,55 +148,58 @@ def load_original_exhibition_data(file_path):
         orig_dict[race_code] = boat_orig
     return orig_dict
 
-def get_dynamic_stadium_profile(stadium_id):
+def calculate_course_scores_from_sui_params(stadium_id, row_data, sui_params_df):
     """
-    全24場の特性に応じた動的バイアスとモーター・STの補正係数を返す
+    sui_params.csv の係数と気象・水面データを使って各コースの基礎スコアを算出する
     """
-    try:
-        s_id = int(stadium_id)
-    except:
-        s_id = 12
-
-    # タイプ1: イン超鉄板型（大村、徳山、芦屋など）
-    # 1号艇の信頼度が極めて高く、外の割引が大きい
-    if s_id in [18, 20, 23]:
-        return {
-            'base_bias': {1: 0.66, 2: 0.14, 3: 0.10, 4: 0.06, 5: 0.03, 6: 0.01},
-            'motor_weight': 3.5,
-            'st_weight_mult': 1.2
-        }
+    stadium_name = STADIUM_ID_TO_NAME.get(stadium_id, "住之江")
+    match = sui_params_df[sui_params_df['stadium'] == stadium_name]
     
-    # タイプ2: イン受難・まくり型 / 難水面（戸田、江戸川、平和島、福岡など）
-    # 1号艇が弱く、2〜4コースの差し・まくりが決まりやすい
-    elif s_id in [2, 3, 4, 21]:
-        return {
-            'base_bias': {1: 0.48, 2: 0.19, 3: 0.15, 4: 0.11, 5: 0.05, 6: 0.02},
-            'motor_weight': 2.5,
-            'st_weight_mult': 1.5 # スタートの良し悪しが着順に直結しやすい
-        }
+    # パラメータが見つからない場合のフォールバック
+    if match.empty:
+        return {1: 0.58, 2: 0.15, 3: 0.12, 4: 0.09, 5: 0.04, 6: 0.02}
     
-    # タイプ3: 水面荒れ・変則型（鳴門、びわこ、三国など）
-    # モーターパワーやスタート展示の気配をより重視する
-    elif s_id in [10, 11, 14]:
-        return {
-            'base_bias': {1: 0.53, 2: 0.17, 3: 0.13, 4: 0.09, 5: 0.06, 6: 0.02},
-            'motor_weight': 4.0, # モーター性能の差がモロに出る
-            'st_weight_mult': 1.3
-        }
+    p_row = match.iloc[0]
     
-    # タイプ4: 標準・バランス型（桐生、多摩川、浜名湖、蒲郡、常滑、津、住之江、尼崎、丸亀、児島、宮ajima、下関、唐津など）
+    # 気象・水面データの抽出（存在しない場合はデフォルト値）
+    wave_cm = float(row_data.get('波高', 2.0)) if pd.notna(row_data.get('波高', 2.0)) else 2.0
+    wind_speed = float(row_data.get('風速', 2.0)) if pd.notna(row_data.get('風速', 2.0)) else 2.0
+    wind_dir_raw = str(row_data.get('風向', '追い'))
+    wind_type = 'tail' if '追い' in wind_dir_raw else 'head'
+    weather_raw = str(row_data.get('天気', '晴'))
+    if '曇' in weather_raw:
+        weather = 'cloudy'
+    elif '雨' in weather_raw:
+        weather = 'rainy'
     else:
-        return {
-            'base_bias': {1: 0.58, 2: 0.15, 3: 0.12, 4: 0.09, 5: 0.04, 6: 0.02},
-            'motor_weight': 3.0,
-            'st_weight_mult': 1.0
-        }
+        weather = 'sunny'
 
-def calculate_combination_probabilities(boat_data_list, stt_info, orig_info, stadium_id):
-    profile = get_dynamic_stadium_profile(stadium_id)
-    base_frame_win_bias = profile['base_bias']
-    motor_weight = profile['motor_weight']
-    st_mult = profile['st_weight_mult']
+    scores = {}
+    for i in range(1, 7):
+        # 1. ベース値
+        score = p_row.get(f'base_c{i}', 0.1)
+        
+        # 2. 波高補正
+        score += p_row.get(f'wave_cm_c{i}', 0) * wave_cm
+        
+        # 3. 風向風速補正
+        if wind_type == 'tail':
+            score += p_row.get(f'wind_tail_ms_c{i}', 0) * wind_speed
+        else:
+            score += p_row.get(f'wind_head_ms_c{i}', 0) * wind_speed
+            
+        # 4. 天候補正
+        if weather == 'cloudy':
+            score += p_row.get(f'is_cloudy_c{i}', 0)
+        elif weather == 'rainy':
+            score += p_row.get(f'is_rainy_c{i}', 0)
+            
+        scores[i] = max(score, 0.01)
+        
+    return scores
+
+def calculate_combination_probabilities(boat_data_list, stt_info, orig_info, stadium_id, row_data, sui_params_df):
+    base_frame_win_bias = calculate_course_scores_from_sui_params(stadium_id, row_data, sui_params_df)
     
     boat_scores = {}
     for data in boat_data_list:
@@ -193,7 +208,7 @@ def calculate_combination_probabilities(boat_data_list, stt_info, orig_info, sta
         ex_st = 0.15
         if stt_info and boat in stt_info:
             ex_st = stt_info[boat]['st']
-        st_score = max(0.25 - ex_st, 0) * (35 * st_mult) if ex_st > 0 else -15.0 
+        st_score = max(0.25 - ex_st, 0) * 35 if ex_st > 0 else -15.0 
         
         orig_bonus = 0.0
         if orig_info and boat in orig_info:
@@ -202,9 +217,11 @@ def calculate_combination_probabilities(boat_data_list, stt_info, orig_info, sta
                 orig_bonus = (40.0 - val) * 0.6
         
         stat_score = data['class_bonus'] + st_score - data['f_penalty'] + orig_bonus
-        motor_score = data['motor_power'] * motor_weight
+        motor_score = data['motor_power'] * 3.0
         
-        raw_power = (base_frame_win_bias[boat] * 15) + stat_score + motor_score
+        # sui_paramsから算出されたコースバイアスを反映
+        bias_val = base_frame_win_bias.get(boat, 0.1)
+        raw_power = (bias_val * 15) + stat_score + motor_score
         boat_scores[boat] = max(raw_power, 0.1)
         
     total_score = sum(boat_scores.values())
@@ -235,9 +252,8 @@ def calculate_combination_probabilities(boat_data_list, stt_info, orig_info, sta
         
     return combo_probs
 
-def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig_info, stadium_id):
-    # ブラックリスト廃止！全場でロジックを最適化して勝負する
-    combo_probs = calculate_combination_probabilities(boat_data_list, stt_info, orig_info, stadium_id)
+def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig_info, stadium_id, row_data, sui_params_df):
+    combo_probs = calculate_combination_probabilities(boat_data_list, stt_info, orig_info, stadium_id, row_data, sui_params_df)
     
     if not race_actual_odds:
         return None, "見送り"
@@ -266,7 +282,7 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
         
     valid_bets.sort(key=lambda x: x[3], reverse=True)
     
-    race_type = "全場適応型（動的パラメータ版）"
+    race_type = "sui_params連携型"
     selected_candidates = valid_bets[:2]
     
     allocated_bets = []
@@ -281,6 +297,7 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
 
 def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     motor_df = load_motor_abilities()
+    sui_params_df = load_sui_params()
     dates = pd.date_range(start=start_date, end=end_date, freq="D")
     
     total_investment = 0
@@ -291,7 +308,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     
     stadium_stats = {}
     
-    print("=== 2026年 8月度 月間テスト最終結果（全場・動的パラメータ適応版） ===")
+    print("=== 2026年 8月度 月間テスト（sui_params.csv 完全連携版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -354,7 +371,9 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
             stt_info = stt_dict.get(race_code, {})
             orig_info = orig_dict.get(race_code, {})
             
-            allocated_bets, race_type = generate_target_return_bets(boats, race_actual_odds, stt_info, orig_info, stadium_id)
+            allocated_bets, race_type = generate_target_return_bets(
+                boats, race_actual_odds, stt_info, orig_info, stadium_id, row, sui_params_df
+            )
             
             if allocated_bets is None:
                 skipped_races += 1
@@ -385,7 +404,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間テスト最終結果（全場・動的パラメータ適応版）")
+    print(f" 🎯 2026年 8月度 月間テスト最終結果（sui_params完全連携版）")
     print("="*50)
     print("■ 【レース場別成績】")
     for s_id, st in sorted(stadium_stats.items(), key=lambda x: x[1]['count'], reverse=True):
