@@ -273,23 +273,11 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
     valid_bets.sort(key=lambda x: x[3], reverse=True)
     
     race_type = "sui_params高期待値型"
-    selected_candidates = valid_bets[:3]
+    selected_candidates = valid_bets[:1]
     
-    if not selected_candidates:
-        return None, "見送り"
-        
-    # 合計1000円になるように配分（例：上位から 400円, 300円, 300円）
-    n_bets = len(selected_candidates)
-    if n_bets == 1:
-        amounts = [1000]
-    elif n_bets == 2:
-        amounts = [500, 500]
-    else:
-        amounts = [400, 300, 300]
-        
     allocated_bets = []
     for i, (combo, prob, odds, ev) in enumerate(selected_candidates):
-        amount = amounts[i]
+        amount = 400
         allocated_bets.append((combo, amount, odds))
             
     if not allocated_bets:
@@ -310,7 +298,7 @@ def run_monthly_backtest(start_date="2026-05-01", end_date="2026-08-31"):
     
     stadium_stats = {}
     
-    print(f"=== 2026年 {start_date} 〜 {end_date} 四ヶ月間テスト（3点計1000円版） ===")
+    print(f"=== 2026年 {start_date} 〜 {end_date} 四ヶ月間テスト（1点400円推奨版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -411,7 +399,7 @@ def run_monthly_backtest(start_date="2026-05-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 5月〜8月 四ヶ月間テスト最終結果（3点計1000円版）")
+    print(f" 🎯 2026年 5月〜8月 四ヶ月間テスト最終結果（1点400円推奨版）")
     print("="*50)
     print("■ 【レース場別成績】")
     for s_id, st in sorted(stadium_stats.items(), key=lambda x: x[1]['count'], reverse=True):
