@@ -207,7 +207,6 @@ def calculate_combination_probabilities(boat_data_list, stt_info, orig_info, sta
         stat_score = data['class_bonus'] + st_score - data['f_penalty'] + orig_bonus
         motor_score = data['motor_power'] * 2.0
         
-        # sui_paramsの値を適切なバランスで加算（大きすぎないように調整）
         stadium_bias = base_frame_scores.get(boat, 4.0) * 0.5
         
         raw_power = stadium_bias + stat_score + motor_score
@@ -254,16 +253,18 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
             
         actual_odds = race_actual_odds[combo]
         
-        # 10倍〜60倍に少し広げてヒット率を確保
-        if not (10.0 <= actual_odds <= 60.0):
+        # 【調整】オッズ帯を 12.0倍〜50.0倍 に引き締め
+        if not (12.0 <= actual_odds <= 50.0):
             continue
             
-        if combo_prob < 0.015:
+        # 【調整】確率の下限を 0.02 (2.0%) に引き上げ
+        if combo_prob < 0.02:
             continue
             
         expected_value = combo_prob * actual_odds
         
-        if expected_value >= 1.05: # 期待値のハードルも少し現実的に
+        # 【調整】期待値のハードルを 1.15 以上に厳格化
+        if expected_value >= 1.15:
             valid_bets.append((combo, combo_prob, actual_odds, expected_value))
                 
     if not valid_bets:
@@ -271,12 +272,12 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
         
     valid_bets.sort(key=lambda x: x[3], reverse=True)
     
-    race_type = "sui_params調整型"
-    selected_candidates = valid_bets[:2]
+    race_type = "sui_params高期待値型"
+    selected_candidates = valid_bets[:1]  一番期待値の高い1点（または厳選2点）に絞る
     
     allocated_bets = []
     for i, (combo, prob, odds, ev) in enumerate(selected_candidates):
-        amount = 300 if i == 0 else 100
+        amount = 400  # 1点買いに集中させてボリュームを出す
         allocated_bets.append((combo, amount, odds))
             
     if not allocated_bets:
@@ -297,7 +298,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     
     stadium_stats = {}
     
-    print("=== 2026年 8月度 月間テスト（sui_paramsバランス調整版） ===")
+    print("=== 2026年 8月度 月間テスト（期待値・条件厳格化版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -365,7 +366,6 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
             )
             
             if allocated_bets is None:
-                skipped_ressions = skipped_races + 1
                 skipped_races += 1
                 continue
             
@@ -394,7 +394,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間テスト最終結果（sui_paramsバランス調整版）")
+    print(f" 🎯 2026年 8月度 月間テスト最終結果（期待値・条件厳格化版）")
     print("="*50)
     print("■ 【レース場別成績】")
     for s_id, st in sorted(stadium_stats.items(), key=lambda x: x[1]['count'], reverse=True):
