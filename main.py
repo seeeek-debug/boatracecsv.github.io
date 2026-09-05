@@ -47,7 +47,7 @@ def load_race_cards(file_path, motor_df):
             })
             
         parsed_races.append({
-            'race_id': row.get('race_id', idx),
+            'race_id': row.get('race_id', idx + 1),
             'boats': boat_data_list
         })
         
@@ -107,12 +107,11 @@ def generate_sanrentan_bets(scores, condition_type):
     else:
         return [bet for bet in bets if not bet[0].startswith("1")][:6]
 
-def run_backtest(target_date_str="20260905"):
+def run_backtest(target_date_str="20260901"):
     year = target_date_str[:4]
     month = target_date_str[4:6]
     day = target_date_str[6:]
     
-    # ★ここを実際のフォルダ構成（payoutsの中）に変更
     result_path = f"data/results/payouts/{year}/{month}/{day}.csv"
     race_card_path = f"data/programs/race_cards/{year}/{month}/{day}.csv"
     
@@ -134,16 +133,16 @@ def run_backtest(target_date_str="20260905"):
     
     print(f"=== 実データバックテスト実行中 ({target_date_str}) ===")
     
-    for race in races:
-        race_id = race['race_id']
+    for idx, race in enumerate(races):
+        if idx >= len(results_df):
+            break
+            
+        match_res = results_df.iloc[idx]
+        race_code = match_res.get('レースコード', idx + 1)
+        winning_combo = str(match_res.get('3連単_着順', ''))
+        payout_yen = float(match_res.get('3連単_払戻金', 0))
+        
         boats = race['boats']
-        
-        match_res = results_df[results_df['race_id'] == race_id]
-        if match_res.empty:
-            continue
-        
-        winning_combo = match_res.iloc[0]['winning_combo']
-        payout_yen = float(match_res.iloc[0]['payout'])
         
         wave_height = 4  
         wind_speed = 2   
@@ -165,9 +164,9 @@ def run_backtest(target_date_str="20260905"):
         
         if hit:
             hit_count += 1
-            print(f"Race {race_id}: 【的中】 正解: {winning_combo} | 払戻: {payout_yen}円")
+            print(f"[{race_code}] 【的中】 正解: {winning_combo} | 払戻: {payout_yen}円")
         else:
-            print(f"Race {race_id}: 【不的中】 正解: {winning_combo}")
+            print(f"[{race_code}] 【不的中】 正解: {winning_combo}")
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0
     hit_rate = (hit_count / total_races * 100) if total_races > 0 else 0
@@ -185,5 +184,5 @@ def run_backtest(target_date_str="20260905"):
     print("="*30)
 
 if __name__ == "__main__":
-    run_backtest("20260905")
+    run_backtest("20260901")
 
