@@ -153,27 +153,25 @@ def generate_target_return_bets(scores, race_actual_odds):
                 else:
                     actual_odds = 0.75 / combo_prob if combo_prob > 0 else 100.0
                     
-                # --- 期待値計算 (確率 × オッズ) ---
                 expected_value = combo_prob * actual_odds
                 
-                # 期待値が1.2以上のものだけを候補にする
                 if expected_value >= 1.2:
                     valid_bets.append((combo, combo_prob, actual_odds, expected_value))
                 
-    # 期待値が1.2以上の買い目が一つもない場合はレース見送り
     if not valid_bets:
         return None, "見送り"
         
-    # 期待値が高い順にソート
     valid_bets.sort(key=lambda x: x[3], reverse=True)
+    selected_candidates = valid_bets[:3]
     
-    top_combo, top_prob, top_odds, top_ev = valid_bets[0]
+    # --- 修正：購入する買い目の平均オッズでレースタイプを判定 ---
+    avg_selected_odds = sum(odds for _, _, odds, _ in selected_candidates) / len(selected_candidates)
     
-    if top_odds < 20.0:
+    if avg_selected_odds < 20.0:
         race_type = "固め"
         target_payout = 4000
         max_inv = 1000
-    elif top_odds < 60.0:
+    elif avg_selected_odds < 60.0:
         race_type = "中穴"
         target_payout = 6000
         max_inv = 1000
@@ -182,8 +180,6 @@ def generate_target_return_bets(scores, race_actual_odds):
         target_payout = 8000
         max_inv = 800
 
-    selected_candidates = valid_bets[:3] # 上位3点まで
-    
     allocated_bets = []
     total_inv = 0
     
@@ -220,7 +216,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
                   "中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
                   "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
     
-    print("=== 2026年 8月度 月間一括バックテスト実行中（期待値1.2以上・厳選版） ===")
+    print("=== 2026年 8月度 月間一括バックテスト実行中（期待値1.2以上・分類修正版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -310,7 +306,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（期待値1.2以上・厳選版）")
+    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（期待値1.2以上・分類修正版）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
