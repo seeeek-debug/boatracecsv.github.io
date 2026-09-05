@@ -9,6 +9,9 @@ STADIUM_ID_TO_NAME = {
     19: "下関", 20: "若松", 21: "芦屋", 22: "福岡", 23: "唐津", 24: "大村"
 }
 
+# 回収率80%超えの場（江戸川、平和島、浜名湖、津、住之江、尼崎、鳴門、丸亀、芦屋）に拡大
+PROVEN_STADIUM_IDS = [3, 4, 6, 9, 12, 13, 14, 15, 21]
+
 def load_motor_abilities(file_path="data/estimate/motor_ability_score_v4.csv"):
     if os.path.exists(file_path):
         return pd.read_csv(file_path)
@@ -270,7 +273,7 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
     valid_bets.sort(key=lambda x: x[3], reverse=True)
     
     race_type = "sui_params高期待値型"
-    selected_candidates = valid_bets[:1]  # ←ここに#が抜けてsyntax errorになってた
+    selected_candidates = valid_bets[:1]
     
     allocated_bets = []
     for i, (combo, prob, odds, ev) in enumerate(selected_candidates):
@@ -295,7 +298,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     
     stadium_stats = {}
     
-    print("=== 2026年 8月度 月間テスト（期待値・条件厳格化版） ===")
+    print("=== 2026年 8月度 月間テスト（80%以上実績場限定版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -335,6 +338,11 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
                         pass
                     break
             
+            # 回収率80%以上の場に絞り込み
+            if stadium_id not in PROVEN_STADIUM_IDS:
+                skipped_races += 1
+                continue
+            
             if stadium_id not in stadium_stats:
                 stadium_stats[stadium_id] = {"count": 0, "hits": 0, "inv": 0, "pay": 0}
             
@@ -351,6 +359,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
                     payout_yen = 0.0
             
             if race_code not in races_dict:
+                skipped_races += 1
                 continue
                 
             boats = races_dict[race_code]
@@ -391,14 +400,15 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間テスト最終結果（期待値・条件厳格化版）")
+    print(f" 🎯 2026年 8月度 月間テスト最終結果（80%以上実績場限定版）")
     print("="*50)
     print("■ 【レース場別成績】")
     for s_id, st in sorted(stadium_stats.items(), key=lambda x: x[1]['count'], reverse=True):
         if st["count"] > 0:
             t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
             t_hit = (st["hits"] / st["count"] * 100) if st["count"] > 0 else 0
-            print(f"  - 場コード {s_id:2d} | 購入: {st['count']:3d} | 的中: {st['hits']:2d} ({t_hit:4.1f}%) | 収支: {st['pay'] - st['inv']:+7,.0f}円 | 回収率: {t_roi:5.1f}%")
+            s_name = STADIUM_ID_TO_NAME.get(s_id, "不明")
+            print(f"  - {s_name}({s_id:2d}) | 購入: {st['count']:3d} | 的中: {st['hits']:2d} ({t_hit:4.1f}%) | 収支: {st['pay'] - st['inv']:+7,.0f}円 | 回収率: {t_roi:5.1f}%")
     print("-" * 50)
     print(f" 見送りレース数 : {skipped_races} レース")
     print(f" 購入レース数   : {total_races} レース")
