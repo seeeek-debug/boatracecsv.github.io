@@ -1,7 +1,6 @@
 import os
 import pandas as pd
 import numpy as np
-import math
 
 def load_motor_abilities(file_path="data/estimate/motor_ability_score_v4.csv"):
     if os.path.exists(file_path):
@@ -206,14 +205,14 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
         if not (20.0 <= actual_odds <= 50.0):
             continue
             
-        # 確率のノイズカット（2.5%以上）
-        if combo_prob < 0.025:
+        # 確率のノイズカットを 4.0% に引き上げて無駄なレースを削る
+        if combo_prob < 0.040:
             continue
             
         expected_value = combo_prob * actual_odds
         
-        # 期待値ハードル 1.25
-        if expected_value >= 1.25:
+        # 期待値ハードル 1.30
+        if expected_value >= 1.30:
             valid_bets.append((combo, combo_prob, actual_odds, expected_value))
                 
     if not valid_bets:
@@ -221,30 +220,15 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
         
     valid_bets.sort(key=lambda x: x[3], reverse=True)
     
-    # 原点回帰：一律上限1,000円、上位2点に絞る
-    max_inv = 1000
     race_type = "中穴"
     
+    # 上位2点に絞る
     selected_candidates = valid_bets[:2]
     
+    # 複雑な逆算をやめ、1点一律300円（合計600円固定）にする
     allocated_bets = []
-    total_inv = 0
-    
     for combo, prob, odds, ev in selected_candidates:
-        if odds <= 0: continue
-        
-        min_w_for_6k = math.ceil(6000 / odds / 100) * 100
-        w = max(min_w_for_6k, 300)
-        
-        if total_inv + w <= max_inv:
-            allocated_bets.append((combo, w, odds))
-            total_inv += w
-        else:
-            remaining = max_inv - total_inv
-            if remaining >= 100:
-                allocated_bets.append((combo, remaining, odds))
-                total_inv += remaining
-            break
+        allocated_bets.append((combo, 300, odds))
             
     if not allocated_bets:
         return None, "見送り"
@@ -265,7 +249,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
         "中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}
     }
     
-    print("=== 2026年 8月度 月間一括テスト（原点回帰モード：上位2点・上限1000円・中穴特化） ===")
+    print("=== 2026年 8月度 月間一括テスト（厳選絞り込み・一律固定ベット） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -356,7 +340,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（原点回帰版）")
+    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（厳選絞り込み版）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
