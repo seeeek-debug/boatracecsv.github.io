@@ -26,6 +26,11 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install lightgbm scikit-learn
 
+      - name: Configure Git identity
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.io"
+
       - name: Run data update script
         run: |
           python scripts/preview-realtime.py
@@ -36,9 +41,6 @@ jobs:
 
       - name: Commit and push changes
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.io"
           git add data/
           git diff --staged --quiet || git commit -m "Auto update data and predictions: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
           git push
-
