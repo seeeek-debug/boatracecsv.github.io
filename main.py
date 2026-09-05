@@ -202,16 +202,18 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
             
         actual_odds = race_actual_odds[combo]
         
+        # 中穴オッズ特化（20倍〜50倍）
         if not (20.0 <= actual_odds <= 50.0):
             continue
             
-        if combo_prob < 0.03: # 確率の足切りラインも少し引き上げ
+        # 確率のノイズカット（2.5%未満は除外）
+        if combo_prob < 0.025:
             continue
             
         expected_value = combo_prob * actual_odds
         
-        # 期待値のハードルを 1.40 に引き上げ
-        if expected_value >= 1.40:
+        # 期待値ハードル 1.25
+        if expected_value >= 1.25:
             valid_bets.append((combo, combo_prob, actual_odds, expected_value))
                 
     if not valid_bets:
@@ -219,12 +221,9 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
         
     valid_bets.sort(key=lambda x: x[3], reverse=True)
     
-    # 「自信あり」の判定をより厳格化（確率8%以上かつ期待値2.2以上のみ）
-    top_prob = valid_bets[0][1]
-    top_ev = valid_bets[0][3]
-    is_confident = (top_prob >= 0.08 and top_ev >= 2.2)
-    max_inv = 2000 if is_confident else 1000
-    race_type = "中穴(自信あり)" if is_confident else "中穴"
+    # 全レース一律で上限1,500円にする
+    max_inv = 1500
+    race_type = "中穴"
     
     selected_candidates = valid_bets[:2]
     
@@ -234,6 +233,7 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
     for combo, prob, odds, ev in selected_candidates:
         if odds <= 0: continue
         
+        # 払戻金が最低6,000円以上になる必要金額（100円単位切り上げ）
         min_w_for_6k = math.ceil(6000 / odds / 100) * 100
         w = max(min_w_for_6k, 300)
         
@@ -263,11 +263,10 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     skipped_races = 0
     
     type_stats = {
-        "中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
-        "中穴(自信あり)": {"count": 0, "hits": 0, "inv": 0, "pay": 0}
+        "中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}
     }
     
-    print("=== 2026年 8月度 月間一括テスト（期待値・自信あり厳選モード） ===")
+    print("=== 2026年 8月度 月間一括テスト（全レース一律1500円・中穴特化モード） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -358,7 +357,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（期待値・自信あり厳選モード）")
+    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（全レース一律1500円・中穴特化）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
