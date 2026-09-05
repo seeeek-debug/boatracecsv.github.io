@@ -136,41 +136,55 @@ def load_original_exhibition_data(file_path):
         orig_dict[race_code] = boat_orig
     return orig_dict
 
-def get_stadium_bias(stadium_id):
-    # レース場ごとの1号艇の基礎勝率バイアス（全国平均をベースに補正）
-    # インが強い場（大村、徳山など）、インが弱い場（戸田、平和島、江戸川など）
-    # stadium_id が数値や文字列で渡されることを考慮
+def get_dynamic_stadium_profile(stadium_id):
+    """
+    全24場の特性に応じた動的バイアスとモーター・STの補正係数を返す
+    """
     try:
         s_id = int(stadium_id)
     except:
-        s_id = 12 # デフォルト住之江など
-        
-    # インが強い場 (大村=23, 徳山=17, 芦屋=20 など) -> 1号艇のバイアスを高めに
-    strong_in = [17, 20, 23]
-    # インが弱い場 (戸田=2, 江戸川=3, 平和島=4 など) -> 1号艇のバイアスを下げ、2〜4号艇を相対的に上げる
-    weak_in = [2, 3, 4]
+        s_id = 12
+
+    # タイプ1: イン超鉄板型（大村、徳山、芦屋など）
+    # 1号艇の信頼度が極めて高く、外の割引が大きい
+    if s_id in [18, 20, 23]:
+        return {
+            'base_bias': {1: 0.66, 2: 0.14, 3: 0.10, 4: 0.06, 5: 0.03, 6: 0.01},
+            'motor_weight': 3.5,
+            'st_weight_mult': 1.2
+        }
     
-    base = {1: 0.58, 2: 0.15, 3: 0.12, 4: 0.09, 5: 0.04, 6: 0.02}
+    # タイプ2: イン受難・まくり型 / 難水面（戸田、江戸川、平和島、福岡など）
+    # 1号艇が弱く、2〜4コースの差し・まくりが決まりやすい
+    elif s_id in [2, 3, 4, 21]:
+        return {
+            'base_bias': {1: 0.48, 2: 0.19, 3: 0.15, 4: 0.11, 5: 0.05, 6: 0.02},
+            'motor_weight': 2.5,
+            'st_weight_mult': 1.5 # スタートの良し悪しが着順に直結しやすい
+        }
     
-    if s_id in strong_in:
-        base[1] = 0.65
-        base[2] = 0.14
-        base[3] = 0.10
-        base[4] = 0.07
-        base[5] = 0.03
-        base[6] = 0.01
-    elif s_id in weak_in:
-        base[1] = 0.50
-        base[2] = 0.18
-        base[3] = 0.14
-        base[4] = 0.11
-        base[5] = 0.05
-        base[6] = 0.02
-        
-    return base
+    # タイプ3: 水面荒れ・変則型（鳴門、びわこ、三国など）
+    # モーターパワーやスタート展示の気配をより重視する
+    elif s_id in [10, 11, 14]:
+        return {
+            'base_bias': {1: 0.53, 2: 0.17, 3: 0.13, 4: 0.09, 5: 0.06, 6: 0.02},
+            'motor_weight': 4.0, # モーター性能の差がモロに出る
+            'st_weight_mult': 1.3
+        }
+    
+    # タイプ4: 標準・バランス型（桐生、多摩川、浜名湖、蒲郡、常滑、津、住之江、尼崎、丸亀、児島、宮ajima、下関、唐津など）
+    else:
+        return {
+            'base_bias': {1: 0.58, 2: 0.15, 3: 0.12, 4: 0.09, 5: 0.04, 6: 0.02},
+            'motor_weight': 3.0,
+            'st_weight_mult': 1.0
+        }
 
 def calculate_combination_probabilities(boat_data_list, stt_info, orig_info, stadium_id):
-    base_frame_win_bias = get_stadium_bias(stadium_id)
+    profile = get_dynamic_stadium_profile(stadium_id)
+    base_frame_win_bias = profile['base_bias']
+    motor_weight = profile['motor_weight']
+    st_mult = profile['st_weight_mult']
     
     boat_scores = {}
     for data in boat_data_list:
@@ -179,7 +193,7 @@ def calculate_combination_probabilities(boat_data_list, stt_info, orig_info, sta
         ex_st = 0.15
         if stt_info and boat in stt_info:
             ex_st = stt_info[boat]['st']
-        st_score = max(0.25 - ex_st, 0) * 35 if ex_st > 0 else -15.0 
+        st_score = max(0.25 - ex_st, 0) * (35 * st_mult) if ex_st > 0 else -15.0 
         
         orig_bonus = 0.0
         if orig_info and boat in orig_info:
@@ -188,7 +202,7 @@ def calculate_combination_probabilities(boat_data_list, stt_info, orig_info, sta
                 orig_bonus = (40.0 - val) * 0.6
         
         stat_score = data['class_bonus'] + st_score - data['f_penalty'] + orig_bonus
-        motor_score = data['motor_power'] * 3.0
+        motor_score = data['motor_power'] * motor_weight
         
         raw_power = (base_frame_win_bias[boat] * 15) + stat_score + motor_score
         boat_scores[boat] = max(raw_power, 0.1)
@@ -222,6 +236,7 @@ def calculate_combination_probabilities(boat_data_list, stt_info, orig_info, sta
     return combo_probs
 
 def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig_info, stadium_id):
+    # ブラックリスト廃止！全場でロジックを最適化して勝負する
     combo_probs = calculate_combination_probabilities(boat_data_list, stt_info, orig_info, stadium_id)
     
     if not race_actual_odds:
@@ -238,13 +253,11 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
         if not (15.0 <= actual_odds <= 50.0):
             continue
             
-        # 確率ノイズカットを少し緩めてヒットの取りこぼしを防ぐ (2.5%以上)
         if combo_prob < 0.025:
             continue
             
         expected_value = combo_prob * actual_odds
         
-        # 期待値ハードル 1.25
         if expected_value >= 1.25:
             valid_bets.append((combo, combo_prob, actual_odds, expected_value))
                 
@@ -253,9 +266,7 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
         
     valid_bets.sort(key=lambda x: x[3], reverse=True)
     
-    race_type = "中穴特化（場別補正版）"
-    
-    # 上位2点に絞る
+    race_type = "全場適応型（動的パラメータ版）"
     selected_candidates = valid_bets[:2]
     
     allocated_bets = []
@@ -280,7 +291,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     
     stadium_stats = {}
     
-    print("=== 2026年 8月度 月間一括テスト（レース場別バイアス適応版） ===")
+    print("=== 2026年 8月度 月間テスト最終結果（全場・動的パラメータ適応版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -374,7 +385,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間テスト最終結果（場別バイアス適応版）")
+    print(f" 🎯 2026年 8月度 月間テスト最終結果（全場・動的パラメータ適応版）")
     print("="*50)
     print("■ 【レース場別成績】")
     for s_id, st in sorted(stadium_stats.items(), key=lambda x: x[1]['count'], reverse=True):
