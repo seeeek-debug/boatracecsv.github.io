@@ -158,52 +158,38 @@ def generate_target_return_bets(scores, race_actual_odds):
     bets.sort(key=lambda x: x[1], reverse=True)
     
     if len(bets) < 3:
-        return None, "見送り"
+        bets = [("1-2-3", 0.2, 10.0), ("1-2-4", 0.15, 15.0), ("1-3-2", 0.1, 20.0)]
         
-    top3 = bets[:3]
-    top_combo, top_prob, top_odds = top3[0]
-    sec_combo, sec_prob, sec_odds = top3[1]
-    
-    # --- 【緩和版】見送りフィルター ---
-    # 極端に確率差がなさすぎる混戦（0.005未満）だけ弾く
-    if (top_prob - sec_prob) < 0.005:
-        return None, "見送り"
-        
-    # オッズが極端すぎる場合（300倍超の超大穴や、1.2倍未満のガチガチすぎるレース）だけ弾く
-    if top_odds < 2.0 or top_odds > 300.0:
-        return None, "見送り"
+    top_combo, top_prob, top_odds = bets[0]
 
-    # --- レースタイプの判定とオッズ帯の割り当て（幅を広げる） ---
+    # --- 見送りを廃止し、必ずいずれかのレースタイプに振り分けて購入 ---
     if top_odds < 20.0:
         race_type = "固め"
-        min_odds, max_odds = 4.0, 35.0
+        min_odds, max_odds = 1.0, 50.0
         target_payout = 4000
         max_inv = 1000
     elif top_odds < 60.0:
         race_type = "中穴"
-        min_odds, max_odds = 15.0, 90.0
+        min_odds, max_odds = 10.0, 120.0
         target_payout = 8000
         max_inv = 1200
     else:
         race_type = "穴"
-        min_odds, max_odds = 40.0, 250.0
+        min_odds, max_odds = 20.0, 500.0
         target_payout = 15000
         max_inv = 1200
 
     target_bets = [b for b in bets if min_odds <= b[2] < max_odds]
-    
-    if len(target_bets) < 1:
-        target_bets = bets[:3] # 該当オッズ帯がなくても上位からフォールバック
+    if len(target_bets) < 2:
+        target_bets = bets[:5]
         
     selected_candidates = target_bets[:5]
-    if not selected_candidates:
-        return None, "見送り"
-        
+    
     allocated_bets = []
     total_inv = 0
     
     for combo, prob, odds in selected_candidates:
-        if odds <= 0: continue
+        if odds <= 0: odds = 10.0
         raw_w = target_payout / odds
         w = max(100, round(raw_w / 100) * 100)
         
@@ -217,7 +203,7 @@ def generate_target_return_bets(scores, race_actual_odds):
             break
             
     if not allocated_bets:
-        return None, "見送り"
+        allocated_bets = [(bets[0][0], 100, bets[0][2])]
         
     return allocated_bets, race_type
 
@@ -235,7 +221,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
                   "中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
                   "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
     
-    print("=== 2026年 8月度 月間一括バックテスト実行中（フィルター緩和・適正バランス版） ===")
+    print("=== 2026年 8月度 月間一括バックテスト実行中（全レース完全購入版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -296,10 +282,6 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
             scores = calculate_boat_scores(boats, condition_type, stadium_id)
             allocated_bets, race_type = generate_target_return_bets(scores, race_actual_odds)
             
-            if allocated_bets is None:
-                skipped_races += 1
-                continue
-            
             investment = sum(amount for combo, amount, odds in allocated_bets)
             total_investment += investment
             total_races += 1
@@ -325,7 +307,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（フィルター緩和・適正バランス版）")
+    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（全レース完全購入版）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
