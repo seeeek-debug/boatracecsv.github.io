@@ -141,19 +141,16 @@ def generate_target_return_bets(scores, race_actual_odds):
     else:
         min_odds = 10.0
 
-    # --- 固め（1番人気が15倍未満）のレースは一切買わずに即見送り ---
-    if min_odds < 15.0:
+    # ガチガチの超低オッズレースはそもそも見送り
+    if min_odds < 8.0:
         return None, "見送り"
 
-    # --- 中穴と穴だけに絞る ---
-    if min_odds < 40.0:
+    if min_odds < 30.0:
         race_type = "中穴"
-        required_ev = 1.05
         target_payout = 6000
         max_inv = 1000
     else:
         race_type = "穴"
-        required_ev = 1.10
         target_payout = 8000
         max_inv = 800
 
@@ -176,9 +173,12 @@ def generate_target_return_bets(scores, race_actual_odds):
                     
                 expected_value = combo_prob * actual_odds
                 
-                if race_type == "中穴" and 15.0 <= actual_odds < 70.0 and expected_value >= required_ev:
-                    valid_bets.append((combo, combo_prob, actual_odds, expected_value))
-                elif race_type == "穴" and actual_odds >= 30.0 and expected_value >= required_ev:
+                # --- ★ここがポイント：オッズが15倍未満の買い目は期待値に関係なく一切排除する ---
+                if actual_odds < 15.0:
+                    continue
+                
+                # 期待値が1.02以上のものだけを採用
+                if expected_value >= 1.02:
                     valid_bets.append((combo, combo_prob, actual_odds, expected_value))
                 
     if not valid_bets:
@@ -219,11 +219,10 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     total_races = 0
     skipped_races = 0
     
-    # 統計から「固め」を完全除外
     type_stats = {"中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
                   "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
     
-    print("=== 2026年 8月度 月間一括バックテスト（中穴・穴特化版） ===")
+    print("=== 2026年 8月度 月間一括テスト（低オッズ買い目完全排除版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -313,7 +312,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（中穴・穴特化版）")
+    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（低オッズ買い目完全排除版）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
