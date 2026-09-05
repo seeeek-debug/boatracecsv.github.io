@@ -152,7 +152,6 @@ def generate_target_return_bets(scores, race_actual_odds):
                     
                 bets.append((combo, combo_prob, actual_odds))
                 
-    # 確率が高い順にソート
     bets.sort(key=lambda x: x[1], reverse=True)
     
     if len(bets) < 3:
@@ -161,30 +160,31 @@ def generate_target_return_bets(scores, race_actual_odds):
     top_combo, top_prob, top_odds = bets[0]
     second_combo, second_prob, second_odds = bets[1]
     
-    # 【見送り条件 1】確率がそこまで変わらん（混戦・拮抗している）場合は見送り
-    if top_prob / (second_prob + 1e-9) < 1.15:
-        return None, "見送り"
-        
-    # 【見送り条件 2】確率が一番高い買い目であってもオッズが10倍未満なら見送り
-    if top_odds < 10.0:
+    is_probability_clear = (top_prob / (second_prob + 1e-9) > 1.2)
+    
+    # 1番手のオッズが10倍未満なら見送り
+    if is_probability_clear and top_odds < 10.0:
         return None, "見送り"
 
-    # レースタイプの判定とターゲット払戻の設定（10倍以上の買い目を対象にする）
-    if top_odds < 25.0:
+    # レースタイプの判定、最低オッズの閾値、およびターゲット払戻の設定
+    if top_odds < 30.0:
         race_type = "固め"
-        target_payout = 5000  # 4,000〜6,000円
+        min_odds = 10.0
+        target_payout = 6000
         max_inv = 1000
-    elif top_odds < 60.0:
+    elif top_odds < 80.0:
         race_type = "中穴"
-        target_payout = 7500  # 6,000〜9,000円
+        min_odds = 30.0
+        target_payout = 12000
         max_inv = 2000
     else:
         race_type = "穴"
-        target_payout = 10000 # 8,000〜12,000円
+        min_odds = 80.0
+        target_payout = 30000  # 高オッズでも払戻がしっかり跳ねるようにターゲットを設定
         max_inv = 2000
         
-    # 10倍以上の買い目のみを抽出
-    filtered_bets = [b for b in bets if b[2] >= 10.0]
+    # 指定されたオッズ以上の買い目のみを対象にする
+    filtered_bets = [b for b in bets if b[2] >= min_odds]
     if not filtered_bets:
         return None, "見送り"
         
@@ -192,7 +192,6 @@ def generate_target_return_bets(scores, race_actual_odds):
     if not selected_candidates:
         return None, "見送り"
         
-    # ターゲット払戻に向けた資金配分（逆数配分）
     allocated_bets = []
     total_inv = 0
     
@@ -229,7 +228,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
                   "中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
                   "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
     
-    print("=== 2026年 8月度 月間一括バックテスト実行中（確率優位性＆10倍以上ターゲット配分） ===")
+    print("=== 2026年 8月度 月間一括バックテスト実行中（オッズ閾値調整版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -319,7 +318,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（確率優位性＆10倍以上対象）")
+    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（オッズ閾値調整版）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
