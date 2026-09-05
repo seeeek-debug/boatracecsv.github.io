@@ -285,7 +285,7 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
         
     return allocated_bets, race_type
 
-def run_monthly_backtest(start_date="2026-05-01", end_date="2026-08-31"):
+def run_monthly_backtest(start_date="2025-10-01", end_date="2026-08-31"):
     motor_df = load_motor_abilities()
     sui_params_df = load_sui_params()
     dates = pd.date_range(start=start_date, end=end_date, freq="D")
@@ -298,7 +298,7 @@ def run_monthly_backtest(start_date="2026-05-01", end_date="2026-08-31"):
     
     stadium_stats = {}
     
-    print(f"=== 2026年 {start_date} 〜 {end_date} 四ヶ月間テスト（1点400円推奨版） ===")
+    print(f"=== {start_date} 〜 {end_date} 長期テスト（1点400円推奨版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -399,7 +399,7 @@ def run_monthly_backtest(start_date="2026-05-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 5月〜8月 四ヶ月間テスト最終結果（1点400円推奨版）")
+    print(f" 🎯 {start_date} 〜 {end_date} 長期テスト最終結果（1点400円推奨版）")
     print("="*50)
     print("■ 【レース場別成績】")
     for s_id, st in sorted(stadium_stats.items(), key=lambda x: x[1]['count'], reverse=True):
@@ -419,5 +419,5 @@ def run_monthly_backtest(start_date="2026-05-01", end_date="2026-08-31"):
     print("="*50)
 
 if __name__ == "__main__":
-    run_monthly_backtest("2026-05-01", "2026-08-31")
+    run_monthly_backtest("2025-10-01", "2026-08-31")
 
