@@ -224,11 +224,10 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
     
     allocated_bets = []
     total_inv = 0
-    max_inv = 1200  // 4点で最大1,200円まで（1点あたり300円上限）
+    max_inv = 1200  # 4点で最大1,200円まで（1点あたり300円上限）
     
     for combo, prob, odds, ev in selected_candidates:
         if odds <= 0: continue
-        # 1点あたり1,000円前後の払戻を狙う配分
         raw_w = 1000 / odds
         w = max(100, round(raw_w / 100) * 100)
         if w > 300:
