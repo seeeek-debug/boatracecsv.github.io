@@ -201,12 +201,12 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
             
         actual_odds = race_actual_odds[combo]
         
-        # 中穴オッズ特化（20倍〜50倍）
-        if not (20.0 <= actual_odds <= 50.0):
+        # オッズの下限を15倍に引き上げ、高配当ゾーン（15倍〜50倍）に特化
+        if not (15.0 <= actual_odds <= 50.0):
             continue
             
-        # 確率のノイズカットを 4.0% に引き上げて無駄なレースを削る
-        if combo_prob < 0.040:
+        # 確率のノイズカット（3.0%以上）
+        if combo_prob < 0.030:
             continue
             
         expected_value = combo_prob * actual_odds
@@ -220,15 +220,16 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
         
     valid_bets.sort(key=lambda x: x[3], reverse=True)
     
-    race_type = "中穴"
+    race_type = "中穴特化"
     
-    # 上位2点に絞る
+    # 買い目を上位2点に絞る
     selected_candidates = valid_bets[:2]
     
-    # 複雑な逆算をやめ、1点一律300円（合計600円固定）にする
     allocated_bets = []
-    for combo, prob, odds, ev in selected_candidates:
-        allocated_bets.append((combo, 300, odds))
+    # 1番期待値が高い本線を少し厚く（400円）、2番手を200円にするメリハリ配分
+    for i, (combo, prob, odds, ev) in enumerate(selected_candidates):
+        amount = 400 if i == 0 else 200
+        allocated_bets.append((combo, amount, odds))
             
     if not allocated_bets:
         return None, "見送り"
@@ -246,10 +247,10 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     skipped_races = 0
     
     type_stats = {
-        "中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}
+        "中穴特化": {"count": 0, "hits": 0, "inv": 0, "pay": 0}
     }
     
-    print("=== 2026年 8月度 月間一括テスト（厳選絞り込み・一律固定ベット） ===")
+    print("=== 2026年 8月度 月間一括テスト（15〜50倍・上位2点メリハリ配分モード） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -340,7 +341,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（厳選絞り込み版）")
+    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（15〜50倍・メリハリ配分）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
