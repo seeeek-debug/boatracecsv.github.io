@@ -40,8 +40,8 @@ def load_race_cards(file_path, motor_df):
                 if not matched_motor.empty:
                     motor_power = float(matched_motor.iloc[0].get('ability_score', 1.0))
             
-            class_bonus = {"A1": 2.5, "A2": 1.5, "B1": 0.6, "B2": 0.0}.get(class_type, 0.0)
-            f_penalty = f_count * 1.0  
+            class_bonus = {"A1": 3.0, "A2": 1.8, "B1": 0.8, "B2": 0.0}.get(class_type, 0.0)
+            f_penalty = f_count * 1.5  
             
             boat_data_list.append({
                 'boat_number': boat_num,
@@ -90,6 +90,55 @@ def load_preview_odds(file_path):
         
     return odds_dict
 
+def load_stt_data(file_path):
+    """展示スタートタイム（ST）および展示コースの読み込み"""
+    if not os.path.exists(file_path):
+        return {}
+    df = pd.read_csv(file_path)
+    stt_dict = {}
+    for idx, row in df.iterrows():
+        race_code = None
+        for col in ['レースコード', 'race_id', 'race_code']:
+            if col in df.columns:
+                race_code = str(row.get(col)).strip()
+                break
+        if not race_code:
+            continue
+        
+        boat_stt = {}
+        for b in range(1, 7):
+            course_col = f"艇{b}_コース"
+            st_col = f"艇{b}_スタート展示"
+            course = int(row.get(course_col, b)) if pd.notna(row.get(course_col)) else b
+            st = float(row.get(st_col, 0.15)) if pd.notna(row.get(st_col)) else 0.15
+            boat_stt[b] = {'course': course, 'st': st}
+        stt_dict[race_code] = boat_stt
+    return stt_dict
+
+def load_original_exhibition_data(file_path):
+    """オリジナル展示タイム（まわり足、直線など）の読み込み"""
+    if not os.path.exists(file_path):
+        return {}
+    df = pd.read_csv(file_path)
+    orig_dict = {}
+    for idx, row in df.iterrows():
+        race_code = None
+        for col in ['レースコード', 'race_id', 'race_code']:
+            if col in df.columns:
+                race_code = str(row.get(col)).strip()
+                break
+        if not race_code:
+            continue
+        
+        boat_orig = {}
+        for b in range(1, 7):
+            # 艇ごとの値1, 値2, 値3（まわり足や直線タイム等）
+            v1 = float(row.get(f"艇{b}_値1", 0)) if pd.notna(row.get(f"艇{b}_値1", 0)) else 0.0
+            v2 = float(row.get(f"艇{b}_値2", 0)) if pd.notna(row.get(f"艇{b}_値2", 0)) else 0.0
+            boat_orig[b] = {'val1': v1, 'val2': v2}
+        orig_dict[race_code] = boat_orig
+    return orig_dict
+
 def judge_race_condition(wave_height, wind_speed):
     if wave_height <= 5 and wind_speed <= 3:
         return "solid"
@@ -98,56 +147,75 @@ def judge_race_condition(wave_height, wind_speed):
     else:
         return "rough"
 
-def calculate_boat_scores(boat_data_list, condition_type, stadium_id):
-    scores = {}
+def calculate_combination_probabilities(boat_data_list, stt_info, orig_info, stadium_id):
+    base_frame_win_bias = {1: 0.52, 2: 0.16, 3: 0.13, 4: 0.11, 5: 0.05, 6: 0.03}
     
-    high_in_stadiums = [17, 20, 23]
-    low_in_stadiums = [1, 2, 3, 4, 5, 6, 11, 14]
-    
-    if stadium_id in high_in_stadiums:
-        in_bias_multiplier = 1.3
-    elif stadium_id in low_in_stadiums:
-        in_bias_multiplier = 0.7
-    else:
-        in_bias_multiplier = 1.0
-
-    if condition_type == "solid":
-        w_frame, w_stat, w_motor = 1.2 * in_bias_multiplier, 1.8, 2.0
-    elif condition_type == "medium":
-        w_frame, w_stat, w_motor = 0.8 * in_bias_multiplier, 1.8, 2.5
-    else:
-        w_frame, w_stat, w_motor = 0.3 * in_bias_multiplier, 1.5, 3.0
-
+    boat_scores = {}
     for data in boat_data_list:
         boat = data['boat_number']
-        extra_in_bonus = 1.5 if (boat == 1 and stadium_id in high_in_stadiums) else 1.0
         
-        frame_bias = ((7 - boat) * 0.8 * extra_in_bonus) if condition_type != "rough" else (boat if boat >= 4 else 3)
-        st_score = max(0.25 - data['avg_st'], 0) * 20
-        stat_score = data['class_bonus'] + st_score - data['f_penalty']
-        motor_score = data['motor_power'] * w_motor
+        # 直前展示STの評価（早いほどプラス、F持ちや極端な遅れはマイナス）
+        ex_st = 0.15
+        if stt_info and boat in stt_info:
+            ex_st = stt_info[boat]['st']
+        st_score = max(0.25 - ex_st, 0) * 30 if ex_st > 0 else -10.0 # F（マイナスST）は危険
         
-        total_score = (frame_bias * w_frame) + (stat_score * w_stat) + motor_score
-        scores[boat] = max(total_score, 0.1)
+        # オリジナル展示（まわり足等の気配）のボーナス
+        orig_bonus = 0.0
+        if orig_info and boat in orig_info:
+            # 値が小さいほうが優秀な場合が多いが、簡易的に評価値として加味
+            val = orig_info[boat]['val1']
+            if 35.0 <= val <= 40.0:  # タイム系の一般的なレンジの補正
+                orig_bonus = (40.0 - val) * 0.5
         
-    return scores
+        stat_score = data['class_bonus'] + st_score - data['f_penalty'] + orig_bonus
+        motor_score = data['motor_power'] * 2.5
+        
+        raw_power = (base_frame_win_bias[boat] * 12) + stat_score + motor_score
+        boat_scores[boat] = max(raw_power, 0.1)
+        
+    total_score = sum(boat_scores.values())
+    base_probs = {boat: score / total_score for boat, score in boat_scores.items()}
+    
+    combo_probs = {}
+    for b1 in range(1, 7):
+        p1 = base_probs[b1]
+        for b2 in range(1, 7):
+            if b2 == b1: continue
+            remaining_after_p1 = 1.0 - p1
+            p2_conditional = base_probs[b2] / remaining_after_p1 if remaining_after_p1 > 0 else 0.2
+            
+            for b3 in range(1, 7):
+                if b3 == b1 or b3 == b2: continue
+                remaining_after_p2 = remaining_after_p1 - base_probs[b2]
+                if remaining_after_p2 <= 0:
+                    p3_conditional = 1.0 / 4.0
+                else:
+                    p3_conditional = base_probs[b3] / remaining_after_p2
+                    
+                combo = f"{b1}-{b2}-{b3}"
+                combo_probs[combo] = p1 * p2_conditional * p3_conditional
+                
+    total_cp = sum(combo_probs.values())
+    if total_cp > 0:
+        combo_probs = {k: v / total_cp for k, v in combo_probs.items()}
+        
+    return combo_probs
 
-def generate_target_return_bets(scores, race_actual_odds):
-    total_score = sum(scores.values())
-    probs = {boat: score / total_score for boat, score in scores.items()}
+def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig_info, stadium_id):
+    combo_probs = calculate_combination_probabilities(boat_data_list, stt_info, orig_info, stadium_id)
     
     if race_actual_odds:
         min_odds = min(race_actual_odds.values())
     else:
         min_odds = 10.0
 
-    # ガチガチの超低オッズレースはそもそも見送り
     if min_odds < 8.0:
         return None, "見送り"
 
     if min_odds < 30.0:
         race_type = "中穴"
-        target_payout = 6000
+        target_payout = 5000
         max_inv = 1000
     else:
         race_type = "穴"
@@ -155,31 +223,19 @@ def generate_target_return_bets(scores, race_actual_odds):
         max_inv = 800
 
     valid_bets = []
-    for b1 in range(1, 7):
-        for b2 in range(1, 7):
-            if b2 == b1: continue
-            for b3 in range(1, 7):
-                if b3 == b1 or b3 == b2: continue
-                combo = f"{b1}-{b2}-{b3}"
-                p1 = probs[b1]
-                p2 = probs[b2] / (1 - p1) if (1 - p1) > 0 else 0
-                p3 = probs[b3] / (1 - p1 - probs[b2]) if (1 - p1 - probs[b2]) > 0 else 0
-                combo_prob = p1 * p2 * p3
-                
-                if race_actual_odds and combo in race_actual_odds:
-                    actual_odds = race_actual_odds[combo]
-                else:
-                    actual_odds = 0.75 / combo_prob if combo_prob > 0 else 100.0
-                    
-                expected_value = combo_prob * actual_odds
-                
-                # --- ★ここがポイント：オッズが15倍未満の買い目は期待値に関係なく一切排除する ---
-                if actual_odds < 15.0:
-                    continue
-                
-                # 期待値が1.02以上のものだけを採用
-                if expected_value >= 1.02:
-                    valid_bets.append((combo, combo_prob, actual_odds, expected_value))
+    for combo, combo_prob in combo_probs.items():
+        if race_actual_odds and combo in race_actual_odds:
+            actual_odds = race_actual_odds[combo]
+        else:
+            actual_odds = 0.75 / combo_prob if combo_prob > 0 else 100.0
+            
+        expected_value = combo_prob * actual_odds
+        
+        if actual_odds < 15.0:
+            continue
+            
+        if expected_value >= 1.05:
+            valid_bets.append((combo, combo_prob, actual_odds, expected_value))
                 
     if not valid_bets:
         return None, "見送り"
@@ -222,7 +278,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     type_stats = {"中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
                   "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
     
-    print("=== 2026年 8月度 月間一括テスト（低オッズ買い目完全排除版） ===")
+    print("=== 2026年 8月度 月間一括テスト（直前展示データ完全統合版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -232,6 +288,8 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
         result_path = f"data/results/payouts/{year}/{month}/{day}.csv"
         race_card_path = f"data/programs/race_cards/{year}/{month}/{day}.csv"
         preview_odds_path = f"data/previews/od3/{year}/{month}/{day}.csv"
+        stt_path = f"data/previews/stt/{year}/{month}/{day}.csv"
+        orig_path = f"data/previews/original_exhibition/{year}/{month}/{day}.csv"
         
         if not os.path.exists(result_path) or not os.path.exists(race_card_path):
             continue
@@ -239,6 +297,8 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
         results_df = pd.read_csv(result_path)
         races_dict = load_race_cards(race_card_path, motor_df)
         odds_dict = load_preview_odds(preview_odds_path)
+        stt_dict = load_stt_data(stt_path)
+        orig_dict = load_original_exhibition_data(orig_path)
         
         for idx, row in results_df.iterrows():
             race_code = ""
@@ -275,13 +335,10 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
                 
             boats = races_dict[race_code]
             race_actual_odds = odds_dict.get(race_code, {})
+            stt_info = stt_dict.get(race_code, {})
+            orig_info = orig_dict.get(race_code, {})
             
-            wave_height = 4  
-            wind_speed = 2   
-            condition_type = judge_race_condition(wave_height, wind_speed)
-            
-            scores = calculate_boat_scores(boats, condition_type, stadium_id)
-            allocated_bets, race_type = generate_target_return_bets(scores, race_actual_odds)
+            allocated_bets, race_type = generate_target_return_bets(boats, race_actual_odds, stt_info, orig_info, stadium_id)
             
             if allocated_bets is None:
                 skipped_races += 1
@@ -312,7 +369,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（低オッズ買い目完全排除版）")
+    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（直前展示データ統合版）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
