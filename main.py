@@ -40,8 +40,8 @@ def load_race_cards(file_path, motor_df):
                 if not matched_motor.empty:
                     motor_power = float(matched_motor.iloc[0].get('ability_score', 1.0))
             
-            class_bonus = {"A1": 2.0, "A2": 1.2, "B1": 0.5, "B2": 0.0}.get(class_type, 0.0)
-            f_penalty = f_count * 0.8  
+            class_bonus = {"A1": 2.5, "A2": 1.5, "B1": 0.6, "B2": 0.0}.get(class_type, 0.0)
+            f_penalty = f_count * 1.0  
             
             boat_data_list.append({
                 'boat_number': boat_num,
@@ -68,17 +68,19 @@ def judge_race_condition(wave_height, wind_speed):
 
 def calculate_boat_scores(boat_data_list, condition_type):
     scores = {}
+    # イン有利を少し和らげ、モーターと選手能力（級別・ST）の比重を上げる
     if condition_type == "solid":
-        w_frame, w_stat, w_motor = 1.5, 1.5, 1.5
+        w_frame, w_stat, w_motor = 1.2, 1.8, 2.0
     elif condition_type == "medium":
-        w_frame, w_stat, w_motor = 1.0, 1.5, 2.0
+        w_frame, w_stat, w_motor = 0.8, 1.8, 2.5
     else:
-        w_frame, w_stat, w_motor = 0.4, 1.2, 2.5
+        w_frame, w_stat, w_motor = 0.3, 1.5, 3.0
 
     for data in boat_data_list:
         boat = data['boat_number']
-        frame_bias = (7 - boat) if condition_type != "rough" else (boat if boat >= 4 else 3)
-        st_score = max(0.25 - data['avg_st'], 0) * 15
+        # 枠番バイアスをマイルドにする
+        frame_bias = (7 - boat) * 0.8 if condition_type != "rough" else (boat if boat >= 4 else 3)
+        st_score = max(0.25 - data['avg_st'], 0) * 20
         stat_score = data['class_bonus'] + st_score - data['f_penalty']
         motor_score = data['motor_power'] * w_motor
         
@@ -106,11 +108,11 @@ def generate_sanrentan_bets(scores, condition_type):
     bets.sort(key=lambda x: x[1], reverse=True)
     
     if condition_type == "solid":
-        return bets[:5]
+        return bets[:6]
     elif condition_type == "medium":
-        return bets[:7]
+        return bets[:8]
     else:
-        return [bet for bet in bets if not bet[0].startswith("1")][:6]
+        return bets[:10]
 
 def run_backtest(target_date_str="20260901"):
     year = target_date_str[:4]
@@ -128,15 +130,6 @@ def run_backtest(target_date_str="20260901"):
         return
 
     results_df = pd.read_csv(result_path)
-    
-    # デバッグ用：実際の列名と1行目のデータを強制出力して確認する
-    print("=== 結果CSVの列名一覧 ===")
-    print(list(results_df.columns))
-    if not results_df.empty:
-        print("=== 1行目のデータサンプル ===")
-        print(results_df.iloc[0].to_dict())
-    print("=========================\n")
-
     motor_df = load_motor_abilities()
     races_dict = load_race_cards(race_card_path, motor_df)
     
@@ -157,36 +150,19 @@ def run_backtest(target_date_str="20260901"):
         if not race_code:
             race_code = str(row.get('レースコード', idx + 1))
         
-        # 着順データ（ハイフンを含み数字で構成される文字列を動的に探す）
+        # 3連単の着順を正確に取得（'3連単_組番' カラムから取得し、'=' を '-' に変換してフォーマットを合わせる）
         winning_combo = ""
-        for col in results_df.columns:
-            val = str(row.get(col, '')).strip()
-            if '-' in val and any(char.isdigit() for char in val):
-                winning_combo = val
-                break
-        if not winning_combo:
-            for col in ['3連単_着順', '3連単着順', '着順', '3連単']:
-                if col in row and pd.notna(row[col]):
-                    winning_combo = str(row[col]).strip()
-                    break
-
+        if '3連単_組番' in row and pd.notna(row['3連単_組番']):
+            raw_combo = str(row['3連単_組番']).strip()
+            winning_combo = raw_combo.replace('=', '-')
+        
         # 払戻金データの取得
         payout_yen = 0.0
-        for col in results_df.columns:
-            if '払戻' in str(col) or 'payout' in str(col).lower():
-                try:
-                    payout_yen = float(row.get(col, 0))
-                    break
-                except ValueError:
-                    pass
-        if payout_yen == 0.0:
-            for col in ['3連単_払戻金', '3連単払戻金', '払戻金']:
-                if col in row and pd.notna(row[col]):
-                    try:
-                        payout_yen = float(row[col])
-                    except ValueError:
-                        payout_yen = 0.0
-                    break
+        if '3連単_払戻金' in row and pd.notna(row['3連単_払戻金']):
+            try:
+                payout_yen = float(row['3連単_払戻金'])
+            except ValueError:
+                payout_yen = 0.0
         
         if race_code not in races_dict:
             continue
@@ -215,7 +191,7 @@ def run_backtest(target_date_str="20260901"):
         
         if hit:
             hit_count += 1
-            print(f"[{race_code}] 【的中】 予想: {predicted_combos[:3]} | 正解: {winning_combo} | 払戻: {payout_yen}円")
+            print(f"[{race_code}] 【的中】 予想上位: {predicted_combos[:3]} | 正解: {winning_combo} | 払戻: {payout_yen}円")
         else:
             if total_races <= 10:
                 print(f"[{race_code}] 【不的中】 予想上位: {predicted_combos[:3]} vs 正解: '{winning_combo}'")
