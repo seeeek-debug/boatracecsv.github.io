@@ -164,39 +164,43 @@ def generate_target_return_bets(scores, race_actual_odds):
     top_combo, top_prob, top_odds = top3[0]
     sec_combo, sec_prob, sec_odds = top3[1]
     
-    # 確率がしっかり抜けているか（1位が2位に対して1.25倍以上か）の判定
-    is_probability_clear = (top_prob / (sec_prob + 1e-9) > 1.25)
-
-    # 確率の偏りとオッズを基準にレースタイプを判定し、それぞれのオッズ帯でフィルタリング
-    if is_probability_clear and top_odds < 30.0:
-        race_type = "固め"
-        min_odds = 10.0
-        max_odds = 30.0
-        target_payout = 6000
-        max_inv = 1000
-        # ガチガチすぎて10倍未満なら見送り
-        if top_odds < min_odds:
-            return None, "見送り"
-        target_bets = [b for b in bets if min_odds <= b[2] < max_odds]
-    elif not is_probability_clear and top_odds < 80.0:
-        race_type = "中穴"
-        min_odds = 30.0
-        max_odds = 80.0
-        target_payout = 12000
-        max_inv = 2000
-        target_bets = [b for b in bets if min_odds <= b[2] < max_odds]
-    else:
-        race_type = "穴"
-        min_odds = 80.0
-        target_payout = 30000
-        max_inv = 2000
-        target_bets = [b for b in bets if b[2] >= min_odds]
-
-    # 指定されたオッズ帯に合致する買い目が上位にない場合は旨味がないため見送り
-    if not target_bets:
+    # --- 【重要】厳格な見送りフィルター ---
+    # 1. 上位の確率差が小さすぎる（大混戦・軸が定まらない）場合は見送り
+    if (top_prob - sec_prob) < 0.05:
         return None, "見送り"
         
-    selected_candidates = target_bets[:10]
+    # 2. 1番人気のオッズが低すぎる（ガチガチすぎて旨味がない）場合は見送り
+    if top_odds < 8.0:
+        return None, "見送り"
+        
+    # 3. オッズが高すぎる（大荒れ・難解すぎる）場合は見送り
+    if top_odds > 120.0:
+        return None, "見送り"
+
+    # --- レースタイプの判定とオッズ帯の割り当て ---
+    if top_odds < 25.0:
+        race_type = "固め"
+        min_odds, max_odds = 8.0, 30.0
+        target_payout = 5000
+        max_inv = 1000
+    elif top_odds < 70.0:
+        race_type = "中穴"
+        min_odds, max_odds = 30.0, 80.0
+        target_payout = 10000
+        max_inv = 1500
+    else:
+        race_type = "穴"
+        min_odds, max_odds = 80.0, 250.0
+        target_payout = 20000
+        max_inv = 1500
+
+    target_bets = [b for b in bets if min_odds <= b[2] < max_odds]
+    
+    # 狙いたいオッズ帯に旨味のある買い目が上位になければ見送り
+    if len(target_bets) < 2:
+        return None, "見送り"
+        
+    selected_candidates = target_bets[:5]
     if not selected_candidates:
         return None, "見送り"
         
@@ -236,7 +240,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
                   "中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
                   "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
     
-    print("=== 2026年 8月度 月間一括バックテスト実行中（厳選見送り＆帯別オッズ調整版） ===")
+    print("=== 2026年 8月度 月間一括バックテスト実行中（見送り厳選＆適正バランス版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -326,7 +330,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（厳選見送り＆帯別オッズ調整版）")
+    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（見送り厳選＆適正バランス版）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
