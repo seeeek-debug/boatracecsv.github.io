@@ -1,0 +1,124 @@
+import glob
+import os
+import itertools
+import lightgbm as lgb
+import numpy as np
+import pandas as pd
+
+def load_csvs_safely(pattern):
+    files = glob.glob(pattern, recursive=True)
+    if not files:
+        return pd.DataFrame()
+    return pd.concat([pd.read_csv(f, low_memory=False) for f in files], ignore_index=True)
+
+def main():
+    print("全データを読み込んでいます...")
+    # 1. すべてのデータディレクトリからCSVを一括読み込み
+    df_results = load_csvs_safely('data/results/**/*.csv')
+    df_programs = load_csvs_safely('data/programs/**/*.csv')
+    df_previews = load_csvs_safely('data/previews/**/*.csv')
+    df_estimates = load_csvs_safely('data/estimates/**/*.csv')
+
+    if df_results.empty:
+        print('結果データ（results）が見つかりませんでした。')
+        return
+
+    # 2. 共通キー（race_code と waku）で全データを結合 (JOIN)
+    base_df = df_results.copy()
+    merge_keys = ['race_code']
+    if 'waku' in base_df.columns:
+        merge_keys.append('waku')
+
+    for df_sub, name in [(df_programs, 'programs'), (df_previews, 'previews'), (df_estimates, 'estimates')]:
+        if not df_sub.empty and 'race_code' in df_sub.columns:
+            # 既に存在する重複カラムを避けてマージ
+            sub_keys = [k for k in merge_keys if k in df_sub.columns]
+            if sub_keys:
+                cols_to_use = df_sub.columns.difference(base_df.columns).tolist() + sub_keys
+                base_df = pd.merge(base_df, df_sub[list(set(cols_to_use))], on=sub_keys, how='left')
+
+    # 3. 目的変数と特徴量の準備
+    if 'rank' not in base_df.columns:
+        print("目的変数となる 'rank' カラムが存在しません。")
+        return
+
+    base_df['target'] = (base_df['rank'] == 1).astype(int)
+
+    # 数値型の特徴量を自動抽出（IDや結果に関わる不要な列を除外）
+    exclude_cols = ['race_code', 'rank', 'target', 'date', 'boat_no', 'payout']
+    features = [col for col in base_df.select_dtypes(include=[np.number]).columns if col not in exclude_cols]
+
+    if not features:
+        print('有効な数値特徴量が見つかりませんでした。')
+        return
+
+    train_df = base_df.dropna(subset=['rank'] + [c for c in ['waku'] if c in base_df.columns]).copy()
+    X = train_df[features]
+    y = train_df['target']
+
+    print(f"結合完了 — 学習データ数: {len(X)}, 特徴量数: {len(features)}")
+
+    # 4. LightGBMモデルの学習
+    train_data = lgb.Dataset(X, label=y)
+    params = {
+        'objective': 'binary',
+        'metric': 'binary_logloss',
+        'boosting_type': 'gbdt',
+        'learning_rate': 0.05,
+        'num_leaves': 31,
+        'random_state': 42,
+    }
+    model = lgb.train(params, train_data, num_boost_round=150)
+
+    # 5. 全データのスコアを予測
+    base_df['pred_score'] = model.predict(base_df[features])
+
+    # 6. 3連単（120通り）の確率を計算
+    sanrentan_results = []
+    for race_code, group in base_df.groupby('race_code'):
+        if len(group) < 6 or 'waku' not in group.columns:
+            continue
+
+        boats = group['waku'].values
+        scores = group['pred_score'].values
+
+        exp_scores = np.exp(scores - np.max(scores))
+        if np.sum(exp_scores) == 0:
+            continue
+        boat_probs = dict(zip(boats, exp_scores / np.sum(exp_scores)))
+
+        race_preds = []
+        for p1, p2, p3 in itertools.permutations(boats, 3):
+            p_1st = boat_probs.get(p1, 0)
+            rem_1 = 1.0 - p_1st
+            if rem_1 <= 0:
+                continue
+            p_2nd = boat_probs.get(p2, 0) / rem_1
+            rem_2 = rem_1 - boat_probs.get(p2, 0)
+            if rem_2 <= 0:
+                continue
+            p_3rd = boat_probs.get(p3, 0) / rem_2
+
+            prob = p_1st * p_2nd * p_3rd
+            race_preds.append({
+                'race_code': race_code,
+                'combination': f'{int(p1)}-{int(p2)}-{int(p3)}',
+                'probability': prob
+            })
+
+        if race_preds:
+            race_preds = sorted(race_preds, key=lambda x: x['probability'], reverse=True)
+            sanrentan_results.extend(race_preds[:5])
+
+    # 7. 予測結果の保存
+    if sanrentan_results:
+        df_pred_out = pd.DataFrame(sanrentan_results)
+        os.makedirs('data/predictions', exist_ok=True)
+        df_pred_out.to_csv('data/predictions/latest_predictions.csv', index=False)
+        print('予測完了: data/predictions/latest_predictions.csv に出力しました。')
+    else:
+        print('有効な予測を生成できませんでした。')
+
+if __name__ == '__main__':
+    main()
+
