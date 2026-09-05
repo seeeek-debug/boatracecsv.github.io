@@ -129,7 +129,7 @@ def calculate_boat_scores(boat_data_list, condition_type, stadium_id):
         
     return scores
 
-def generate_dynamic_bets(scores, race_actual_odds):
+def generate_target_return_bets(scores, race_actual_odds):
     total_score = sum(scores.values())
     probs = {boat: score / total_score for boat, score in scores.items()}
     
@@ -145,7 +145,6 @@ def generate_dynamic_bets(scores, race_actual_odds):
                 p3 = probs[b3] / (1 - p1 - probs[b2]) if (1 - p1 - probs[b2]) > 0 else 0
                 combo_prob = p1 * p2 * p3
                 
-                # 実際のプレビューオッズがあればそれを優先使用、なければ確率から推定
                 if race_actual_odds and combo in race_actual_odds:
                     actual_odds = race_actual_odds[combo]
                 else:
@@ -153,32 +152,62 @@ def generate_dynamic_bets(scores, race_actual_odds):
                     
                 bets.append((combo, combo_prob, actual_odds))
                 
-    # 確率順にソートしてAIの有力な目を並べる
+    # 確率が高い順にソート
     bets.sort(key=lambda x: x[1], reverse=True)
-    
-    # 1番人気の実際のオッズを基準に判定
     top_odds = bets[0][2] if bets else 15.0
     
+    # レースタイプの判定とターゲット払戻の設定
     if top_odds < 8.0:
         race_type = "固め"
-        filtered = [b for b in bets if b[2] >= 5.0]
-        num_bets = max(1, min(5, len(filtered)))
-        selected = filtered[:num_bets]
-        if not selected: selected = bets[:3]
+        target_payout = 5000  # 4,000〜6,000円の中央値
+        min_odds = 3.0
+        max_odds = 25.0
+        max_inv = 1000
     elif top_odds < 25.0:
         race_type = "中穴"
-        filtered = [b for b in bets if b[2] >= 10.0]
-        num_bets = max(6, min(12, len(filtered)))
-        selected = filtered[:num_bets]
-        if not selected: selected = bets[:8]
+        target_payout = 7500  # 6,000〜9,000円の中央値
+        min_odds = 10.0
+        max_odds = 70.0
+        max_inv = 2000
     else:
         race_type = "穴"
-        filtered = [b for b in bets if b[2] >= 15.0]
-        num_bets = max(13, min(20, len(filtered)))
-        selected = filtered[:num_bets]
-        if not selected: selected = bets[:15]
+        target_payout = 10000 # 8,000〜12,000円の中央値
+        min_odds = 30.0
+        max_odds = 250.0
+        max_inv = 2000
+        
+    # 条件に合う買い目を抽出
+    filtered = [b for b in bets if min_odds <= b[2] <= max_odds]
+    if not filtered:
+        filtered = bets[:10]
+        
+    selected_candidates = filtered[:12]
+    if not selected_candidates:
+        selected_candidates = bets[:8]
+        
+    # ターゲット払戻に向けた資金配分（逆数配分）
+    allocated_bets = []
+    total_inv = 0
+    
+    for combo, prob, odds in selected_candidates:
+        if odds <= 0: continue
+        raw_w = target_payout / odds
+        # 100円単位に丸める（最低100円）
+        w = max(100, round(raw_w / 100) * 100)
+        
+        if total_inv + w <= max_inv:
+            allocated_bets.append((combo, w, odds))
+            total_inv += w
+        else:
+            if not allocated_bets and max_inv >= 100:
+                allocated_bets.append((combo, 100, odds))
+                total_inv += 100
+            break
             
-    return [(combo, prob) for combo, prob, odds in selected], race_type
+    if not allocated_bets:
+        allocated_bets = [(bets[0][0], 100, bets[0][2])]
+        
+    return allocated_bets, race_type
 
 def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     motor_df = load_motor_abilities()
@@ -193,7 +222,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
                   "中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
                   "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
     
-    print("=== 2026年 8月度 月間一括バックテスト実行中（実オッズ連動） ===")
+    print("=== 2026年 8月度 月間一括バックテスト実行中（ターゲット配分連動） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -252,9 +281,9 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
             condition_type = judge_race_condition(wave_height, wind_speed)
             
             scores = calculate_boat_scores(boats, condition_type, stadium_id)
-            recommended_defs, race_type = generate_dynamic_bets(scores, race_actual_odds)
+            allocated_bets, race_type = generate_target_return_bets(scores, race_actual_odds)
             
-            investment = len(recommended_defs) * 100
+            investment = sum(amount for combo, amount, odds in allocated_bets)
             total_investment += investment
             total_races += 1
             
@@ -262,10 +291,10 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
             type_stats[race_type]["inv"] += investment
             
             hit = False
-            for combo, prob in recommended_defs:
+            for combo, amount, odds in allocated_bets:
                 if combo == winning_combo:
                     hit = True
-                    payout_added = (payout_yen / 100) * 100
+                    payout_added = (payout_yen / 100) * amount
                     total_payout += payout_added
                     type_stats[race_type]["pay"] += payout_added
                     break
@@ -279,7 +308,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（実オッズ連動）")
+    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（ターゲット配分）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
