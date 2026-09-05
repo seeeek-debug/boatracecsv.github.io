@@ -136,6 +136,28 @@ def generate_target_return_bets(scores, race_actual_odds):
     total_score = sum(scores.values())
     probs = {boat: score / total_score for boat, score in scores.items()}
     
+    # --- 1. レースの事前タイプ判定（1番人気のオッズを基準にする） ---
+    if race_actual_odds:
+        min_odds = min(race_actual_odds.values())
+    else:
+        min_odds = 10.0
+
+    if min_odds < 12.0:
+        race_type = "固め"
+        required_ev = 1.05
+        target_payout = 4000
+        max_inv = 1000
+    elif min_odds < 35.0:
+        race_type = "中穴"
+        required_ev = 1.10
+        target_payout = 6000
+        max_inv = 1000
+    else:
+        race_type = "穴"
+        required_ev = 1.15
+        target_payout = 8000
+        max_inv = 800
+
     valid_bets = []
     for b1 in range(1, 7):
         for b2 in range(1, 7):
@@ -155,41 +177,24 @@ def generate_target_return_bets(scores, race_actual_odds):
                     
                 expected_value = combo_prob * actual_odds
                 
-                # --- オッズ帯ごとに期待値の閾値を柔軟に設定 ---
-                if actual_odds < 20.0 and expected_value >= 1.05:
-                    valid_bets.append((combo, combo_prob, actual_odds, expected_value, "固め"))
-                elif 20.0 <= actual_odds < 60.0 and expected_value >= 1.10:
-                    valid_bets.append((combo, combo_prob, actual_odds, expected_value, "中穴"))
-                elif actual_odds >= 60.0 and expected_value >= 1.20:
-                    valid_bets.append((combo, combo_prob, actual_odds, expected_value, "穴"))
+                # --- タイプに応じたオッズ帯と期待値フィルター ---
+                if race_type == "固め" and actual_odds < 25.0 and expected_value >= required_ev:
+                    valid_bets.append((combo, combo_prob, actual_odds, expected_value))
+                elif race_type == "中穴" and 15.0 <= actual_odds < 60.0 and expected_value >= required_ev:
+                    valid_bets.append((combo, combo_prob, actual_odds, expected_value))
+                elif race_type == "穴" and actual_odds >= 40.0 and expected_value >= required_ev:
+                    valid_bets.append((combo, combo_prob, actual_odds, expected_value))
                 
     if not valid_bets:
         return None, "見送り"
         
-    # 期待値が高い順にソートして上位3点を選択
     valid_bets.sort(key=lambda x: x[3], reverse=True)
     selected_candidates = valid_bets[:3]
     
-    # 選択された買い目の大半のタイプをレースタイプとする
-    types_count = {"固め": 0, "中穴": 0, "穴": 0}
-    for _, _, _, _, r_type in selected_candidates:
-        types_count[r_type] += 1
-    race_type = max(types_count, key=types_count.get)
-
-    if race_type == "固め":
-        target_payout = 4000
-        max_inv = 1000
-    elif race_type == "中穴":
-        target_payout = 6000
-        max_inv = 1000
-    else:
-        target_payout = 8000
-        max_inv = 800
-
     allocated_bets = []
     total_inv = 0
     
-    for combo, prob, odds, ev, _ in selected_candidates:
+    for combo, prob, odds, ev in selected_candidates:
         if odds <= 0: continue
         raw_w = target_payout / odds
         w = max(100, round(raw_w / 100) * 100)
@@ -222,7 +227,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
                   "中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
                   "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
     
-    print("=== 2026年 8月度 月間一括バックテスト実行中（オッズ帯別期待値フィルター版） ===")
+    print("=== 2026年 8月度 月間一括バックテスト実行中（オッズ基準・事前分類版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -312,7 +317,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（オッズ帯別期待値フィルター版）")
+    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（オッズ基準・事前分類版）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
