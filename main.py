@@ -13,7 +13,8 @@ STADIUM_ID_TO_NAME = {
     19: "下関", 20: "若松", 21: "芦屋", 22: "福岡", 23: "唐津", 24: "大村"
 }
 
-PROVEN_STADIUM_IDS = [3, 4, 6, 9, 12, 13, 14, 15, 21]
+# 鳴門（14）を除外
+PROVEN_STADIUM_IDS = [3, 4, 6, 9, 12, 13, 15, 21]
 
 def load_motor_abilities(file_path="data/estimate/motor_ability_score_v4.csv"):
     if os.path.exists(file_path):
@@ -301,7 +302,7 @@ def run_monthly_backtest(start_date="2026-07-01", end_date="2026-08-31"):
     
     stadium_stats = {}
     
-    print(f"=== 7月〜8月テスト ({start_date} 〜 {end_date})（1点400円推奨版） ===")
+    print(f"=== 7月〜8月テスト(鳴門除外) ({start_date} 〜 {end_date})（1点400円推奨版） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -402,7 +403,7 @@ def run_monthly_backtest(start_date="2026-07-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 7月〜8月テスト最終結果 ({start_date} 〜 {end_date})")
+    print(f" 🎯 7月〜8月テスト(鳴門除外)最終結果 ({start_date} 〜 {end_date})")
     print("="*50)
     print("■ 【レース場別成績】")
     for s_id, st in sorted(stadium_stats.items(), key=lambda x: x[1]['count'], reverse=True):
