@@ -154,36 +154,43 @@ def generate_target_return_bets(scores, race_actual_odds):
                 
     # 確率が高い順にソート
     bets.sort(key=lambda x: x[1], reverse=True)
-    top_odds = bets[0][2] if bets else 15.0
     
-    # レースタイプの判定とターゲット払戻の設定
-    if top_odds < 8.0:
+    if len(bets) < 3:
+        return None, "見送り"
+        
+    top_combo, top_prob, top_odds = bets[0]
+    second_combo, second_prob, second_odds = bets[1]
+    
+    # 【見送り条件 1】確率がそこまで変わらん（混戦・拮抗している）場合は見送り
+    if top_prob / (second_prob + 1e-9) < 1.15:
+        return None, "見送り"
+        
+    # 【見送り条件 2】確率が一番高い買い目であってもオッズが10倍未満なら見送り
+    if top_odds < 10.0:
+        return None, "見送り"
+
+    # レースタイプの判定とターゲット払戻の設定（10倍以上の買い目を対象にする）
+    if top_odds < 25.0:
         race_type = "固め"
-        target_payout = 5000  # 4,000〜6,000円の中央値
-        min_odds = 3.0
-        max_odds = 25.0
+        target_payout = 5000  # 4,000〜6,000円
         max_inv = 1000
-    elif top_odds < 25.0:
+    elif top_odds < 60.0:
         race_type = "中穴"
-        target_payout = 7500  # 6,000〜9,000円の中央値
-        min_odds = 10.0
-        max_odds = 70.0
+        target_payout = 7500  # 6,000〜9,000円
         max_inv = 2000
     else:
         race_type = "穴"
-        target_payout = 10000 # 8,000〜12,000円の中央値
-        min_odds = 30.0
-        max_odds = 250.0
+        target_payout = 10000 # 8,000〜12,000円
         max_inv = 2000
         
-    # 条件に合う買い目を抽出
-    filtered = [b for b in bets if min_odds <= b[2] <= max_odds]
-    if not filtered:
-        filtered = bets[:10]
+    # 10倍以上の買い目のみを抽出
+    filtered_bets = [b for b in bets if b[2] >= 10.0]
+    if not filtered_bets:
+        return None, "見送り"
         
-    selected_candidates = filtered[:12]
+    selected_candidates = filtered_bets[:10]
     if not selected_candidates:
-        selected_candidates = bets[:8]
+        return None, "見送り"
         
     # ターゲット払戻に向けた資金配分（逆数配分）
     allocated_bets = []
@@ -192,7 +199,6 @@ def generate_target_return_bets(scores, race_actual_odds):
     for combo, prob, odds in selected_candidates:
         if odds <= 0: continue
         raw_w = target_payout / odds
-        # 100円単位に丸める（最低100円）
         w = max(100, round(raw_w / 100) * 100)
         
         if total_inv + w <= max_inv:
@@ -205,7 +211,7 @@ def generate_target_return_bets(scores, race_actual_odds):
             break
             
     if not allocated_bets:
-        allocated_bets = [(bets[0][0], 100, bets[0][2])]
+        return None, "見送り"
         
     return allocated_bets, race_type
 
@@ -217,12 +223,13 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     total_payout = 0
     hit_count = 0
     total_races = 0
+    skipped_races = 0
     
     type_stats = {"固め": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
                   "中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
                   "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
     
-    print("=== 2026年 8月度 月間一括バックテスト実行中（ターゲット配分連動） ===")
+    print("=== 2026年 8月度 月間一括バックテスト実行中（確率優位性＆10倍以上ターゲット配分） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -283,6 +290,10 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
             scores = calculate_boat_scores(boats, condition_type, stadium_id)
             allocated_bets, race_type = generate_target_return_bets(scores, race_actual_odds)
             
+            if allocated_bets is None:
+                skipped_races += 1
+                continue
+            
             investment = sum(amount for combo, amount, odds in allocated_bets)
             total_investment += investment
             total_races += 1
@@ -308,14 +319,15 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（ターゲット配分）")
+    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（確率優位性＆10倍以上対象）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
         t_hit = (st["hits"] / st["count"] * 100) if st["count"] > 0 else 0
         print(f"■ 【{r_type}】 レース数: {st['count']} | 的中数: {st['hits']} ({t_hit:.1f}%) | 投資: {st['inv']:,}円 | 払戻: {st['pay']:,}円 | 回収率: {t_roi:.1f}%")
     print("-" * 50)
-    print(f" 総検証レース数 : {total_races} レース")
+    print(f" 見送りレース数 : {skipped_races} レース")
+    print(f" 購入レース数   : {total_races} レース")
     print(f" 的中レース数   : {hit_count} レース (的中率: {hit_rate:.2f}%)")
     print(f" 総投資額       : {total_investment:,.0f} 円")
     print(f" 総払戻金       : {total_payout:,.0f} 円")
