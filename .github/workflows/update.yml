@@ -1,113 +1,44 @@
-import glob
-import os
-import itertools
-import numpy as np
-import pandas as pd
+name: Boatrace Auto Update & Predict
 
-def load_csvs_safely(pattern):
-    files = glob.glob(pattern, recursive=True)
-    if not files:
-        return pd.DataFrame()
-    return pd.concat([pd.read_csv(f, low_memory=False) for f in files], ignore_index=True)
+on:
+  schedule:
+    - cron: '*/2 * * * *'
+  workflow_dispatch:
 
-def main():
-    print("全データを読み込んでいます...")
-    df_programs = load_csvs_safely('data/programs/**/*.csv')
-    df_previews = load_csvs_safely('data/previews/**/*.csv')
-    df_estimates = load_csvs_safely('data/estimates/**/*.csv')
-    df_results = load_csvs_safely('data/results/**/*.csv')
+jobs:
+  update-and-predict:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    # ベースとなるデータを構築（出走表を最優先、なければ結果データなど）
-    if not df_programs.empty:
-        base_df = df_programs.copy()
-    elif not df_results.empty:
-        base_df = df_results.copy()
-    else:
-        print('有効なデータが見つかりませんでした。')
-        return
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
 
-    # 共通キー（race_code と waku）で各データを結合
-    merge_keys = ['race_code']
-    if 'waku' in base_df.columns:
-        merge_keys.append('waku')
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install lightgbm scikit-learn
 
-    for df_sub in [df_previews, df_estimates, df_results]:
-        if not df_sub.empty and 'race_code' in df_sub.columns:
-            sub_keys = [k for k in merge_keys if k in df_sub.columns]
-            if sub_keys:
-                cols_to_use = df_sub.columns.difference(base_df.columns).tolist() + sub_keys
-                base_df = pd.merge(base_df, df_sub[list(set(cols_to_use))], on=sub_keys, how='left')
+      - name: Run data update script
+        run: |
+          python scripts/preview-realtime.py
 
-    if 'race_code' not in base_df.columns or 'waku' not in base_df.columns:
-        print("必須カラム（race_code または waku）が見つかりませんでした。")
-        return
+      - name: Run prediction script
+        run: |
+          python scripts/train_and_predict.py
 
-    # 予測スコアの算出（機械学習または保有する数値特徴量の活用）
-    numeric_cols = base_df.select_dtypes(include=[np.number]).columns.tolist()
-    score_candidates = ['motor_2ren', 'racer_win_rate', 'st_average', 'index', 'score']
-    
-    # 利用可能なスコア用カラムを探す
-    used_score_col = None
-    for col in score_candidates:
-        if col in numeric_cols:
-            used_score_col = col
-            break
-
-    if used_score_col:
-        print(f"スコア算出にカラム '{used_score_col}' を使用します。")
-        base_df['pred_score'] = base_df[used_score_col].fillna(0)
-    else:
-        # 特徴量がない場合はランダムまたは一律のスコアを付与して動くようにする
-        base_df['pred_score'] = np.random.uniform(0.5, 1.0, len(base_df))
-
-    # 3連単（120通り）の確率を計算
-    sanrentan_results = []
-    for race_code, group in base_df.groupby('race_code'):
-        # 艇番（waku）が重複しないようにユニーク化
-        group = group.drop_duplicates(subset=['waku'])
-        if len(group) < 6:
-            continue
-
-        boats = group['waku'].values
-        scores = group['pred_score'].values
-
-        exp_scores = np.exp(scores - np.max(scores))
-        if np.sum(exp_scores) == 0:
-            continue
-        boat_probs = dict(zip(boats, exp_scores / np.sum(exp_scores)))
-
-        race_preds = []
-        for p1, p2, p3 in itertools.permutations(boats, 3):
-            p_1st = boat_probs.get(p1, 0)
-            rem_1 = 1.0 - p_1st
-            if rem_1 <= 0:
-                continue
-            p_2nd = boat_probs.get(p2, 0) / rem_1
-            rem_2 = rem_1 - boat_probs.get(p2, 0)
-            if rem_2 <= 0:
-                continue
-            p_3rd = boat_probs.get(p3, 0) / rem_2
-
-            prob = p_1st * p_2nd * p_3rd
-            race_preds.append({
-                'race_code': race_code,
-                'combination': f'{int(p1)}-{int(p2)}-{int(p3)}',
-                'probability': prob
-            })
-
-        if race_preds:
-            race_preds = sorted(race_preds, key=lambda x: x['probability'], reverse=True)
-            sanrentan_results.extend(race_preds[:5])
-
-    # 予測結果の保存
-    if sanrentan_results:
-        df_pred_out = pd.DataFrame(sanrentan_results)
-        os.makedirs('data/predictions', exist_ok=True)
-        df_pred_out.to_csv('data/predictions/latest_predictions.csv', index=False)
-        print('予測完了: data/predictions/latest_predictions.csv に出力しました。')
-    else:
-        print('有効な予測を生成できませんでした（レースデータが不足しています）。')
-
-if __name__ == '__main__':
-    main()
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.io"
+          git add data/
+          git diff --staged --quiet || git commit -m "Auto update data and predictions: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          git push
 
