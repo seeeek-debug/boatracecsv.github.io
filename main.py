@@ -253,17 +253,14 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
             
         actual_odds = race_actual_odds[combo]
         
-        # 【調整】オッズ帯を 12.0倍〜50.0倍 に引き締め
         if not (12.0 <= actual_odds <= 50.0):
             continue
             
-        # 【調整】確率の下限を 0.02 (2.0%) に引き上げ
         if combo_prob < 0.02:
             continue
             
         expected_value = combo_prob * actual_odds
         
-        # 【調整】期待値のハードルを 1.15 以上に厳格化
         if expected_value >= 1.15:
             valid_bets.append((combo, combo_prob, actual_odds, expected_value))
                 
@@ -273,11 +270,11 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
     valid_bets.sort(key=lambda x: x[3], reverse=True)
     
     race_type = "sui_params高期待値型"
-    selected_candidates = valid_bets[:1]  一番期待値の高い1点（または厳選2点）に絞る
+    selected_candidates = valid_bets[:1]  # ←ここに#が抜けてsyntax errorになってた
     
     allocated_bets = []
     for i, (combo, prob, odds, ev) in enumerate(selected_candidates):
-        amount = 400  # 1点買いに集中させてボリュームを出す
+        amount = 400
         allocated_bets.append((combo, amount, odds))
             
     if not allocated_bets:
