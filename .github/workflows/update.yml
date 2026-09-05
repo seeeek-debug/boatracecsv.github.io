@@ -1,13 +1,12 @@
-name: Boatrace Auto Update
+name: Boatrace Auto Update & Predict
 
 on:
   schedule:
-    # 2分おきに実行する設定（※GitHubのcronは数分程度の遅延が発生する場合があります）
-    - cron: '*/2 * * * *'
-  workflow_dispatch: # Actionsタブから手動実行できるようにする
+    - cron: '*/2 * * * *' # 2分おきに実行
+  workflow_dispatch: # Actionsタブから手動でも実行可能
 
 jobs:
-  update-data:
+  update-and-predict:
     runs-on: ubuntu-latest
     permissions:
       contents: write # リポジトリへの自動コミット権限を付与
@@ -25,16 +24,20 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Run update script
+      - name: Run data update script
         run: |
-          # 実行したいスクリプトを指定（例としてリアルタイム更新スクリプト）
+          # 1. ボートレースの最新データを取得・更新
           python scripts/preview-realtime.py
+
+      - name: Run prediction script
+        run: |
+          # 2. 全データを結合してLightGBMで予測・買い目を計算
+          python scripts/train_and_predict.py
 
       - name: Commit and push changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.io"
           git add data/
-          git diff --staged --quiet || git commit -m "Auto update data: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          git diff --staged --quiet || git commit -m "Auto update data and predictions: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
           git push
-
