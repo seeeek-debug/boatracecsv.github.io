@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import numpy as np
+import math
 
 def load_motor_abilities(file_path="data/estimate/motor_ability_score_v4.csv"):
     if os.path.exists(file_path):
@@ -201,53 +202,58 @@ def generate_target_return_bets(boat_data_list, race_actual_odds, stt_info, orig
             
         actual_odds = race_actual_odds[combo]
         
-        # 1. オッズは 10倍〜50倍 の中穴ゾーンに限定
-        if not (10.0 <= actual_odds <= 50.0):
+        # 1. 中穴オッズ特化（20倍〜50倍）
+        if not (20.0 <= actual_odds <= 50.0):
             continue
             
-        # 2. 確率が低すぎるノイズ（3%未満）は除外
-        if combo_prob < 0.03:
+        # 2. 確率のノイズカット（2.5%未満は除外）
+        if combo_prob < 0.025:
             continue
             
         expected_value = combo_prob * actual_odds
         
-        # 3. 期待値が 1.25 以上のもの
+        # 3. 期待値ハードル
         if expected_value >= 1.25:
             valid_bets.append((combo, combo_prob, actual_odds, expected_value))
                 
     if not valid_bets:
         return None, "見送り"
         
-    # 4. 期待値が高い順にソートし、上位「4点」までを厳選して採用
     valid_bets.sort(key=lambda x: x[3], reverse=True)
-    selected_candidates = valid_bets[:4]
+    
+    # 自信度判定：トップの確率や期待値が高い場合は最大2000円、通常は1000円
+    top_prob = valid_bets[0][1]
+    top_ev = valid_bets[0][3]
+    is_confident = (top_prob >= 0.06 or top_ev >= 1.8)
+    max_inv = 2000 if is_confident else 1000
+    race_type = "中穴(自信あり)" if is_confident else "中穴"
+    
+    # 払戻金が最低6,000円以上になるよう、上位1〜2点に絞って資金配分
+    selected_candidates = valid_bets[:2]
     
     allocated_bets = []
     total_inv = 0
-    max_inv = 1200  # 4点で最大1,200円まで（1点あたり300円上限）
     
     for combo, prob, odds, ev in selected_candidates:
         if odds <= 0: continue
-        raw_w = 1000 / odds
-        w = max(100, round(raw_w / 100) * 100)
-        if w > 300:
-            w = 300
-            
+        
+        # 払戻金が最低6,000円以上になる必要金額（100円単位切り上げ）
+        min_w_for_6k = math.ceil(6000 / odds / 100) * 100
+        w = max(min_w_for_6k, 300)
+        
         if total_inv + w <= max_inv:
             allocated_bets.append((combo, w, odds))
             total_inv += w
         else:
-            if not allocated_bets and max_inv >= 100:
-                allocated_bets.append((combo, 100, odds))
-                total_inv += 100
+            remaining = max_inv - total_inv
+            if remaining >= 100:
+                allocated_bets.append((combo, remaining, odds))
+                total_inv += remaining
             break
             
     if not allocated_bets:
         return None, "見送り"
         
-    avg_odds = sum(o for _, _, o in allocated_bets) / len(allocated_bets)
-    race_type = "中穴" if avg_odds < 30.0 else "穴"
-    
     return allocated_bets, race_type
 
 def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
@@ -260,10 +266,12 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     total_races = 0
     skipped_races = 0
     
-    type_stats = {"中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
-                  "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
+    type_stats = {
+        "中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
+        "中穴(自信あり)": {"count": 0, "hits": 0, "inv": 0, "pay": 0}
+    }
     
-    print("=== 2026年 8月度 月間一括テスト（厳選4点買いモード） ===")
+    print("=== 2026年 8月度 月間一括テスト（中穴20-50倍・払戻6千円以上特化） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
@@ -354,7 +362,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（厳選4点買いモード）")
+    print(f" 🎯 2026年 8月度 月間一括テスト最終結果（中穴特化・払戻6千円以上）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
