@@ -107,12 +107,13 @@ def generate_sanrentan_bets(scores, condition_type):
     else:
         return [bet for bet in bets if not bet[0].startswith("1")][:6]
 
-def run_backtest(target_date_str="20260904"):
+def run_backtest(target_date_str="20260905"):
     year = target_date_str[:4]
     month = target_date_str[4:6]
     day = target_date_str[6:]
     
-    result_path = f"data/results/{year}/{month}/{day}.csv"
+    # ★ここを実際のフォルダ構成（payoutsの中）に変更
+    result_path = f"data/results/payouts/{year}/{month}/{day}.csv"
     race_card_path = f"data/programs/race_cards/{year}/{month}/{day}.csv"
     
     if not os.path.exists(result_path):
@@ -184,5 +185,5 @@ def run_backtest(target_date_str="20260904"):
     print("="*30)
 
 if __name__ == "__main__":
-    run_backtest("20260904")
+    run_backtest("20260905")
 
