@@ -58,6 +58,35 @@ def load_race_cards(file_path, motor_df):
         
     return parsed_races
 
+def load_preview_odds(file_path):
+    if not os.path.exists(file_path):
+        return {}
+    
+    df = pd.read_csv(file_path)
+    odds_dict = {}
+    
+    for idx, row in df.iterrows():
+        race_code = None
+        for col in ['レースコード', 'race_id', 'race_code']:
+            if col in df.columns:
+                race_code = str(row.get(col)).strip()
+                break
+        if not race_code:
+            continue
+            
+        race_odds = {}
+        for col in df.columns:
+            if '3連単_' in col:
+                combo = col.replace('3連単_', '').replace('=', '-')
+                try:
+                    val = float(row[col])
+                    race_odds[combo] = val
+                except ValueError:
+                    pass
+        odds_dict[race_code] = race_odds
+        
+    return odds_dict
+
 def judge_race_condition(wave_height, wind_speed):
     if wave_height <= 5 and wind_speed <= 3:
         return "solid"
@@ -100,7 +129,7 @@ def calculate_boat_scores(boat_data_list, condition_type, stadium_id):
         
     return scores
 
-def generate_dynamic_bets(scores, condition_type):
+def generate_dynamic_bets(scores, race_actual_odds):
     total_score = sum(scores.values())
     probs = {boat: score / total_score for boat, score in scores.items()}
     
@@ -110,31 +139,41 @@ def generate_dynamic_bets(scores, condition_type):
             if b2 == b1: continue
             for b3 in range(1, 7):
                 if b3 == b1 or b3 == b2: continue
+                combo = f"{b1}-{b2}-{b3}"
                 p1 = probs[b1]
                 p2 = probs[b2] / (1 - p1) if (1 - p1) > 0 else 0
                 p3 = probs[b3] / (1 - p1 - probs[b2]) if (1 - p1 - probs[b2]) > 0 else 0
                 combo_prob = p1 * p2 * p3
-                est_odds = 0.75 / combo_prob if combo_prob > 0 else 100.0
-                bets.append((f"{b1}-{b2}-{b3}", combo_prob, est_odds))
                 
+                # 実際のプレビューオッズがあればそれを優先使用、なければ確率から推定
+                if race_actual_odds and combo in race_actual_odds:
+                    actual_odds = race_actual_odds[combo]
+                else:
+                    actual_odds = 0.75 / combo_prob if combo_prob > 0 else 100.0
+                    
+                bets.append((combo, combo_prob, actual_odds))
+                
+    # 確率順にソートしてAIの有力な目を並べる
     bets.sort(key=lambda x: x[1], reverse=True)
-    top_prob = bets[0][1] if bets else 0.2
     
-    if top_prob >= 0.30:
+    # 1番人気の実際のオッズを基準に判定
+    top_odds = bets[0][2] if bets else 15.0
+    
+    if top_odds < 8.0:
         race_type = "固め"
-        filtered = [b for b in bets if b[2] >= 6.0]
+        filtered = [b for b in bets if b[2] >= 5.0]
         num_bets = max(1, min(5, len(filtered)))
         selected = filtered[:num_bets]
         if not selected: selected = bets[:3]
-    elif top_prob >= 0.15:
+    elif top_odds < 25.0:
         race_type = "中穴"
-        filtered = [b for b in bets if b[2] >= 12.0]
+        filtered = [b for b in bets if b[2] >= 10.0]
         num_bets = max(6, min(12, len(filtered)))
         selected = filtered[:num_bets]
         if not selected: selected = bets[:8]
     else:
         race_type = "穴"
-        filtered = [b for b in bets if b[2] >= 20.0]
+        filtered = [b for b in bets if b[2] >= 15.0]
         num_bets = max(13, min(20, len(filtered)))
         selected = filtered[:num_bets]
         if not selected: selected = bets[:15]
@@ -154,22 +193,23 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
                   "中穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0},
                   "穴": {"count": 0, "hits": 0, "inv": 0, "pay": 0}}
     
-    print(kf := f"=== 2026年 8月度 月間一括バックテスト実行中 ===")
+    print("=== 2026年 8月度 月間一括バックテスト実行中（実オッズ連動） ===")
     
     for single_date in dates:
         year = single_date.strftime("%Y")
         month = single_date.strftime("%m")
         day = single_date.strftime("%d")
-        target_date_str = f"{year}{month}{day}"
         
         result_path = f"data/results/payouts/{year}/{month}/{day}.csv"
         race_card_path = f"data/programs/race_cards/{year}/{month}/{day}.csv"
+        preview_odds_path = f"data/previews/od3/{year}/{month}/{day}.csv"
         
         if not os.path.exists(result_path) or not os.path.exists(race_card_path):
             continue
             
         results_df = pd.read_csv(result_path)
         races_dict = load_race_cards(race_card_path, motor_df)
+        odds_dict = load_preview_odds(preview_odds_path)
         
         for idx, row in results_df.iterrows():
             race_code = ""
@@ -205,15 +245,16 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
                 continue
                 
             boats = races_dict[race_code]
+            race_actual_odds = odds_dict.get(race_code, {})
             
             wave_height = 4  
             wind_speed = 2   
             condition_type = judge_race_condition(wave_height, wind_speed)
             
             scores = calculate_boat_scores(boats, condition_type, stadium_id)
-            recommended_bets, race_type = generate_dynamic_bets(scores, condition_type)
+            recommended_defs, race_type = generate_dynamic_bets(scores, race_actual_odds)
             
-            investment = len(recommended_bets) * 100
+            investment = len(recommended_defs) * 100
             total_investment += investment
             total_races += 1
             
@@ -221,7 +262,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
             type_stats[race_type]["inv"] += investment
             
             hit = False
-            for combo, prob in recommended_bets:
+            for combo, prob in recommended_defs:
                 if combo == winning_combo:
                     hit = True
                     payout_added = (payout_yen / 100) * 100
@@ -238,7 +279,7 @@ def run_monthly_backtest(start_date="2026-08-01", end_date="2026-08-31"):
     net_profit = total_payout - total_investment
     
     print("\n" + "="*50)
-    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果")
+    print(f" 🎯 2026年 8月度 月間一括バックテスト最終結果（実オッズ連動）")
     print("="*50)
     for r_type, st in type_stats.items():
         t_roi = (st["pay"] / st["inv"] * 100) if st["inv"] > 0 else 0
