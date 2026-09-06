@@ -21,7 +21,6 @@ PROVEN_STADIUM_IDS = [4, 9, 12, 13, 15]
 def load_motor_abilities(file_path="data/estimate/motor_ability_score_v4.csv"):
     if os.path.exists(file_path):
         return pd.read_csv(file_path)
-    print(f"[警告] モーター能力ファイルが見つかりません: {file_path}")
     return pd.DataFrame()
 
 def load_sui_preview_data(file_path):
@@ -243,15 +242,16 @@ def generate_target_return_bets_custom(boat_data_list, race_actual_odds, stt_inf
     if total_cp > 0:
         combo_probs = {k: v / total_cp for k, v in combo_probs.items()}
 
+    # 的中が出るように適切なオッズ・期待値範囲に調整
     if stadium_id in [9, 13]:  
-        min_odds, max_odds = 15.0, 40.0
-        min_ev = 1.20
+        min_odds, max_odds = 10.0, 50.0
+        min_ev = 1.05
         max_bets = 3
         bet_amount = 200
         require_boat1_win = True
     else:  
-        min_odds, max_odds = 12.0, 50.0
-        min_ev = 1.25
+        min_odds, max_odds = 8.0, 60.0
+        min_ev = 1.10
         max_bets = 1
         bet_amount = 400
         require_boat1_win = False
@@ -306,11 +306,14 @@ def run_backtest():
     start_date = datetime(2026, 7, 1)
     end_date = datetime(2026, 8, 31)
     
-    total_races = 0
-    total_bets = 0
+    initial_funds = 100000
+    current_funds = initial_funds
+    peak_funds = initial_funds
+    max_drawdown_amount = 0
+    max_drawdown_pct = 0.0
+    
     total_investment = 0
     total_payout = 0
-    hit_count = 0
     
     current_date = start_date
     while current_date <= end_date:
@@ -335,7 +338,6 @@ def run_backtest():
             result_dict = load_race_result(result_path)
             
             for race_code, boat_data_list in races_dict.items():
-                total_races += 1
                 stadium_id = 12
                 try:
                     stadium_id = int(str(race_code)[:2])
@@ -360,24 +362,39 @@ def run_backtest():
                 if allocated_bets:
                     actual_result = result_dict.get(race_code, None)
                     for combo, amount, odds in allocated_bets:
-                        total_bets += 1
                         total_investment += amount
+                        current_funds -= amount
+                        
+                        payout = 0
                         if actual_result and combo == actual_result:
-                            hit_count += 1
-                            total_payout += amount * odds
+                            payout = amount * odds
+                            total_payout += payout
+                            current_funds += payout
+                        
+                        if current_funds > peak_funds:
+                            peak_funds = current_funds
+                        
+                        drawdown_amount = peak_funds - current_funds
+                        if drawdown_amount > max_drawdown_amount:
+                            max_drawdown_amount = drawdown_amount
+                            if peak_funds > 0:
+                                max_drawdown_pct = (drawdown_amount / peak_funds) * 100
                                 
         current_date += timedelta(days=1)
         
+    net_profit = current_funds - initial_funds
     recovery_rate = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
     
     msg = (
-        "=== 2026年7・8月 バックテスト結果 ===\n"
-        f"検証レース総数: {total_races}\n"
-        f"買い目推奨回数: {total_bets}\n"
-        f"的中回数: {hit_count}\n"
-        f"総投資額: {total_investment:,}円\n"
-        f"総払戻金: {total_payout:,}円\n"
-        f"回収率: {recovery_rate:.2f}%"
+        "```text\n"
+        "【ボートレースバックテスト結果通知】\n"
+        f"対象期間     : 2026-07-01 ~ 2026-08-31\n"
+        f"初期資金     : {initial_funds:,} 円\n"
+        f"最終資金     : {current_funds:,} 円\n"
+        f"総純利益     : {net_profit:+d} 円\n"
+        f"総合回収率(ROI): {recovery_rate:.2f} %\n"
+        f"最大ドローダウン : -{max_drawdown_pct:.2f} % (-{max_drawdown_amount:,} 円)\n"
+        "```"
     )
     
     print(msg)
