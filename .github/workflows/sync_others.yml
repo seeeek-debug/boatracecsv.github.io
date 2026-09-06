@@ -1,0 +1,32 @@
+name: Sync Others (Morning 8:00)
+
+on:
+  schedule:
+    # 日本時間 朝8:00 (UTC 23:00)
+    - cron: '0 23 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync-others:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure Git User
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.io"
+
+      - name: Pull other files from upstream
+        run: |
+          git remote add upstream https://github.com/boatracecsv/boatracecsv.github.io.git
+          git fetch upstream
+          git checkout upstream/main -- docs/ infra/ notebooks/ scripts/ .boatrace README.md requirements.txt .gitignore CLAUDE.md || true
+
+      - name: Commit and push changes
+        run: |
+          git add docs/ infra/ notebooks/ scripts/ .boatrace README.md requirements.txt .gitignore CLAUDE.md || true
+          git commit -m "Auto-sync other files [skip ci]" || echo "No changes to commit"
+          git push
+
