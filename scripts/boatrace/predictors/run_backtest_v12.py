@@ -8,11 +8,59 @@ sys.path.append(str(root_path))
 
 from scripts.boatrace.predictors.v12_longshot_skew import V12LongshotSkewPredictor
 
+def load_stadium_win_rates(repo_root: Path):
+    csv_path = repo_root / "data" / "estimate" / "stadium" / "course_win_rate.csv"
+    win_rates = {}
+    if csv_path.exists():
+        try:
+            df = pd.read_csv(csv_path)
+            for _, row in df.iterrows():
+                jyo = str(row.get("場コード", "")).zfill(2)
+                r_no = str(row.get("レース図", row.get("レース番号", ""))).strip()
+                if not jyo or not r_no:
+                    continue
+                key = f"{jyo}_{r_no}"
+                rates = {}
+                for c in range(1, 7):
+                    col_name = f"{c}コース勝率"
+                    if col_name in df.columns:
+                        rates[c] = float(row[col_name])
+                    else:
+                        rates[c] = 1.0 / 6.0
+                win_rates[key] = rates
+        except Exception as e:
+            print(f"Error loading course_win_rate.csv: {e}")
+    return win_rates
+
+def parse_jyo_and_race(rid: str, row: pd.Series):
+    jyo = ""
+    race_no = ""
+    for col in ["場コード", "jyo_cd", "stadium_code", "stadium"]:
+        if col in row and pd.notna(row[col]):
+            jyo = str(row[col]).zfill(2)
+            break
+    for col in ["レース図", "レース番号", "race_no", "r_no"]:
+        if col in row and pd.notna(row[col]):
+            race_no = str(row[col]).strip()
+            break
+    
+    if not jyo or not race_no:
+        clean_id = ''.join(filter(str.isdigit, rid))
+        if len(clean_id) >= 4:
+            if not jyo:
+                jyo = clean_id[-4:-2].zfill(2)
+            if not race_no:
+                race_no = str(int(clean_id[-2:]))
+    return jyo, race_no
+
 def load_repository_historical_data(repo_root: Path):
     historical_races = []
     
     od3_root = repo_root / "data" / "previews" / "od3"
     payouts_root = repo_root / "data" / "results" / "payouts"
+    
+    stadium_win_rates = load_stadium_win_rates(repo_root)
+    print(f"Loaded stadium win rates for {len(stadium_win_rates)} race keys.")
     
     # 1. 払戻金データをロード
     payouts_dict = {}
@@ -43,7 +91,7 @@ def load_repository_historical_data(repo_root: Path):
 
     print(f"Loaded total {len(payouts_dict)} payout records into dict.")
 
-    # 2. 直前オッズデータをロードして高度なフィルタリングと確率モデルを適用
+    # 2. 直前オッズデータをロード
     od3_files = list(od3_root.glob("**/*.csv"))
     print(f"Found od3 files: {len(od3_files)}")
     
@@ -62,8 +110,11 @@ def load_repository_historical_data(repo_root: Path):
                     continue
 
                 volatility = float(row.get("volatility", 1.5))
+                jyo, race_no = parse_jyo_and_race(rid, row)
+                key = f"{jyo}_{race_no}"
+                c_rates = stadium_win_rates.get(key, {i: 1.0/6.0 for i in range(1, 7)})
 
-                # オッズ情報の抽出と【オッズのフィルタリング】（50倍〜250倍の穴ゾーンに限定）
+                # オッズ抽出：50倍〜250倍の穴ゾーン
                 raw_odds = {}
                 for col in df_od3.columns:
                     if "-" in col:
@@ -79,25 +130,35 @@ def load_repository_historical_data(repo_root: Path):
                 if not raw_odds:
                     continue
 
-                # 【確率計算モデルの精度調整】
-                total_inv_odds = sum(1.0 / o for o in raw_odds.values())
+                # 場ごとのコース勝率をベースにした確率計算
                 probs = {}
                 for k, o in raw_odds.items():
-                    implied_prob = (1.0 / o) / total_inv_odds
+                    parts = k.split("-")
+                    if len(parts) == 3:
+                        try:
+                            h1, h2, h3 = int(parts[0]), int(parts[1]), int(parts[2])
+                            p1 = c_rates.get(h1, 1/6)
+                            p2 = c_rates.get(h2, 1/6) / (1.0 - p1 + 1e-6)
+                            p3 = c_rates.get(h3, 1/6) / (1.0 - p1 - p2 + 1e-6)
+                            base_p = max(p1 * p2 * p3, 1e-5)
+                        except:
+                            base_p = 1.0 / o
+                    else:
+                        base_p = 1.0 / o
+                    
                     skew_factor = 1.0 + (o / 100.0) * (volatility / 2.0) * 0.15
-                    probs[k] = implied_prob * skew_factor
+                    probs[k] = base_p * skew_factor
 
-                # 確率の正規化
                 prob_sum = sum(probs.values())
                 if prob_sum > 0:
                     probs = {k: p / prob_sum for k in probs.items()}
 
-                # 【期待値（EV）の閾値フィルタリング】（EV >= 1.2）
+                # 期待値フィルタリング（EV >= 1.1 でヒット率を確保しつつ選別）
                 odds_dict = {}
                 filtered_probs = {}
                 for k, o in raw_odds.items():
                     ev = probs.get(k, 0) * o
-                    if ev >= 1.2:
+                    if ev >= 1.1:
                         odds_dict[k] = o
                         filtered_probs[k] = probs[k]
 
@@ -117,7 +178,7 @@ def load_repository_historical_data(repo_root: Path):
         except Exception:
             continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races for backtest.")
+    print(f"Successfully matched and filtered {len(historical_races)} races for backtest using stadium win rates.")
     return historical_races
 
 def main():
@@ -130,7 +191,7 @@ def main():
         print("No historical data could be loaded after filtering.")
         return
     
-    print(f"=== V12 Longshot Skew Backtest Simulation (Odds >= 50) ({len(historical_data)} races) ===")
+    print(f"=== V12 Longshot Skew Backtest Simulation (Odds >= 50 with Stadium Data) ({len(historical_data)} races) ===")
     results = predictor.backtest_simulation(historical_data, initial_bankroll=1000000)
     
     print(f"初期資金: ¥{results['initial_bankroll']:,}")
