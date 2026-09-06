@@ -157,13 +157,12 @@ def load_repository_historical_data(repo_root: Path):
                 ex = ex_data.get(rid, {})
 
                 wave = sui["wave_height"]
-                
-                # 極端な荒れ水面（波高15cm超）のみカット
                 if wave > 15.0:
                     continue
 
                 rough_factor = 1.0 + (max(0.0, wave - 5.0) * 0.008)
 
+                # --- 決まり手・ヤラレ率・展開・実力からの艇パワー算出 ---
                 boat_powers = {}
                 for b_i in range(1, 7):
                     if b_i not in boats: continue
@@ -184,6 +183,7 @@ def load_repository_historical_data(repo_root: Path):
                 total_power = sum(boat_powers.values())
                 boat_win_probs = {b: p / total_power for b, p in boat_powers.items()} if total_power > 0 else {b: 1/6 for b in range(1, 7)}
 
+                # オッズデータは「配当金の計算用」にのみ取得し、買い目の選定・確率算出には一切介入させない
                 raw_odds = {}
                 for col in df_od3.columns:
                     if "-" in col:
@@ -191,18 +191,19 @@ def load_repository_historical_data(repo_root: Path):
                         if "-" in clean_key:
                             try:
                                 val = float(row[col])
-                                if 50.0 <= val <= 300.0:
-                                    raw_odds[clean_key] = val
+                                raw_odds[clean_key] = val
                             except ValueError: pass
                 
                 if not raw_odds: continue
 
-                probs = {}
-                for k in raw_odds.keys():
-                    parts = k.split("-")
-                    if len(parts) == 3:
-                        try:
-                            h1, h2, h3 = int(parts[0]), int(parts[1]), int(parts[2])
+                # --- 純粋な着順確率の算出（オッズ完全無視） ---
+                all_comb_probs = {}
+                for h1 in range(1, 7):
+                    for h2 in range(1, 7):
+                        if h2 == h1: continue
+                        for h3 in range(1, 7):
+                            if h3 == h1 or h3 == h2: continue
+                            k = f"{h1}-{h2}-{h3}"
                             p1 = boat_win_probs.get(h1, 1/6)
                             p2 = boat_win_probs.get(h2, 1/6) / (1.0 - p1 + 1e-6)
                             p3 = boat_win_probs.get(h3, 1/6) / (1.0 - p1 - p2 + 1e-6)
@@ -217,44 +218,30 @@ def load_repository_historical_data(repo_root: Path):
                                 kimarite_scenario_bias = 1.3
                             
                             base_p *= kimarite_scenario_bias
-                            probs[k] = base_p
-                        except:
-                            pass
+                            all_comb_probs[k] = base_p
 
-                prob_sum = sum(probs.values())
+                prob_sum = sum(all_comb_probs.values())
                 if prob_sum > 0:
-                    probs = {k: p_val / prob_sum for k, p_val in probs.items()}
+                    all_comb_probs = {k: p_val / prob_sum for k, p_val in all_comb_probs.items()}
 
-                max_comb_prob = max(probs.values()) if probs else 0
+                max_comb_prob = max(all_comb_probs.values()) if all_comb_probs else 0
                 
-                # 【ちょうどええ塩梅のフィルター】確率閾値を 0.055 に設定（ノーマルよりは絞るが、しっかり数数百レースは拾う）
+                # レースの絞り込み（確信度がしっかりあるレースのみ抽出）
                 if max_comb_prob < 0.055:  
                     continue
 
-                valid_bets = []
-                for k, o in raw_odds.items():
-                    if k not in probs: continue
-                    if 50.0 <= o < 100.0:
-                        odds_multiplier = 1.25
-                    elif 100.0 <= o < 200.0:
-                        odds_multiplier = 1.10
-                    else:
-                        odds_multiplier = 0.85
+                # 確率が高い順にソートし、上位2点（2点買い）を純粋に選択
+                sorted_combs = sorted(all_comb_probs.items(), key=lambda x: x[1], reverse=True)
+                top_2_combs = sorted_combs[:2]
 
-                    ev = probs[k] * o * odds_multiplier
-                    # 期待値の閾値も 1.28 に調整
-                    if ev >= 1.28:
-                        valid_bets.append((k, o, ev))
-                
-                if not valid_bets: continue
+                odds_dict = {}
+                filtered_probs = {}
+                for k, p in top_2_combs:
+                    if k in raw_odds:
+                        odds_dict[k] = raw_odds[k]
+                        filtered_probs[k] = p
 
-                valid_bets.sort(key=lambda x: x[2], reverse=True)
-                top_bets = valid_bets[:2]
-
-                odds_dict = {k: o for k, o, ev in top_bets}
-                filtered_probs = {k: probs[k] for k, o, ev in top_bets}
-
-                if not odds_dict: continue
+                if len(odds_dict) < 2: continue
 
                 historical_races.append({
                     "id": rid,
@@ -265,7 +252,7 @@ def load_repository_historical_data(repo_root: Path):
                 })
         except Exception: continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races (Balanced Filter Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races (Pure Probability Model).")
     return historical_races
 
 def main():
@@ -280,30 +267,17 @@ def main():
     total_bets = sum(len(r['odds']) for r in historical_data)
     avg_bets = total_bets / total_races_bet if total_races_bet > 0 else 0
     
-    odds_ranges = {"50-100倍": 0, "100-200倍": 0, "200-300倍": 0}
-    hit_ranges = {"50-100倍": 0, "100-200倍": 0, "200-300倍": 0}
     hit_count = 0
-
     for r in historical_data:
         actual = r['actual_result']
-        for k, o in r['odds'].items():
-            if 50.0 <= o < 100.0: odds_ranges["50-100倍"] += 1
-            elif 100.0 <= o < 200.0: odds_ranges["100-200倍"] += 1
-            elif 200.0 <= o <= 300.0: odds_ranges["200-300倍"] += 1
-            
+        for k in r['odds'].keys():
             if k == actual:
                 hit_count += 1
-                if 50.0 <= o < 100.0: hit_ranges["50-100倍"] += 1
-                elif 100.0 <= o < 200.0: hit_ranges["100-200倍"] += 1
-                elif 200.0 <= o <= 300.0: hit_ranges["200-300倍"] += 1
 
-    print("\n=== 【バランス調整版・2点買い詳細内訳】 ===")
+    print(f"\n=== 【完全オッズ非依存・確率上位2点買い実績】 ===")
     print(f"総購入レース数: {total_races_bet:,} レース")
     print(f"総購入点数（延べ）: {total_bets:,} 点")
-    print(f"1レースあたりの平均購入点数: {avg_bets:.2f} 点/レース")
-    print(f"購入オッズ帯別内訳: {odds_ranges}")
     print(f"的中総数: {hit_count:,} 本")
-    print(f"的中オッズ帯別内訳: {hit_ranges}")
     print("----------------------------------------")
 
     initial_bankroll = 100000.0
@@ -349,7 +323,7 @@ def main():
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
     max_drawdown_rate = (max_drawdown / max_bankroll * 100) if max_bankroll > 0 else 0.0
 
-    print(f"\n=== Balanced Filter Model Backtest Simulation ({len(historical_data)} races) ===")
+    print(f"\n=== Pure Probability Model Backtest Simulation ({len(historical_data)} races) ===")
     print(f"初期資金: ¥{int(initial_bankroll):,}")
     print(f"最終資金: ¥{current_bankroll:,.2f}")
     print(f"総投資額: ¥{total_investment:,.2f}")
@@ -361,3 +335,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
