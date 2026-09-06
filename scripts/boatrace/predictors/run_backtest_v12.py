@@ -1,6 +1,14 @@
 import sys
 from pathlib import Path
 import pandas as pd
+import numpy as np
+
+# LightGBMとscikit-learnのインポート（必要に応じて自動導入される前提）
+try:
+    import lightgbm as lgb
+    from sklearn.model_selection import train_test_split
+except ImportError:
+    pass
 
 # プロジェクトルートをパスに追加
 root_path = Path(__file__).resolve().parents[3]
@@ -8,92 +16,136 @@ sys.path.append(str(root_path))
 
 from scripts.boatrace.predictors.v12_longshot_skew import V12LongshotSkewPredictor
 
-def load_stadium_win_rates(repo_root: Path):
-    csv_path = repo_root / "data" / "estimate" / "stadium" / "course_win_rate.csv"
-    win_rates = {}
-    if not csv_path.exists():
-        return win_rates
+def parse_class_rank(val):
+    """選手級別を数値化する"""
+    s = str(val).strip().upper()
+    if "A1" in s: return 4
+    if "A2" in s: return 3
+    if "B1" in s: return 2
+    if "B2" in s: return 1
+    return 2 # デフォルトB1相当
+
+def load_race_cards_dataset(repo_root: Path):
+    """race_cardsフォルダから全レースの出走表データをロードして学習用・推論用に構造化する"""
+    cards_root = repo_root / "data" / "programs" / "race_cards"
+    card_files = list(cards_root.glob("**/*.csv"))
     
-    try:
-        for enc in ["utf-8-sig", "utf-8", "cp932"]:
+    races_data = {}
+    ml_rows = []
+    
+    for c_file in card_files:
+        try:
+            df = pd.read_csv(c_file)
+            for _, row in df.iterrows():
+                rid = ""
+                for col in ["レースコード", "race_id", "id", "RACE_ID"]:
+                    if col in df.columns and pd.notna(row[col]):
+                        rid = str(row[col]).strip()
+                        break
+                if not rid:
+                    continue
+                
+                if rid not in races_data:
+                    races_data[rid] = {}
+                
+                # 1〜6号艇のデータを抽出
+                for boat_i in range(1, 7):
+                    prefix = f"艇{boat_i}_"
+                    # カラム名の揺れに対応
+                    nat_win_col = next((c for c in [f"{prefix}全国勝率", f"boat_{boat_i}_national_win_rate"] if c in df.columns), None)
+                    loc_win_col = next((c for c in [f"{prefix}当地勝率", f"boat_{boat_i}_local_win_rate"] if c in df.columns), None)
+                    mot_2ren_col = next((c for c in [f"{prefix}モーター2連対率", f"boat_{boat_i}_motor_2ren"] if c in df.columns), None)
+                    avg_st_col = next((c for c in [f"{prefix}平均ST", f"boat_{boat_i}_avg_st"] if c in df.columns), None)
+                    class_col = next((c for c in [f"{prefix}級別", f"boat_{boat_i}_class"] if c in df.columns), None)
+                    
+                    try:
+                        nat_win = float(row[nat_win_col]) if nat_win_col and pd.notna(row[nat_win_col]) else 5.0
+                    except: nat_win = 5.0
+                    
+                    try:
+                        loc_win = float(row[loc_win_col]) if loc_win_col and pd.notna(row[loc_win_col]) else 5.0
+                    except: loc_win = 5.0
+                    
+                    try:
+                        mot_2ren = float(row[mot_2ren_col]) if mot_2ren_col and pd.notna(row[mot_2ren_col]) else 30.0
+                    except: mot_2ren = 30.0
+                    
+                    try:
+                        avg_st = float(row[avg_st_col]) if avg_st_col and pd.notna(row[avg_st_col]) else 0.15
+                    except: avg_st = 0.15
+                    
+                    class_val = parse_class_rank(row[class_col]) if class_col and pd.notna(row[class_col]) else 2
+                    
+                    boat_feat = {
+                        "course": boat_i,
+                        "national_win": nat_win,
+                        "local_win": loc_win,
+                        "motor_2ren": mot_2ren,
+                        "avg_st": avg_st,
+                        "class_val": class_val
+                    }
+                    races_data[rid][boat_i] = boat_feat
+        except Exception:
+            continue
+            
+    return races_data
+
+def train_ml_win_model(races_data, payouts_dict):
+    """出走表データと実際のレース結果からLightGBMで1着予測モデルを学習する"""
+    X = []
+    y = []
+    
+    for rid, boats in races_data.items():
+        if rid not in payouts_dict:
+            continue
+        result_str = str(payouts_dict[rid]).strip()
+        if not result_str or "-" not in result_str:
             try:
-                df = pd.read_csv(csv_path, encoding=enc)
-                break
-            except Exception:
+                actual_1st = int(result_str[0])
+            except:
                 continue
         else:
-            df = pd.read_csv(csv_path, encoding="utf-8", errors="ignore")
+            try:
+                actual_1st = int(result_str.split("-")[0])
+            except:
+                continue
+                
+        for boat_i, feat in boats.items():
+            features = [
+                feat["course"],
+                feat["national_win"],
+                feat["local_win"],
+                feat["motor_2ren"],
+                feat["avg_st"],
+                feat["class_val"]
+            ]
+            X.append(features)
+            y.append(1 if boat_i == actual_1st else 0)
+            
+    if not X:
+        return None
         
-        for _, row in df.iterrows():
-            jyo_raw = None
-            for col in ["場コード", "jyo_cd", "stadium_code", "stadium", "場"]:
-                if col in df.columns and pd.notna(row[col]):
-                    jyo_raw = row[col]
-                    break
-            if jyo_raw is None:
-                continue
-            jyo = str(jyo_raw).split(".")[0].strip().zfill(2)
-            
-            r_raw = None
-            for col in ["レース図", "レース番号", "race_no", "r_no", "レース"]:
-                if col in df.columns and pd.notna(row[col]):
-                    r_raw = row[col]
-                    break
-            
-            if r_raw is None:
-                continue
-            race_no = str(r_raw).split(".")[0].strip()
-            
-            key = f"{jyo}_{race_no}"
-            rates = {}
-            for c in range(1, 7):
-                found_rate = False
-                for col_name in [f"{c}コース勝率", f"course_{c}_win_rate", f"{c}着率", f"course{c}"]:
-                    if col_name in df.columns and pd.notna(row[col_name]):
-                        try:
-                            rates[c] = float(row[col_name])
-                            found_rate = True
-                            break
-                        except:
-                            pass
-                if not found_rate:
-                    rates[c] = 1.0 / 6.0
-            win_rates[key] = rates
-    except Exception:
-        pass
-    return win_rates
-
-def parse_jyo_and_race(rid: str, row: pd.Series):
-    jyo = ""
-    race_no = ""
-    for col in ["場コード", "jyo_cd", "stadium_code", "stadium"]:
-        if col in row and pd.notna(row[col]):
-            jyo = str(row[col]).split(".")[0].strip().zfill(2)
-            break
-    for col in ["レース図", "レース番号", "race_no", "r_no"]:
-        if col in row and pd.notna(row[col]):
-            race_no = str(row[col]).split(".")[0].strip()
-            break
+    X = np.array(X)
+    y = np.array(y)
     
-    if not jyo or not race_no:
-        clean_id = ''.join(filter(str.isdigit, rid))
-        if len(clean_id) >= 4:
-            if not jyo:
-                jyo = clean_id[-4:-2].zfill(2)
-            if not race_no:
-                try:
-                    race_no = str(int(clean_id[-2:]))
-                except:
-                    race_no = clean_id[-2:]
-    return jyo, race_no
+    # LightGBMモデルの学習
+    train_x, test_x, train_y, test_y = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    model = lgb.LGBMClassifier(
+        n_estimators=100,
+        learning_rate=0.05,
+        max_depth=5,
+        random_state=42,
+        verbose=-1
+    )
+    model.fit(train_x, train_y)
+    return model
 
 def load_repository_historical_data(repo_root: Path):
     historical_races = []
     
     od3_root = repo_root / "data" / "previews" / "od3"
     payouts_root = repo_root / "data" / "results" / "payouts"
-    
-    stadium_win_rates = load_stadium_win_rates(repo_root)
     
     # 1. 払戻金データをロード
     payouts_dict = {}
@@ -121,7 +173,17 @@ def load_repository_historical_data(repo_root: Path):
         except Exception:
             continue
 
-    # 2. 直前オッズデータをロード（バランス型モデル）
+    # 2. 出走表データをロード
+    races_data = load_race_cards_dataset(repo_root)
+    
+    # 3. 1着予測モデルの学習
+    print("Training LightGBM Win Prediction Model using Race Cards & Results...")
+    ml_model = train_ml_win_model(races_data, payouts_dict)
+    if ml_model is None:
+        print("Failed to train ML model.")
+        return historical_races
+
+    # 4. 直前オッズデータをロードして機械学習モデルによる予測とバックテスト用データを構築
     od3_files = list(od3_root.glob("**/*.csv"))
     
     matched_count = 0
@@ -135,16 +197,38 @@ def load_repository_historical_data(repo_root: Path):
                         rid = str(row[col]).strip()
                         break
                 
-                if not rid or rid not in payouts_dict:
+                if not rid or rid not in payouts_dict or rid not in races_data:
                     continue
 
                 volatility = float(row.get("volatility", 1.5))
-                jyo, race_no = parse_jyo_and_race(rid, row)
-                key = f"{jyo}_{race_no}"
+                boats = races_data[rid]
                 
-                c_rates = stadium_win_rates.get(key, {i: 1.0/6.0 for i in range(1, 7)})
+                # 機械学習モデルで各艇の1着確率を予測
+                boat_win_probs = {}
+                X_pred = []
+                boat_indices = []
+                for b_i in range(1, 7):
+                    if b_i in boats:
+                        feat = boats[b_i]
+                        X_pred.append([
+                            feat["course"],
+                            feat["national_win"],
+                            feat["local_win"],
+                            feat["motor_2ren"],
+                            feat["avg_st"],
+                            feat["class_val"]
+                        ])
+                        boat_indices.append(b_i)
+                
+                if X_pred:
+                    preds = ml_model.predict_proba(np.array(X_pred))[:, 1]
+                    s = sum(preds)
+                    if s > 0:
+                        preds = preds / s
+                    for idx, p in zip(boat_indices, preds):
+                        boat_win_probs[idx] = max(p, 0.001)
 
-                # ターゲット：50倍〜250倍の中穴ゾーン
+                # ターゲット：中穴ゾーン（40倍〜200倍）
                 raw_odds = {}
                 for col in df_od3.columns:
                     if "-" in col:
@@ -152,7 +236,7 @@ def load_repository_historical_data(repo_root: Path):
                         if "-" in clean_key:
                             try:
                                 val = float(row[col])
-                                if 50.0 <= val <= 250.0:
+                                if 40.0 <= val <= 200.0:
                                     raw_odds[clean_key] = val
                             except ValueError:
                                 pass
@@ -160,15 +244,17 @@ def load_repository_historical_data(repo_root: Path):
                 if not raw_odds:
                     continue
 
+                # 3連単の確率を各艇の1着・2着・3着確率から算出（簡易マルコフ/順列モデル）
                 probs = {}
                 for k, o in raw_odds.items():
                     parts = k.split("-")
                     if len(parts) == 3:
                         try:
                             h1, h2, h3 = int(parts[0]), int(parts[1]), int(parts[2])
-                            p1 = c_rates.get(h1, 1/6)
-                            p2 = c_rates.get(h2, 1/6) / (1.0 - p1 + 1e-6)
-                            p3 = c_rates.get(h3, 1/6) / (1.0 - p1 - p2 + 1e-6)
+                            p1 = boat_win_probs.get(h1, 1/6)
+                            # 残りの中での相対確率
+                            p2 = boat_win_probs.get(h2, 1/6) / (1.0 - p1 + 1e-6)
+                            p3 = boat_win_probs.get(h3, 1/6) / (1.0 - p1 - p2 + 1e-6)
                             base_p = max(p1 * p2 * p3, 1e-6)
                         except:
                             base_p = 1.0 / o
@@ -176,23 +262,23 @@ def load_repository_historical_data(repo_root: Path):
                         base_p = 1.0 / o
                     
                     market_implied_p = 1.0 / o
-                    probs[k] = base_p * 0.6 + market_implied_p * 0.4
+                    probs[k] = base_p * 0.5 + market_implied_p * 0.5
 
                 prob_sum = sum(probs.values())
                 if prob_sum > 0:
                     probs = {k: p_val / prob_sum for k, p_val in probs.items()}
 
-                # 期待値フィルター（EV >= 1.2）をクリアした買い目を集める
+                # 期待値フィルター（EV >= 1.25）
                 valid_bets = []
                 for k, o in raw_odds.items():
                     ev = probs.get(k, 0) * o
-                    if ev >= 1.2:
+                    if ev >= 1.25:
                         valid_bets.append((k, o, ev))
                 
                 if not valid_bets:
                     continue
 
-                # 期待値が高い順にソートして、上位2点までに絞る
+                # 期待値順にソートし、上位1〜2点に厳選
                 valid_bets.sort(key=lambda x: x[2], reverse=True)
                 top_bets = valid_bets[:2]
 
@@ -215,7 +301,7 @@ def load_repository_historical_data(repo_root: Path):
         except Exception:
             continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Balanced Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (ML LightGBM Model).")
     return historical_races
 
 def main():
@@ -225,10 +311,10 @@ def main():
     historical_data = load_repository_historical_data(repo_root)
     
     if not historical_data:
-        print("No historical data could be loaded after balanced filtering.")
+        print("No historical data could be loaded after ML filtering.")
         return
     
-    print(f"=== V14 Balanced Backtest Simulation ({len(historical_data)} races) ==pss")
+    print(f"=== V15 ML-Integrated Backtest Simulation ({len(historical_data)} races) ===")
     results = predictor.backtest_simulation(historical_data, initial_bankroll=1000000)
     
     print(f"初期資金: ¥{results['initial_bankroll']:,}")
