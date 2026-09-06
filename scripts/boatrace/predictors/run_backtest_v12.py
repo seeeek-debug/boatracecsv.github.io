@@ -121,7 +121,7 @@ def load_repository_historical_data(repo_root: Path):
         except Exception:
             continue
 
-    # 2. 直前オッズデータをロード（超厳選モード）
+    # 2. 直前オッズデータをロード（根本改修：厳格な確率評価と絞り込み）
     od3_files = list(od3_root.glob("**/*.csv"))
     
     matched_count = 0
@@ -144,7 +144,7 @@ def load_repository_historical_data(repo_root: Path):
                 
                 c_rates = stadium_win_rates.get(key, {i: 1.0/6.0 for i in range(1, 7)})
 
-                # オッズ抽出：100倍〜180倍の特選ゾーン
+                # ターゲット：中穴〜大穴ゾーン（60倍〜300倍）
                 raw_odds = {}
                 for col in df_od3.columns:
                     if "-" in col:
@@ -152,7 +152,7 @@ def load_repository_historical_data(repo_root: Path):
                         if "-" in clean_key:
                             try:
                                 val = float(row[col])
-                                if 100.0 <= val <= 180.0:
+                                if 60.0 <= val <= 300.0:
                                     raw_odds[clean_key] = val
                             except ValueError:
                                 pass
@@ -160,6 +160,7 @@ def load_repository_historical_data(repo_root: Path):
                 if not raw_odds:
                     continue
 
+                # 確率のベース計算（スタジアム勝率をベースにした純粋な確率モデル）
                 probs = {}
                 for k, o in raw_odds.items():
                     parts = k.split("-")
@@ -169,29 +170,32 @@ def load_repository_historical_data(repo_root: Path):
                             p1 = c_rates.get(h1, 1/6)
                             p2 = c_rates.get(h2, 1/6) / (1.0 - p1 + 1e-6)
                             p3 = c_rates.get(h3, 1/6) / (1.0 - p1 - p2 + 1e-6)
-                            base_p = max(p1 * p2 * p3, 1e-5)
+                            base_p = max(p1 * p2 * p3, 1e-6)
                         except:
                             base_p = 1.0 / o
                     else:
                         base_p = 1.0 / o
                     
-                    skew_factor = 1.0 + (o / 100.0) * (volatility / 2.0) * 0.15
-                    probs[k] = base_p * skew_factor
+                    # 荒れ度（ボラティリティ）を控えめに反映
+                    market_implied_p = 1.0 / o
+                    # モデル確率と市場確率のバランス型（過剰な歪みを作らない）
+                    probs[k] = base_p * 0.7 + market_implied_p * 0.3
 
                 prob_sum = sum(probs.values())
                 if prob_sum > 0:
                     probs = {k: p_val / prob_sum for k, p_val in probs.items()}
 
-                # 期待値フィルタリング：EV >= 1.5 の超高ハードル
+                # 厳格な期待値フィルター（EV >= 1.4 のみに限定し、かつ「選ばれた買い目がレース全体の少数を占める」場合のみ採用）
                 odds_dict = {}
                 filtered_probs = {}
                 for k, o in raw_odds.items():
                     ev = probs.get(k, 0) * o
-                    if ev >= 1.5:
+                    if ev >= 1.4:
                         odds_dict[k] = o
                         filtered_probs[k] = probs[k]
 
-                if not odds_dict:
+                # ★ここが重要：買い目が多すぎたり（雑多に引っかかっている）、逆に全く無い場合はそのレースを「見送り」にする
+                if not odds_dict or len(odds_dict) > 3:
                     continue
 
                 actual_result = str(payouts_dict[rid]).strip()
@@ -207,7 +211,7 @@ def load_repository_historical_data(repo_root: Path):
         except Exception:
             continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Ultra Strict Mode).")
+    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Revamped V13 Strict Model).")
     return historical_races
 
 def main():
@@ -217,10 +221,10 @@ def main():
     historical_data = load_repository_historical_data(repo_root)
     
     if not historical_data:
-        print("No historical data could be loaded after ultra strict filtering.")
+        print("No historical data could be loaded after revamped filtering.")
         return
     
-    print(f"=== V12 Longshot Skew Backtest Simulation (Ultra Strict Mode) ({len(historical_data)} races) ===")
+    print(f"=== V13 Revamped Backtest Simulation ({len(historical_data)} races) ===")
     results = predictor.backtest_simulation(historical_data, initial_bankroll=1000000)
     
     print(f"初期資金: ¥{results['initial_bankroll']:,}")
@@ -232,6 +236,6 @@ def main():
     print(f"最大ドローダウン (率): {results['max_drawdown_rate']:.2f}%")
     print("=== Backtest Finished Successfully ===")
 
-if __name__ == "__main__":
+if __name__ == "%main__":
     main()
 
