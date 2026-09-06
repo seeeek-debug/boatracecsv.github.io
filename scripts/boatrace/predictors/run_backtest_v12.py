@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 import pandas as pd
 import numpy as np
+import traceback
 
 root_path = Path(__file__).resolve().parents[3]
 sys.path.append(str(root_path))
@@ -37,6 +38,8 @@ def load_sui_dataset(repo_root: Path):
     """水面コンディション（波高）をロードする"""
     sui_root = repo_root / "data" / "previews" / "sui"
     sui_data = {}
+    if not sui_root.exists():
+        return sui_data
     for f in sui_root.glob("**/*.csv"):
         try:
             df = pd.read_csv(f)
@@ -61,6 +64,8 @@ def load_original_exhibition_dataset(repo_root: Path):
     """オリジナル展示データ（展示タイム）をロードする"""
     ex_root = repo_root / "data" / "previews" / "original_exhibition"
     ex_data = {}
+    if not ex_root.exists():
+        return ex_data
     for f in ex_root.glob("**/*.csv"):
         try:
             df = pd.read_csv(f)
@@ -88,6 +93,8 @@ def load_race_cards_dataset(repo_root: Path):
     """出走表データ（勝率・モーター・ST・級別）をロードする"""
     cards_root = repo_root / "data" / "programs" / "race_cards"
     races_data = {}
+    if not cards_root.exists():
+        return races_data
     for c_file in cards_root.glob("**/*.csv"):
         try:
             df = pd.read_csv(c_file)
@@ -136,25 +143,30 @@ def load_repository_historical_data(repo_root: Path):
     payouts_root = repo_root / "data" / "results" / "payouts"
     
     payouts_dict = {}
-    for p_file in payouts_root.glob("**/*.csv"):
-        try:
-            df = pd.read_csv(p_file)
-            for _, row in df.iterrows():
-                rid = ""
-                for col in ["レースコード", "race_id", "id", "RACE_ID"]:
-                    if col in df.columns and pd.notna(row[col]):
-                        rid = str(row[col]).strip()
-                        break
-                if not rid: continue
-                for col in ["3連単_組番", "trifecta", "3rentan", "result"]:
-                    if col in df.columns and pd.notna(row[col]):
-                        payouts_dict[rid] = str(row[col]).strip()
-                        break
-        except Exception: continue
+    if payouts_root.exists():
+        for p_file in payouts_root.glob("**/*.csv"):
+            try:
+                df = pd.read_csv(p_file)
+                for _, row in df.iterrows():
+                    rid = ""
+                    for col in ["レースコード", "race_id", "id", "RACE_ID"]:
+                        if col in df.columns and pd.notna(row[col]):
+                            rid = str(row[col]).strip()
+                            break
+                    if not rid: continue
+                    for col in ["3連単_組番", "trifecta", "3rentan", "result"]:
+                        if col in df.columns and pd.notna(row[col]):
+                            payouts_dict[rid] = str(row[col]).strip()
+                            break
+            except Exception: continue
 
     races_data = load_race_cards_dataset(repo_root)
     sui_data = load_sui_dataset(repo_root)
     ex_data = load_original_exhibition_dataset(repo_root)
+
+    if not od3_root.exists():
+        print(f"Warning: {od3_root} does not exist.")
+        return historical_races
 
     for od3_csv in od3_root.glob("**/*.csv"):
         try:
@@ -282,109 +294,114 @@ def load_repository_historical_data(repo_root: Path):
     return historical_races
 
 def main():
-    repo_root = Path(__file__).resolve().parents[3]
-    
-    historical_data = load_repository_historical_data(repo_root)
-    if not historical_data:
-        print("No historical data could be loaded.")
-        return
-    
-    total_races_bet = len(historical_data)
-    total_bets = sum(len(r['odds']) for r in historical_data)
-    
-    hit_count = 0
-    venue_results = {}
+    try:
+        repo_root = Path(__file__).resolve().parents[3]
+        
+        historical_data = load_repository_historical_data(repo_root)
+        if not historical_data:
+            print("No historical data could be loaded.")
+            return
+        
+        total_races_bet = len(historical_data)
+        total_bets = sum(len(r['odds']) for r in historical_data)
+        
+        hit_count = 0
+        venue_results = {}
 
-    initial_bankroll = 100000.0
-    current_bankroll = initial_bankroll
-    total_investment = 0.0
-    total_payout = 0.0
-    max_bankroll = initial_bankroll
-    max_drawdown = 0.0
-    
-    for r in historical_data:
-        actual = r['actual_result']
-        odds_dict = r['odds']
-        v = r['venue']
+        initial_bankroll = 100000.0
+        current_bankroll = initial_bankroll
+        total_investment = 0.0
+        total_payout = 0.0
+        max_bankroll = initial_bankroll
+        max_drawdown = 0.0
         
-        if v not in venue_results:
-            venue_results[v] = {"races": 0, "hits": 0, "investment": 0, "payout": 0}
-        venue_results[v]["races"] += 1
-        
-        if current_bankroll <= 0:
-            break
+        for r in historical_data:
+            actual = r['actual_result']
+            odds_dict = r['odds']
+            v = r['venue']
             
-        raw_bet = current_bankroll * 0.001
-        bet_amount = max(100, min(500, int(raw_bet / 100) * 100))
-        
-        race_investment = 0
-        race_payout = 0
-        race_hit = False
-        
-        for k, o in odds_dict.items():
-            if current_bankroll < bet_amount:
-                actual_bet = max(100, int(current_bankroll / 100) * 100)
-                if actual_bet < 100: actual_bet = 0
-            else:
-                actual_bet = bet_amount
+            if v not in venue_results:
+                venue_results[v] = {"races": 0, "hits": 0, "investment": 0, "payout": 0}
+            venue_results[v]["races"] += 1
+            
+            if current_bankroll <= 0:
+                break
                 
-            if actual_bet <= 0: continue
+            raw_bet = current_bankroll * 0.001
+            bet_amount = max(100, min(500, int(raw_bet / 100) * 100))
             
-            current_bankroll -= actual_bet
-            total_investment += actual_bet
-            race_investment += actual_bet
+            race_investment = 0
+            race_payout = 0
+            race_hit = False
             
-            if k == actual:
-                payout = actual_bet * o
-                current_bankroll += payout
-                total_payout += payout
-                race_payout += payout
-                hit_count += 1
-                race_hit = True
-        
-        if race_hit:
-            venue_results[v]["hits"] += 1
-            
-        venue_results[v]["investment"] += race_investment
-        venue_results[v]["payout"] += race_payout
+            for k, o in odds_dict.items():
+                if current_bankroll < bet_amount:
+                    actual_bet = max(100, int(current_bankroll / 100) * 100)
+                    if actual_bet < 100: actual_bet = 0
+                else:
+                    actual_bet = bet_amount
+                    
+                if actual_bet <= 0: continue
                 
-        if current_bankroll > max_bankroll:
-            max_bankroll = current_bankroll
-        drawdown = max_bankroll - current_bankroll
-        if drawdown > max_drawdown:
-            max_drawdown = drawdown
+                current_bankroll -= actual_bet
+                total_investment += actual_bet
+                race_investment += actual_bet
+                
+                if k == actual:
+                    payout = actual_bet * o
+                    current_bankroll += payout
+                    total_payout += payout
+                    race_payout += payout
+                    hit_count += 1
+                    race_hit = True
+            
+            if race_hit:
+                venue_results[v]["hits"] += 1
+                
+            venue_results[v]["investment"] += race_investment
+            venue_results[v]["payout"] += race_payout
+                    
+            if current_bankroll > max_bankroll:
+                max_bankroll = current_bankroll
+            drawdown = max_bankroll - current_bankroll
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
 
-    roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
-    max_drawdown_rate = (max_drawdown / max_bankroll * 100) if max_bankroll > 0 else 0.0
+        roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
+        max_drawdown_rate = (max_drawdown / max_bankroll * 100) if max_bankroll > 0 else 0.0
 
-    print(f"\n=== 【全場対象 30〜50倍中穴特化・2点買い実績】 ===")
-    print(f"総購入レース数: {total_races_bet:,} レース")
-    print(f"総購入点数（延べ）: {total_bets:,} 点")
-    print(f"的中総数: {hit_count:,} 本")
-    print("----------------------------------------")
-    print(f"初期資金: ¥{int(initial_bankroll):,}")
-    print(f"最終資金: ¥{current_bankroll:,.2f}")
-    print(f"総投資額: ¥{total_investment:,.2f}")
-    print(f"総払戻金: ¥{total_payout:,.2f}")
-    print(f"回収率 (ROI): {roi:.2f}%")
-    print(f"最大ドローダウン (金額): ¥{max_drawdown:,.2f}")
-    print(f"最大ドローダウン (率): {max_drawdown_rate:.2f}%")
-    
-    print("\n=== 【開催場別の成績詳細】 ===")
-    print(f"{'場名':4s} | {'購入R':5s} | {'的中数':5s} | {'的中率':6s} | {'投資額':10s} | {'払戻金':10s} | {'回収率':6s}")
-    print("-" * 65)
-    
-    sorted_venues = sorted(venue_results.items(), key=lambda x: (x[1]["payout"] / max(1, x[1]["investment"])), reverse=True)
-    for v, stats in sorted_venues:
-        v_races = stats['races']
-        v_hits = stats['hits']
-        v_hit_rate = (v_hits / v_races * 100) if v_races > 0 else 0.0
-        v_inv = stats['investment']
-        v_pay = stats['payout']
-        v_roi = (v_pay / v_inv * 100) if v_inv > 0 else 0.0
-        print(f"{v:4s} | {v_races:5d} | {v_hits:5d} | {v_hit_rate:5.1f}% | ¥{v_inv:9,d} | ¥{v_pay:9,d} | {v_roi:5.1f}%")
+        print(f"\n=== 【全場対象 30〜50倍中穴特化・2点買い実績】 ===")
+        print(f"総購入レース数: {total_races_bet:,} レース")
+        print(f"総購入点数（延べ）: {total_bets:,} 点")
+        print(f"的中総数: {hit_count:,} 本")
+        print("----------------------------------------")
+        print(f"初期資金: ¥{int(initial_bankroll):,}")
+        print(f"最終資金: ¥{current_bankroll:,.2f}")
+        print(f"総投資額: ¥{total_investment:,.2f}")
+        print(f"総払戻金: ¥{total_payout:,.2f}")
+        print(f"回収率 (ROI): {roi:.2f}%")
+        print(f"最大ドローダウン (金額): ¥{max_drawdown:,.2f}")
+        print(f"最大ドローダウン (率): {max_drawdown_rate:.2f}%")
+        
+        print("\n=== 【開催場別の成績詳細】 ===")
+        print(f"{'場名':4s} | {'購入R':5s} | {'的中数':5s} | {'的中率':6s} | {'投資額':10s} | {'払戻金':10s} | {'回収率':6s}")
+        print("-" * 65)
+        
+        sorted_venues = sorted(venue_results.items(), key=lambda x: (x[1]["payout"] / max(1, x[1]["investment"])), reverse=True)
+        for v, stats in sorted_venues:
+            v_races = stats['races']
+            v_hits = stats['hits']
+            v_hit_rate = (v_hits / v_races * 100) if v_races > 0 else 0.0
+            v_inv = stats['investment']
+            v_pay = stats['payout']
+            v_roi = (v_pay / v_inv * 100) if v_inv > 0 else 0.0
+            print(f"{v:4s} | {v_races:5d} | {v_hits:5d} | {v_hit_rate:5.1f}% | ¥{v_inv:9,d} | ¥{v_pay:9,d} | {v_roi:5.1f}%")
 
-    print("=== Backtest Finished Successfully ===")
+        print("=== Backtest Finished Successfully ===")
+    except Exception as e:
+        print(f"CRITICAL ERROR: {e}")
+        traceback.print_exc()
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
