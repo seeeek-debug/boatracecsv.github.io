@@ -43,7 +43,7 @@ def load_repository_historical_data(repo_root: Path):
 
     print(f"Loaded total {len(payouts_dict)} payout records into dict.")
 
-    # 2. 直前オッズデータをロードして結合（プレフィックスを除去してキーを統一）
+    # 2. 直前オッズデータをロードして高度なフィルタリングと確率モデルを適用
     od3_files = list(od3_root.glob("**/*.csv"))
     print(f"Found od3 files: {len(od3_files)}")
     
@@ -61,19 +61,46 @@ def load_repository_historical_data(repo_root: Path):
                 if not rid or rid not in payouts_dict:
                     continue
 
-                # オッズ情報の抽出とキーのクレンジング（3連単_などのプレフィックスを除去）
-                odds_dict = {}
+                volatility = float(row.get("volatility", 1.5))
+
+                # オッズ情報の抽出と【オッズのフィルタリング】（50倍〜250倍の穴ゾーンに限定）
+                raw_odds = {}
                 for col in df_od3.columns:
                     if "-" in col:
                         clean_key = col.replace("3連単_", "").replace("3連複_", "").strip()
                         if "-" in clean_key:
                             try:
                                 val = float(row[col])
-                                if val > 0:
-                                    odds_dict[clean_key] = val
+                                if 50.0 <= val <= 250.0:
+                                    raw_odds[clean_key] = val
                             except ValueError:
                                 pass
                 
+                if not raw_odds:
+                    continue
+
+                # 【確率計算モデルの精度調整】
+                total_inv_odds = sum(1.0 / o for o in raw_odds.values())
+                probs = {}
+                for k, o in raw_odds.items():
+                    implied_prob = (1.0 / o) / total_inv_odds
+                    skew_factor = 1.0 + (o / 100.0) * (volatility / 2.0) * 0.15
+                    probs[k] = implied_prob * skew_factor
+
+                # 確率の正規化
+                prob_sum = sum(probs.values())
+                if prob_sum > 0:
+                    probs = {k: p / prob_sum for k in probs.items()}
+
+                # 【期待値（EV）の閾値フィルタリング】（EV >= 1.2）
+                odds_dict = {}
+                filtered_probs = {}
+                for k, o in raw_odds.items():
+                    ev = probs.get(k, 0) * o
+                    if ev >= 1.2:
+                        odds_dict[k] = o
+                        filtered_probs[k] = probs[k]
+
                 if not odds_dict:
                     continue
 
@@ -81,8 +108,8 @@ def load_repository_historical_data(repo_root: Path):
 
                 historical_races.append({
                     "id": rid,
-                    "volatility": float(row.get("volatility", 1.5)),
-                    "probs": {k: 0.05 for k in odds_dict.keys()},
+                    "volatility": volatility,
+                    "probs": filtered_probs,
                     "odds": odds_dict,
                     "actual_result": actual_result
                 })
@@ -90,7 +117,7 @@ def load_repository_historical_data(repo_root: Path):
         except Exception:
             continue
 
-    print(f"Successfully matched {len(historical_races)} races for backtest.")
+    print(f"Successfully matched and filtered {len(historical_races)} races for backtest.")
     return historical_races
 
 def main():
@@ -100,10 +127,10 @@ def main():
     historical_data = load_repository_historical_data(repo_root)
     
     if not historical_data:
-        print("No historical data could be loaded.")
+        print("No historical data could be loaded after filtering.")
         return
     
-    print(f"=== V12 Longshot Skew Backtest Simulation ({len(historical_data)} races) ===")
+    print(f"=== V12 Longshot Skew Backtest Simulation (Odds >= 50) ({len(historical_data)} races) ===")
     results = predictor.backtest_simulation(historical_data, initial_bankroll=1000000)
     
     print(f"初期資金: ¥{results['initial_bankroll']:,}")
