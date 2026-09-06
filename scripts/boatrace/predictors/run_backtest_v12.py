@@ -162,7 +162,6 @@ def load_repository_historical_data(repo_root: Path):
 
                 rough_factor = 1.0 + (max(0.0, wave - 5.0) * 0.008)
 
-                # --- 決まり手・ヤラレ率・展開・実力からの艇パワー算出 ---
                 boat_powers = {}
                 for b_i in range(1, 7):
                     if b_i not in boats: continue
@@ -183,7 +182,6 @@ def load_repository_historical_data(repo_root: Path):
                 total_power = sum(boat_powers.values())
                 boat_win_probs = {b: p / total_power for b, p in boat_powers.items()} if total_power > 0 else {b: 1/6 for b in range(1, 7)}
 
-                # オッズデータは「配当金の計算用」にのみ取得し、買い目の選定・確率算出には一切介入させない
                 raw_odds = {}
                 for col in df_od3.columns:
                     if "-" in col:
@@ -196,52 +194,59 @@ def load_repository_historical_data(repo_root: Path):
                 
                 if not raw_odds: continue
 
-                # --- 純粋な着順確率の算出（オッズ完全無視） ---
-                all_comb_probs = {}
+                # 各買い目の確率算出
+                comb_probs = {}
                 for h1 in range(1, 7):
                     for h2 in range(1, 7):
                         if h2 == h1: continue
                         for h3 in range(1, 7):
                             if h3 == h1 or h3 == h2: continue
                             k = f"{h1}-{h2}-{h3}"
-                            p1 = boat_win_probs.get(h1, 1/6)
-                            p2 = boat_win_probs.get(h2, 1/6) / (1.0 - p1 + 1e-6)
-                            p3 = boat_win_probs.get(h3, 1/6) / (1.0 - p1 - p2 + 1e-6)
-                            base_p = max(p1 * p2 * p3, 1e-6)
+                            if k in raw_odds:
+                                p1 = boat_win_probs.get(h1, 1/6)
+                                p2 = boat_win_probs.get(h2, 1/6) / (1.0 - p1 + 1e-6)
+                                p3 = boat_win_probs.get(h3, 1/6) / (1.0 - p1 - p2 + 1e-6)
+                                base_p = max(p1 * p2 * p3, 1e-6)
 
-                            kimarite_scenario_bias = 1.0
-                            if h1 == 1:
-                                h2_pwr = boat_powers.get(h2, 1.0)
-                                h3_pwr = boat_powers.get(h3, 1.0)
-                                kimarite_scenario_bias = 1.0 + (h2_pwr + h3_pwr) * 0.05
-                            elif h1 in [3, 4]:
-                                kimarite_scenario_bias = 1.3
-                            
-                            base_p *= kimarite_scenario_bias
-                            all_comb_probs[k] = base_p
+                                kimarite_scenario_bias = 1.0
+                                if h1 == 1:
+                                    h2_pwr = boat_powers.get(h2, 1.0)
+                                    h3_pwr = boat_powers.get(h3, 1.0)
+                                    kimarite_scenario_bias = 1.0 + (h2_pwr + h3_pwr) * 0.05
+                                elif h1 in [3, 4]:
+                                    kimarite_scenario_bias = 1.3
+                                
+                                base_p *= kimarite_scenario_bias
+                                comb_probs[k] = base_p
 
-                prob_sum = sum(all_comb_probs.values())
+                prob_sum = sum(comb_probs.values())
                 if prob_sum > 0:
-                    all_comb_probs = {k: p_val / prob_sum for k, p_val in all_comb_probs.items()}
+                    comb_probs = {k: p_val / prob_sum for k, p_val in comb_probs.items()}
 
-                max_comb_prob = max(all_comb_probs.values()) if all_comb_probs else 0
-                
-                # レースの絞り込み（確信度がしっかりあるレースのみ抽出）
-                if max_comb_prob < 0.055:  
+                if not comb_probs: continue
+
+                # --- 【30〜50倍中穴特化型】オッズが30〜50倍の範囲にある買い目から期待値上位2点を選択 ---
+                target_odds_combos = {}
+                for k, p in comb_probs.items():
+                    if k in raw_odds:
+                        odds_val = raw_odds[k]
+                        if 30.0 <= odds_val <= 50.0:
+                            target_odds_combos[k] = p * odds_val
+
+                # 30〜50倍の条件に合う買い目がなければこのレースはスキップ（中穴特化）
+                if not target_odds_combos:
                     continue
 
-                # 確率が高い順にソートし、上位2点（2点買い）を純粋に選択
-                sorted_combs = sorted(all_comb_probs.items(), key=lambda x: x[1], reverse=True)
-                top_2_combs = sorted_combs[:2]
-
+                sorted_target = sorted(target_odds_combos.items(), key=lambda x: x[1], reverse=True)
+                
                 odds_dict = {}
                 filtered_probs = {}
-                for k, p in top_2_combs:
+                for k, ev in sorted_target[:2]:
                     if k in raw_odds:
                         odds_dict[k] = raw_odds[k]
-                        filtered_probs[k] = p
+                        filtered_probs[k] = comb_probs[k]
 
-                if len(odds_dict) < 2: continue
+                if not odds_dict: continue
 
                 historical_races.append({
                     "id": rid,
@@ -252,7 +257,7 @@ def load_repository_historical_data(repo_root: Path):
                 })
         except Exception: continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races (Pure Probability Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races (30-50x Sweet Spot Target Model).")
     return historical_races
 
 def main():
@@ -274,7 +279,7 @@ def main():
             if k == actual:
                 hit_count += 1
 
-    print(f"\n=== 【完全オッズ非依存・確率上位2点買い実績】 ===")
+    print(f"\n=== 【30〜50倍中穴特化・2点買い実績】 ===")
     print(f"総購入レース数: {total_races_bet:,} レース")
     print(f"総購入点数（延べ）: {total_bets:,} 点")
     print(f"的中総数: {hit_count:,} 本")
@@ -323,7 +328,7 @@ def main():
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
     max_drawdown_rate = (max_drawdown / max_bankroll * 100) if max_bankroll > 0 else 0.0
 
-    print(f"\n=== Pure Probability Model Backtest Simulation ({len(historical_data)} races) ===")
+    print(f"\n=== 30-50x Sweet Spot Target Model Backtest Simulation ({len(historical_data)} races) ===")
     print(f"初期資金: ¥{int(initial_bankroll):,}")
     print(f"最終資金: ¥{current_bankroll:,.2f}")
     print(f"総投資額: ¥{total_investment:,.2f}")
