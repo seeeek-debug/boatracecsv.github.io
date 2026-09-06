@@ -153,8 +153,8 @@ def load_repository_historical_data(repo_root: Path):
 
                 volatility = float(row.get("volatility", 1.5))
                 
-                # --- 【超厳選】荒れ度（ボラティリティ）が低い平穏なレースはバッサリ切る ---
-                if volatility < 1.6:
+                # 極端に硬すぎるレース（極低ボラティリティ）だけを軽く弾く
+                if volatility < 1.2:
                     continue
 
                 boats = races_data[rid]
@@ -230,15 +230,14 @@ def load_repository_historical_data(repo_root: Path):
 
                 if not comb_probs: continue
 
-                # --- 【超厳選・中穴特化型】オッズ30〜50倍かつ、確率の裏付けが非常に強い（p >= 0.03）買い目のみを2点選択 ---
+                # --- 【適正バランス・中穴特化型】オッズ30〜50倍かつ、確率p >= 0.02の買い目を2点選択 ---
                 target_odds_combos = {}
                 for k, p in comb_probs.items():
                     if k in raw_odds:
                         odds_val = raw_odds[k]
-                        if 30.0 <= odds_val <= 50.0 and p >= 0.03:
+                        if 30.0 <= odds_val <= 50.0 and p >= 0.02:
                             target_odds_combos[k] = p * odds_val
 
-                # 条件に完璧に合致する買い目が2点揃うレースだけを採用
                 if len(target_odds_combos) < 2:
                     continue
 
@@ -262,7 +261,7 @@ def load_repository_historical_data(repo_root: Path):
                 })
         except Exception: continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races (Sniper 30-50x Sweet Spot Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races (Balanced 30-50x Sweet Spot Model).")
     return historical_races
 
 def main():
@@ -284,7 +283,7 @@ def main():
             if k == actual:
                 hit_count += 1
 
-    print(f"\n=== 【超厳選30〜50倍中穴特化・2点買い実績】 ===")
+    print(f"\n=== 【バランス型30〜50倍中穴特化・2点買い実績】 ===")
     print(f"総購入レース数: {total_races_bet:,} レース")
     print(f"総購入点数（延べ）: {total_bets:,} 点")
     print(f"的中総数: {hit_count:,} 本")
@@ -333,7 +332,7 @@ def main():
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
     max_drawdown_rate = (max_drawdown / max_bankroll * 100) if max_bankroll > 0 else 0.0
 
-    print(f"\n=== Sniper 30-50x Sweet Spot Model Backtest Simulation ({len(historical_data)} races) ===")
+    print(f"\n=== Balanced 30-50x Sweet Spot Model Backtest Simulation ({len(historical_data)} races) ===")
     print(f"初期資金: ¥{int(initial_bankroll):,}")
     print(f"最終資金: ¥{current_bankroll:,.2f}")
     print(f"総投資額: ¥{total_investment:,.2f}")
