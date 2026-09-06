@@ -205,30 +205,37 @@ def load_repository_historical_data(repo_root: Path):
                     else: base_p = 1.0 / o
                     
                     market_implied_p = 1.0 / o
-                    probs[k] = base_p * 0.75 + market_implied_p * 0.25
+                    probs[k] = base_p * 0.7 + market_implied_p * 0.3
 
                 prob_sum = sum(probs.values())
                 if prob_sum > 0:
                     probs = {k: p_val / prob_sum for k, p_val in probs.items()}
 
-                # 【レース厳選フィルター】
-                # マージン（自信度）が低い、または荒れすぎる（または予想が拡散しすぎている）レースはスキップする
+                # 【本格的なレース厳選フィルター】
+                # 予測の最大確率が低い（＝展開が読めていない）レースはバッサリ切る（これでレース数を大幅に絞る）
                 max_comb_prob = max(probs.values()) if probs else 0
-                if max_comb_prob < 0.015:  # 確率が分散しすぎていて自信が持てないレースは除外
+                if max_comb_prob < 0.035:  
                     continue
 
                 valid_bets = []
                 for k, o in raw_odds.items():
-                    longshot_penalty = 1.0 / (1.0 + (o / 100.0) * 0.1)
-                    ev = probs.get(k, 0) * o * longshot_penalty
-                    if ev >= 1.3:
+                    # 50〜200倍のゾーンにボーナスを与え、200倍以上の超大穴への過剰偏重をしっかり抑える
+                    if 50.0 <= o < 100.0:
+                        odds_multiplier = 1.25  # 50-100倍を拾いやすくする
+                    elif 100.0 <= o < 200.0:
+                        odds_multiplier = 1.10  # 100-200倍も適度に評価
+                    else:
+                        odds_multiplier = 0.85  # 200倍以上は少し割引して偏りを防ぐ
+
+                    ev = probs.get(k, 0) * o * odds_multiplier
+                    if ev >= 1.35:
                         valid_bets.append((k, o, ev))
                 
                 if not valid_bets: continue
 
-                # 自信のある上位1〜2点に絞る
+                # 自信のある上位1点のみに絞り込んで、無駄な点数を減らす
                 valid_bets.sort(key=lambda x: x[2], reverse=True)
-                top_bets = valid_bets[:1]  # 1レースあたりの点数も厳選して1点〜2点にする（今回は手堅く厳選1点勝負、または上位2点）
+                top_bets = valid_bets[:1]
 
                 odds_dict = {k: o for k, o, ev in top_bets}
                 filtered_probs = {k: probs[k] for k, o, ev in top_bets}
@@ -244,7 +251,7 @@ def load_repository_historical_data(repo_root: Path):
                 })
         except Exception: continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Strictly Filtered Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Balanced & Strictly Filtered Model).")
     return historical_races
 
 def main():
@@ -277,7 +284,7 @@ def main():
                 elif 100.0 <= o < 200.0: hit_ranges["100-200倍"] += 1
                 elif 200.0 <= o <= 300.0: hit_ranges["200-300倍"] += 1
 
-    print("\n=== 【厳選勝負レース・詳細内訳】 ===")
+    print("\n=== 【厳選バランス勝負・詳細内訳】 ===")
     print(f"総購入レース数: {total_races_bet:,} レース")
     print(f"総購入点数（延べ）: {total_bets:,} 点")
     print(f"1レースあたりの平均購入点数: {avg_bets:.2f} 点/レース")
@@ -288,7 +295,7 @@ def main():
 
     results = predictor.backtest_simulation(historical_data, initial_bankroll=1000000)
     
-    print(f"\n=== V22 Strict Filtered Backtest Simulation ({len(historical_data)} races) ===")
+    print(f"\n=== V23 Balanced & Filtered Backtest Simulation ({len(historical_data)} races) ===")
     print(f"初期資金: ¥{results['initial_bankroll']:,}")
     print(f"最終資金: ¥{results['final_bankroll']:,}")
     print(f"総投資額: ¥{results['total_investment']:,.2f}")
