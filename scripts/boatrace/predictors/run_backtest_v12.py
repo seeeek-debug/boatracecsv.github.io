@@ -14,7 +14,7 @@ def load_repository_historical_data(repo_root: Path):
     od3_root = repo_root / "data" / "previews" / "od3"
     payouts_root = repo_root / "data" / "results" / "payouts"
     
-    # 1. 払戻金データを日本語カラム名に合わせて確実にロード
+    # 1. 払戻金データをロード
     payouts_dict = {}
     payout_files = list(payouts_root.glob("**/*.csv"))
     print(f"Found payout files: {len(payout_files)}")
@@ -28,7 +28,6 @@ def load_repository_historical_data(repo_root: Path):
                     if col in df.columns and pd.notna(row[col]):
                         rid = str(row[col]).strip()
                         break
-                
                 if not rid:
                     continue
                 
@@ -37,7 +36,6 @@ def load_repository_historical_data(repo_root: Path):
                     if col in df.columns and pd.notna(row[col]):
                         trifecta = str(row[col]).strip()
                         break
-                
                 if trifecta:
                     payouts_dict[rid] = trifecta
         except Exception:
@@ -45,7 +43,7 @@ def load_repository_historical_data(repo_root: Path):
 
     print(f"Loaded total {len(payouts_dict)} payout records into dict.")
 
-    # 2. 直前オッズデータをロードして払戻データと結合
+    # 2. 直前オッズデータをロードして結合
     od3_files = list(od3_root.glob("**/*.csv"))
     print(f"Found od3 files: {len(od3_files)}")
     
@@ -77,7 +75,7 @@ def load_repository_historical_data(repo_root: Path):
                 if not odds_dict:
                     continue
 
-                actual_result = payouts_dict[rid]
+                actual_result = str(payouts_dict[rid]).strip()
 
                 historical_races.append({
                     "id": rid,
@@ -103,6 +101,12 @@ def main():
         print("No historical data could be loaded.")
         return
     
+    # デバッグ用：最初の3件のデータ構造と中身をログ出力して確認
+    print("--- DEBUG: First 3 historical races sample ---")
+    for i in range(min(3, len(historical_data))):
+        sample = historical_data[i]
+        print(f"Race {i}: ID={sample['id']}, Actual Result={repr(sample['actual_result'])}, Odds Keys Sample={list(sample['odds'].keys())[:3]}")
+
     print(f"=== V12 Longshot Skew Backtest Simulation ({len(historical_data)} races) ===")
     results = predictor.backtest_simulation(historical_data, initial_bankroll=1000000)
     
