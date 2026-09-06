@@ -3,13 +3,6 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-# LightGBMとscikit-learnのインポート（必要に応じて自動導入される前提）
-try:
-    import lightgbm as lgb
-    from sklearn.model_selection import train_test_split
-except ImportError:
-    pass
-
 # プロジェクトルートをパスに追加
 root_path = Path(__file__).resolve().parents[3]
 sys.path.append(str(root_path))
@@ -19,19 +12,18 @@ from scripts.boatrace.predictors.v12_longshot_skew import V12LongshotSkewPredict
 def parse_class_rank(val):
     """選手級別を数値化する"""
     s = str(val).strip().upper()
-    if "A1" in s: return 4
-    if "A2" in s: return 3
-    if "B1" in s: return 2
-    if "B2" in s: return 1
-    return 2 # デフォルトB1相当
+    if "A1" in s: return 4.0
+    if "A2" in s: return 3.0
+    if "B1" in s: return 2.0
+    if "B2" in s: return 1.0
+    return 2.0
 
 def load_race_cards_dataset(repo_root: Path):
-    """race_cardsフォルダから全レースの出走表データをロードして学習用・推論用に構造化する"""
+    """race_cardsフォルダから全レースの出走表データをロードする"""
     cards_root = repo_root / "data" / "programs" / "race_cards"
     card_files = list(cards_root.glob("**/*.csv"))
     
     races_data = {}
-    ml_rows = []
     
     for c_file in card_files:
         try:
@@ -48,12 +40,10 @@ def load_race_cards_dataset(repo_root: Path):
                 if rid not in races_data:
                     races_data[rid] = {}
                 
-                # 1〜6号艇のデータを抽出
                 for boat_i in range(1, 7):
                     prefix = f"艇{boat_i}_"
-                    # カラム名の揺れに対応
                     nat_win_col = next((c for c in [f"{prefix}全国勝率", f"boat_{boat_i}_national_win_rate"] if c in df.columns), None)
-                    loc_win_col = next((c for c in [f"{prefix}当地勝率", f"boat_{boat_i}_local_win_rate"] if c in df.columns), None)
+                    loc_win_col = next((c for c in [f"{prefix}當地勝率", f"boat_{boat_i}_local_win_rate"] if c in df.columns), None)
                     mot_2ren_col = next((c for c in [f"{prefix}モーター2連対率", f"boat_{boat_i}_motor_2ren"] if c in df.columns), None)
                     avg_st_col = next((c for c in [f"{prefix}平均ST", f"boat_{boat_i}_avg_st"] if c in df.columns), None)
                     class_col = next((c for c in [f"{prefix}級別", f"boat_{boat_i}_class"] if c in df.columns), None)
@@ -74,72 +64,26 @@ def load_race_cards_dataset(repo_root: Path):
                         avg_st = float(row[avg_st_col]) if avg_st_col and pd.notna(row[avg_st_col]) else 0.15
                     except: avg_st = 0.15
                     
-                    class_val = parse_class_rank(row[class_col]) if class_col and pd.notna(row[class_col]) else 2
+                    class_val = parse_class_rank(row[class_col]) if class_col and pd.notna(row[class_col]) else 2.0
                     
-                    boat_feat = {
-                        "course": boat_i,
-                        "national_win": nat_win,
-                        "local_win": loc_win,
-                        "motor_2ren": mot_2ren,
-                        "avg_st": avg_st,
-                        "class_val": class_val
-                    }
-                    races_data[rid][boat_i] = boat_feat
+                    # 総合パワー指数の計算（選手勝率、モーター、級別、スタートの速さを総合評価）
+                    # ※STは早い（数値が小さい）ほどプラス評価
+                    st_score = max(0.0, (0.25 - avg_st) * 10.0)
+                    course_bonus = {1: 1.5, 2: 1.1, 3: 1.0, 4: 0.9, 5: 0.8, 6: 0.7}.get(boat_i, 1.0)
+                    
+                    power_score = (
+                        (nat_win * 0.35) +
+                        (loc_win * 0.25) +
+                        (mot_2ren / 10.0 * 0.2) +
+                        (class_val * 0.4) +
+                        (st_score * 0.2)
+                    ) * course_bonus
+                    
+                    races_data[rid][boat_i] = max(power_score, 0.1)
         except Exception:
             continue
             
     return races_data
-
-def train_ml_win_model(races_data, payouts_dict):
-    """出走表データと実際のレース結果からLightGBMで1着予測モデルを学習する"""
-    X = []
-    y = []
-    
-    for rid, boats in races_data.items():
-        if rid not in payouts_dict:
-            continue
-        result_str = str(payouts_dict[rid]).strip()
-        if not result_str or "-" not in result_str:
-            try:
-                actual_1st = int(result_str[0])
-            except:
-                continue
-        else:
-            try:
-                actual_1st = int(result_str.split("-")[0])
-            except:
-                continue
-                
-        for boat_i, feat in boats.items():
-            features = [
-                feat["course"],
-                feat["national_win"],
-                feat["local_win"],
-                feat["motor_2ren"],
-                feat["avg_st"],
-                feat["class_val"]
-            ]
-            X.append(features)
-            y.append(1 if boat_i == actual_1st else 0)
-            
-    if not X:
-        return None
-        
-    X = np.array(X)
-    y = np.array(y)
-    
-    # LightGBMモデルの学習
-    train_x, test_x, train_y, test_y = train_test_split(X, y, test_size=0.2, random_state=42)
-    
-    model = lgb.LGBMClassifier(
-        n_estimators=100,
-        learning_rate=0.05,
-        max_depth=5,
-        random_state=42,
-        verbose=-1
-    )
-    model.fit(train_x, train_y)
-    return model
 
 def load_repository_historical_data(repo_root: Path):
     historical_races = []
@@ -175,15 +119,8 @@ def load_repository_historical_data(repo_root: Path):
 
     # 2. 出走表データをロード
     races_data = load_race_cards_dataset(repo_root)
-    
-    # 3. 1着予測モデルの学習
-    print("Training LightGBM Win Prediction Model using Race Cards & Results...")
-    ml_model = train_ml_win_model(races_data, payouts_dict)
-    if ml_model is None:
-        print("Failed to train ML model.")
-        return historical_races
 
-    # 4. 直前オッズデータをロードして機械学習モデルによる予測とバックテスト用データを構築
+    # 3. 直前オッズデータをロードしてバックテスト用データを構築
     od3_files = list(od3_root.glob("**/*.csv"))
     
     matched_count = 0
@@ -201,32 +138,11 @@ def load_repository_historical_data(repo_root: Path):
                     continue
 
                 volatility = float(row.get("volatility", 1.5))
-                boats = races_data[rid]
+                boat_powers = races_data[rid]
                 
-                # 機械学習モデルで各艇の1着確率を予測
-                boat_win_probs = {}
-                X_pred = []
-                boat_indices = []
-                for b_i in range(1, 7):
-                    if b_i in boats:
-                        feat = boats[b_i]
-                        X_pred.append([
-                            feat["course"],
-                            feat["national_win"],
-                            feat["local_win"],
-                            feat["motor_2ren"],
-                            feat["avg_st"],
-                            feat["class_val"]
-                        ])
-                        boat_indices.append(b_i)
-                
-                if X_pred:
-                    preds = ml_model.predict_proba(np.array(X_pred))[:, 1]
-                    s = sum(preds)
-                    if s > 0:
-                        preds = preds / s
-                    for idx, p in zip(boat_indices, preds):
-                        boat_win_probs[idx] = max(p, 0.001)
+                # パワー値からソフトマックスで各艇の1着確率を算出
+                total_power = sum(boat_powers.values())
+                boat_win_probs = {b: p / total_power for b, p in boat_powers.items()} if total_power > 0 else {b: 1/6 for b in range(1, 7)}
 
                 # ターゲット：中穴ゾーン（40倍〜200倍）
                 raw_odds = {}
@@ -244,7 +160,7 @@ def load_repository_historical_data(repo_root: Path):
                 if not raw_odds:
                     continue
 
-                # 3連単の確率を各艇の1着・2着・3着確率から算出（簡易マルコフ/順列モデル）
+                # 3連単の確率を算出
                 probs = {}
                 for k, o in raw_odds.items():
                     parts = k.split("-")
@@ -252,7 +168,6 @@ def load_repository_historical_data(repo_root: Path):
                         try:
                             h1, h2, h3 = int(parts[0]), int(parts[1]), int(parts[2])
                             p1 = boat_win_probs.get(h1, 1/6)
-                            # 残りの中での相対確率
                             p2 = boat_win_probs.get(h2, 1/6) / (1.0 - p1 + 1e-6)
                             p3 = boat_win_probs.get(h3, 1/6) / (1.0 - p1 - p2 + 1e-6)
                             base_p = max(p1 * p2 * p3, 1e-6)
@@ -262,7 +177,7 @@ def load_repository_historical_data(repo_root: Path):
                         base_p = 1.0 / o
                     
                     market_implied_p = 1.0 / o
-                    probs[k] = base_p * 0.5 + market_implied_p * 0.5
+                    probs[k] = base_p * 0.6 + market_implied_p * 0.4
 
                 prob_sum = sum(probs.values())
                 if prob_sum > 0:
@@ -301,7 +216,7 @@ def load_repository_historical_data(repo_root: Path):
         except Exception:
             continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (ML LightGBM Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Feature-Scoring Model).")
     return historical_races
 
 def main():
@@ -311,10 +226,10 @@ def main():
     historical_data = load_repository_historical_data(repo_root)
     
     if not historical_data:
-        print("No historical data could be loaded after ML filtering.")
+        print("No historical data could be loaded after filtering.")
         return
     
-    print(f"=== V15 ML-Integrated Backtest Simulation ({len(historical_data)} races) ===")
+    print(f"=== V16 Feature-Scoring Backtest Simulation ({len(historical_data)} races) ===")
     results = predictor.backtest_simulation(historical_data, initial_bankroll=1000000)
     
     print(f"初期資金: ¥{results['initial_bankroll']:,}")
