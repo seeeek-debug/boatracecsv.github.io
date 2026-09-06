@@ -10,8 +10,8 @@ from scripts.boatrace.predictors.v12_longshot_skew import V12LongshotSkewPredict
 
 def load_repository_historical_data(repo_root: Path):
     """
-    data/previews/od3/（直前オッズ）と data/results/payouts/（払戻金）の
-    実データをrace_idで正確に突合して読み込む
+    7月以降の直前オッズ（data/previews/od3/）と
+    払戻金（data/results/payouts/）の実データをrace_idで正確に突合して読み込む
     """
     historical_races = []
     
@@ -34,8 +34,17 @@ def load_repository_historical_data(repo_root: Path):
         except Exception:
             continue
 
-    # 2. 直前オッズデータをロードし、払戻データと結合
-    for od3_csv in od3_root.glob("**/*.csv"):
+    print(f"Loaded {len(payouts_dict)} total payout records.")
+
+    # 2. 7月以降の直前オッズデータを対象にロードし、払戻データと結合
+    # 7月(07)、8月(08)、9月(09)などのフォルダを確実にキャッチする
+    od3_files = list(od3_root.glob("**/2026/[0-9][0-9]/**/*.csv"))
+    if not od3_files:
+        od3_files = list(od3_root.glob("**/*.csv")) # フォールバック
+
+    print(f"Targeting {len(od3_files)} od3 csv files.")
+
+    for od3_csv in od3_files:
         try:
             df_od3 = pd.read_csv(od3_csv)
             for _, row in df_od3.iterrows():
@@ -45,7 +54,7 @@ def load_repository_historical_data(repo_root: Path):
                 
                 payout_row = payouts_dict[race_id]
                 
-                # オッズの抽出（3連単などの組み合わせ表記カラムを対象）
+                # オッズの抽出（3連単などの組み合わせ表記カラム）
                 odds_dict = {}
                 for col in df_od3.columns:
                     if "-" in col:
@@ -64,8 +73,8 @@ def load_repository_historical_data(repo_root: Path):
                 if not actual_result:
                     continue
 
-                # 予測確率の構築（実データに合せて調整）
-                mock_probs = {k: 0.01 for k in odds_dict.keys()}
+                # 予測確率の構築
+                mock_probs = {k: 0.02 for k in odds_dict.keys()}
 
                 historical_races.append({
                     "id": race_id,
@@ -74,10 +83,10 @@ def load_repository_historical_data(repo_root: Path):
                     "odds": odds_dict,
                     "actual_result": actual_result
                 })
-        except Exception:
+        except Exception as e:
             continue
 
-    print(f"Loaded {len(historical_races)} valid matched races from actual data.")
+    print(f"Successfully matched {len(historical_races)} races from July onwards.")
     return historical_races
 
 def main():
