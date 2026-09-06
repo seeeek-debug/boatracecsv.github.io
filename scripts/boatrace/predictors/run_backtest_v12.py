@@ -3,7 +3,6 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-# プロジェクトルートをパスに追加
 root_path = Path(__file__).resolve().parents[3]
 sys.path.append(str(root_path))
 
@@ -19,12 +18,10 @@ def parse_class_rank(val):
     return 2.0
 
 def load_sui_dataset(repo_root: Path):
-    """水面コンディション（風速・波高など）をロードする"""
+    """水面コンディション（波高）をロードする"""
     sui_root = repo_root / "data" / "previews" / "sui"
-    sui_files = list(sui_root.glob("**/*.csv"))
-    
     sui_data = {}
-    for f in sui_files:
+    for f in sui_root.glob("**/*.csv"):
         try:
             df = pd.read_csv(f)
             for _, row in df.iterrows():
@@ -33,36 +30,22 @@ def load_sui_dataset(repo_root: Path):
                     if col in df.columns and pd.notna(row[col]):
                         rid = str(row[col]).strip()
                         break
-                if not rid:
-                    continue
-                
-                # 風速、波の高さなどの取得
+                if not rid: continue
                 wave_height = 1.0
-                wind_speed = 0.0
                 for col in ["波の高さ(cm)", "wave_height", "波高"]:
                     if col in df.columns and pd.notna(row[col]):
-                        try: wave_height = float(row[col])
+                        try: wave_height = float(row[col]); break
                         except: pass
-                for col in ["風速(m)", "wind_speed", "風速"]:
-                    if col in df.columns and pd.notna(row[col]):
-                        try: wind_speed = float(row[col])
-                        except: pass
-                
-                sui_data[rid] = {
-                    "wave_height": wave_height,
-                    "wind_speed": wind_speed
-                }
+                sui_data[rid] = {"wave_height": wave_height}
         except Exception:
             continue
     return sui_data
 
 def load_original_exhibition_dataset(repo_root: Path):
-    """オリジナル展示データ（まわり足・直線足など）をロードする"""
+    """オリジナル展示データ（展示タイム）をロードする"""
     ex_root = repo_root / "data" / "previews" / "original_exhibition"
-    ex_files = list(ex_root.glob("**/*.csv"))
-    
     ex_data = {}
-    for f in ex_files:
+    for f in ex_root.glob("**/*.csv"):
         try:
             df = pd.read_csv(f)
             for _, row in df.iterrows():
@@ -71,14 +54,9 @@ def load_original_exhibition_dataset(repo_root: Path):
                     if col in df.columns and pd.notna(row[col]):
                         rid = str(row[col]).strip()
                         break
-                if not rid:
-                    continue
-                
-                if rid not in ex_data:
-                    ex_data[rid] = {}
-                
+                if not rid: continue
+                if rid not in ex_data: ex_data[rid] = {}
                 for boat_i in range(1, 7):
-                    # カラム名の揺れに対応（艇1_展示タイム、艇1_まわり足 など）
                     prefix = f"艇{boat_i}_"
                     time_val = 6.8
                     for c in [f"{prefix}展示タイム", f"{prefix}タイム", f"boat_{boat_i}_ex_time"]:
@@ -91,12 +69,10 @@ def load_original_exhibition_dataset(repo_root: Path):
     return ex_data
 
 def load_race_cards_dataset(repo_root: Path):
-    """race_cardsフォルダから全レースの出走表データをロードする"""
+    """出走表データ（勝率・モーター・ST・級別）をロードする"""
     cards_root = repo_root / "data" / "programs" / "race_cards"
-    card_files = list(cards_root.glob("**/*.csv"))
-    
     races_data = {}
-    for c_file in card_files:
+    for c_file in cards_root.glob("**/*.csv"):
         try:
             df = pd.read_csv(c_file)
             for _, row in df.iterrows():
@@ -105,12 +81,8 @@ def load_race_cards_dataset(repo_root: Path):
                     if col in df.columns and pd.notna(row[col]):
                         rid = str(row[col]).strip()
                         break
-                if not rid:
-                    continue
-                
-                if rid not in races_data:
-                    races_data[rid] = {}
-                
+                if not rid: continue
+                if rid not in races_data: races_data[rid] = {}
                 for boat_i in range(1, 7):
                     prefix = f"艇{boat_i}_"
                     nat_win_col = next((c for c in [f"{prefix}全国勝率", f"boat_{boat_i}_national_win_rate"] if c in df.columns), None)
@@ -127,7 +99,6 @@ def load_race_cards_dataset(repo_root: Path):
                     except: mot_2ren = 30.0
                     try: avg_st = float(row[avg_st_col]) if avg_st_col and pd.notna(row[avg_st_col]) else 0.15
                     except: avg_st = 0.15
-                    
                     class_val = parse_class_rank(row[class_col]) if class_col and pd.notna(row[class_col]) else 2.0
                     
                     races_data[rid][boat_i] = {
@@ -143,11 +114,9 @@ def load_race_cards_dataset(repo_root: Path):
 
 def load_repository_historical_data(repo_root: Path):
     historical_races = []
-    
     od3_root = repo_root / "data" / "previews" / "od3"
     payouts_root = repo_root / "data" / "results" / "payouts"
     
-    # 1. 払戻金データをロード
     payouts_dict = {}
     for p_file in payouts_root.glob("**/*.csv"):
         try:
@@ -163,15 +132,12 @@ def load_repository_historical_data(repo_root: Path):
                     if col in df.columns and pd.notna(row[col]):
                         payouts_dict[rid] = str(row[col]).strip()
                         break
-        except Exception:
-            continue
+        except Exception: continue
 
-    # 2. 各種詳細データをロード
     races_data = load_race_cards_dataset(repo_root)
     sui_data = load_sui_dataset(repo_root)
     ex_data = load_original_exhibition_dataset(repo_root)
 
-    # 3. オッズデータを紐付けてバックテスト用データを構築
     for od3_csv in od3_root.glob("**/*.csv"):
         try:
             df_od3 = pd.read_csv(od3_csv)
@@ -187,42 +153,31 @@ def load_repository_historical_data(repo_root: Path):
 
                 volatility = float(row.get("volatility", 1.5))
                 boats = races_data[rid]
-                sui = sui_data.get(rid, {"wave_height": 1.0, "wind_speed": 0.0})
+                sui = sui_data.get(rid, {"wave_height": 1.0})
                 ex = ex_data.get(rid, {})
 
-                # 水面コンディションによる補正（波高が高かったり向かい風のときは荒れやすくする）
                 wave = sui["wave_height"]
-                rough_factor = 1.0 + (max(0.0, wave - 3.0) * 0.05)
+                rough_factor = 1.0 + (max(0.0, wave - 5.0) * 0.005)
 
                 boat_powers = {}
                 for b_i in range(1, 7):
                     if b_i not in boats: continue
                     f = boats[b_i]
                     
-                    st_score = max(0.0, (0.25 - f["avg_st"]) * 10.0)
-                    
-                    # コースごとの基本補正（荒れ水面なら1号艇の優位性を少し削る）
-                    c_bonus = {1: 1.5 / rough_factor, 2: 1.1, 3: 1.0, 4: 0.9 * rough_factor, 5: 0.8 * rough_factor, 6: 0.7 * rough_factor}.get(b_i, 1.0)
-                    
-                    # 展示タイム・気配の反映
-                    ex_time = ex.get(b_i, {}).get("ex_time", 6.8)
-                    ex_score = max(0.0, (7.0 - ex_time) * 5.0)
+                    course_weights = {1: 1.6, 2: 1.1, 3: 1.0, 4: 0.95, 5: 0.85, 6: 0.75}
+                    c_bonus = course_weights.get(b_i, 1.0) / rough_factor if b_i == 1 else course_weights.get(b_i, 1.0) * rough_factor
 
-                    power = (
-                        (f["nat_win"] * 0.3) +
-                        (f["loc_win"] * 0.2) +
-                        (f["mot_2ren"] / 10.0 * 0.2) +
-                        (f["class_val"] * 0.3) +
-                        (st_score * 0.1) +
-                        (ex_score * 0.2)
-                    ) * c_bonus
-                    
+                    ability_score = (f["nat_win"] * 0.4) + (f["loc_win"] * 0.2) + (f["class_val"] * 0.4)
+                    ex_time = ex.get(b_i, {}).get("ex_time", 6.8)
+                    motor_score = (f["mot_2ren"] / 10.0 * 0.6) + (max(0.0, (7.0 - ex_time) * 10.0) * 0.4)
+                    st_score = max(0.0, (0.23 - f["avg_st"]) * 15.0)
+
+                    power = (ability_score * 0.35 + motor_score * 0.35 + st_score * 0.3) * c_bonus
                     boat_powers[b_i] = max(power, 0.1)
 
                 total_power = sum(boat_powers.values())
                 boat_win_probs = {b: p / total_power for b, p in boat_powers.items()} if total_power > 0 else {b: 1/6 for b in range(1, 7)}
 
-                # ターゲット：中穴ゾーン（40倍〜200倍）
                 raw_odds = {}
                 for col in df_od3.columns:
                     if "-" in col:
@@ -230,10 +185,9 @@ def load_repository_historical_data(repo_root: Path):
                         if "-" in clean_key:
                             try:
                                 val = float(row[col])
-                                if 40.0 <= val <= 200.0:
+                                if 50.0 <= val <= 200.0:
                                     raw_odds[clean_key] = val
-                            except ValueError:
-                                pass
+                            except ValueError: pass
                 
                 if not raw_odds: continue
 
@@ -247,23 +201,20 @@ def load_repository_historical_data(repo_root: Path):
                             p2 = boat_win_probs.get(h2, 1/6) / (1.0 - p1 + 1e-6)
                             p3 = boat_win_probs.get(h3, 1/6) / (1.0 - p1 - p2 + 1e-6)
                             base_p = max(p1 * p2 * p3, 1e-6)
-                        except:
-                            base_p = 1.0 / o
-                    else:
-                        base_p = 1.0 / o
+                        except: base_p = 1.0 / o
+                    else: base_p = 1.0 / o
                     
                     market_implied_p = 1.0 / o
-                    probs[k] = base_p * 0.7 + market_implied_p * 0.3
+                    probs[k] = base_p * 0.75 + market_implied_p * 0.25
 
                 prob_sum = sum(probs.values())
                 if prob_sum > 0:
                     probs = {k: p_val / prob_sum for k, p_val in probs.items()}
 
-                # 期待値フィルター（EV >= 1.3 に引き上げてさらに厳選）
                 valid_bets = []
                 for k, o in raw_odds.items():
                     ev = probs.get(k, 0) * o
-                    if ev >= 1.3:
+                    if ev >= 1.25:
                         valid_bets.append((k, o, ev))
                 
                 if not valid_bets: continue
@@ -283,10 +234,9 @@ def load_repository_historical_data(repo_root: Path):
                     "odds": odds_dict,
                     "actual_result": str(payouts_dict[rid]).strip()
                 })
-        except Exception:
-            continue
+        except Exception: continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Full-Feature Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (50+ Odds Model).")
     return historical_races
 
 def main():
@@ -298,7 +248,7 @@ def main():
         print("No historical data could be loaded.")
         return
     
-    print(f"=== V17 Full-Feature Backtest Simulation ({len(historical_data)} races) ===")
+    print(f"=== V19 50+ Odds Backtest Simulation ({len(historical_data)} races) ===")
     results = predictor.backtest_simulation(historical_data, initial_bankroll=1000000)
     
     print(f"初期資金: ¥{results['initial_bankroll']:,}")
