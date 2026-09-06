@@ -211,16 +211,24 @@ def load_repository_historical_data(repo_root: Path):
                 if prob_sum > 0:
                     probs = {k: p_val / prob_sum for k, p_val in probs.items()}
 
+                # 【レース厳選フィルター】
+                # マージン（自信度）が低い、または荒れすぎる（または予想が拡散しすぎている）レースはスキップする
+                max_comb_prob = max(probs.values()) if probs else 0
+                if max_comb_prob < 0.015:  # 確率が分散しすぎていて自信が持てないレースは除外
+                    continue
+
                 valid_bets = []
                 for k, o in raw_odds.items():
-                    ev = probs.get(k, 0) * o
+                    longshot_penalty = 1.0 / (1.0 + (o / 100.0) * 0.1)
+                    ev = probs.get(k, 0) * o * longshot_penalty
                     if ev >= 1.3:
                         valid_bets.append((k, o, ev))
                 
                 if not valid_bets: continue
 
+                # 自信のある上位1〜2点に絞る
                 valid_bets.sort(key=lambda x: x[2], reverse=True)
-                top_bets = valid_bets[:2]
+                top_bets = valid_bets[:1]  # 1レースあたりの点数も厳選して1点〜2点にする（今回は手堅く厳選1点勝負、または上位2点）
 
                 odds_dict = {k: o for k, o, ev in top_bets}
                 filtered_probs = {k: probs[k] for k, o, ev in top_bets}
@@ -236,7 +244,7 @@ def load_repository_historical_data(repo_root: Path):
                 })
         except Exception: continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (50-300 Odds Detailed Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Strictly Filtered Model).")
     return historical_races
 
 def main():
@@ -248,7 +256,6 @@ def main():
         print("No historical data could be loaded.")
         return
     
-    # 拡張された詳細集計ロジック
     total_races_bet = len(historical_data)
     total_bets = sum(len(r['odds']) for r in historical_data)
     avg_bets = total_bets / total_races_bet if total_races_bet > 0 else 0
@@ -256,7 +263,6 @@ def main():
     odds_ranges = {"50-100倍": 0, "100-200倍": 0, "200-300倍": 0}
     hit_ranges = {"50-100倍": 0, "100-200倍": 0, "200-300倍": 0}
     hit_count = 0
-    hit_details = []
 
     for r in historical_data:
         actual = r['actual_result']
@@ -267,12 +273,11 @@ def main():
             
             if k == actual:
                 hit_count += 1
-                hit_details.append((r['id'], k, o))
                 if 50.0 <= o < 100.0: hit_ranges["50-100倍"] += 1
                 elif 100.0 <= o < 200.0: hit_ranges["100-200倍"] += 1
                 elif 200.0 <= o <= 300.0: hit_ranges["200-300倍"] += 1
 
-    print("\n=== 【購入・的中 詳細内訳】 ===")
+    print("\n=== 【厳選勝負レース・詳細内訳】 ===")
     print(f"総購入レース数: {total_races_bet:,} レース")
     print(f"総購入点数（延べ）: {total_bets:,} 点")
     print(f"1レースあたりの平均購入点数: {avg_bets:.2f} 点/レース")
@@ -283,7 +288,7 @@ def main():
 
     results = predictor.backtest_simulation(historical_data, initial_bankroll=1000000)
     
-    print(f"\n=== V20 Detailed Backtest Simulation ({len(historical_data)} races) ===")
+    print(f"\n=== V22 Strict Filtered Backtest Simulation ({len(historical_data)} races) ===")
     print(f"初期資金: ¥{results['initial_bankroll']:,}")
     print(f"最終資金: ¥{results['final_bankroll']:,}")
     print(f"総投資額: ¥{results['total_investment']:,.2f}")
