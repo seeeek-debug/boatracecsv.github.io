@@ -15,21 +15,36 @@ def load_stadium_win_rates(repo_root: Path):
         try:
             df = pd.read_csv(csv_path)
             for _, row in df.iterrows():
-                jyo = str(row.get("場コード", "")).zfill(2)
-                r_no = str(row.get("レース図", row.get("レース番号", ""))).strip()
-                if not jyo or not r_no:
+                jyo_raw = row.get("場コード", "")
+                if pd.isna(jyo_raw):
                     continue
-                key = f"{jyo}_{r_no}"
+                # floatとして読み込まれても整数化して2桁にゼロ埋めする
+                jyo = str(jyo_raw).split(".")[0].strip().zfill(2)
+                
+                r_raw = None
+                for col in ["レース図", "レース番号", "race_no", "r_no"]:
+                    if col in df.columns and pd.notna(row[col]):
+                        r_raw = row[col]
+                        break
+                if r_raw is None:
+                    continue
+                race_no = str(r_raw).split(".")[0].strip()
+                
+                key = f"{jyo}_{race_no}"
                 rates = {}
                 for c in range(1, 7):
                     col_name = f"{c}コース勝率"
                     if col_name in df.columns:
-                        rates[c] = float(row[col_name])
+                        try:
+                            rates[c] = float(row[col_name])
+                        except:
+                            rates[c] = 1.0 / 6.0
                     else:
                         rates[c] = 1.0 / 6.0
                 win_rates[key] = rates
         except Exception as e:
             print(f"Error loading course_win_rate.csv: {e}")
+    print(f"Loaded stadium win rates for {len(win_rates)} race keys.")
     return win_rates
 
 def parse_jyo_and_race(rid: str, row: pd.Series):
@@ -37,11 +52,11 @@ def parse_jyo_and_race(rid: str, row: pd.Series):
     race_no = ""
     for col in ["場コード", "jyo_cd", "stadium_code", "stadium"]:
         if col in row and pd.notna(row[col]):
-            jyo = str(row[col]).zfill(2)
+            jyo = str(row[col]).split(".")[0].strip().zfill(2)
             break
     for col in ["レース図", "レース番号", "race_no", "r_no"]:
         if col in row and pd.notna(row[col]):
-            race_no = str(row[col]).strip()
+            race_no = str(row[col]).split(".")[0].strip()
             break
     
     if not jyo or not race_no:
@@ -60,7 +75,6 @@ def load_repository_historical_data(repo_root: Path):
     payouts_root = repo_root / "data" / "results" / "payouts"
     
     stadium_win_rates = load_stadium_win_rates(repo_root)
-    print(f"Loaded stadium win rates for {len(stadium_win_rates)} race keys.")
     
     # 1. 払戻金データをロード
     payouts_dict = {}
@@ -112,6 +126,8 @@ def load_repository_historical_data(repo_root: Path):
                 volatility = float(row.get("volatility", 1.5))
                 jyo, race_no = parse_jyo_and_race(rid, row)
                 key = f"{jyo}_{race_no}"
+                
+                # 場ごとの勝率データが見つからなければデフォルト均等確率
                 c_rates = stadium_win_rates.get(key, {i: 1.0/6.0 for i in range(1, 7)})
 
                 # オッズ抽出：50倍〜250倍の穴ゾーン
@@ -153,7 +169,7 @@ def load_repository_historical_data(repo_root: Path):
                 if prob_sum > 0:
                     probs = {k: p / prob_sum for k in probs.items()}
 
-                # 期待値フィルタリング（EV >= 1.1 でヒット率を確保しつつ選別）
+                # 期待値フィルタリング（EV >= 1.1）
                 odds_dict = {}
                 filtered_probs = {}
                 for k, o in raw_odds.items():
