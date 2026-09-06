@@ -11,40 +11,55 @@ from scripts.boatrace.predictors.v12_longshot_skew import V12LongshotSkewPredict
 def load_stadium_win_rates(repo_root: Path):
     csv_path = repo_root / "data" / "estimate" / "stadium" / "course_win_rate.csv"
     win_rates = {}
-    if csv_path.exists():
-        try:
-            df = pd.read_csv(csv_path)
-            for _, row in df.iterrows():
-                jyo_raw = row.get("場コード", "")
-                if pd.isna(jyo_raw):
-                    continue
-                # floatとして読み込まれても整数化して2桁にゼロ埋めする
-                jyo = str(jyo_raw).split(".")[0].strip().zfill(2)
-                
-                r_raw = None
-                for col in ["レース図", "レース番号", "race_no", "r_no"]:
-                    if col in df.columns and pd.notna(row[col]):
-                        r_raw = row[col]
-                        break
-                if r_raw is None:
-                    continue
-                race_no = str(r_raw).split(".")[0].strip()
-                
-                key = f"{jyo}_{race_no}"
-                rates = {}
-                for c in range(1, 7):
-                    col_name = f"{c}コース勝率"
-                    if col_name in df.columns:
-                        try:
-                            rates[c] = float(row[col_name])
-                        except:
-                            rates[c] = 1.0 / 6.0
-                    else:
+    if not csv_path.exists():
+        print(f"DEBUG: course_win_rate.csv not found at {csv_path}")
+        return win_rates
+    
+    try:
+        for enc in ["utf-8-sig", "utf-8", "cp932"]:
+            try:
+                df = pd.read_csv(csv_path, encoding=enc)
+                break
+            except Exception:
+                continue
+        else:
+            df = pd.read_csv(csv_path, encoding="utf-8", errors="ignore")
+
+        print(f"DEBUG: course_win_rate.csv columns: {list(df.columns)}")
+        print(f"DEBUG: course_win_rate.csv total rows: {len(df)}")
+        
+        for _, row in df.iterrows():
+            jyo_raw = row.get("場コード", "")
+            if pd.isna(jyo_raw):
+                continue
+            jyo = str(jyo_raw).split(".")[0].strip().zfill(2)
+            
+            r_raw = None
+            for col in ["レース図", "レース番号", "race_no", "r_no"]:
+                if col in df.columns and pd.notna(row[col]):
+                    r_raw = row[col]
+                    break
+            
+            if r_raw is None:
+                continue
+            race_no = str(r_raw).split(".")[0].strip()
+            
+            key = f"{jyo}_{race_no}"
+            rates = {}
+            for c in range(1, 7):
+                col_name = f"{c}コース勝率"
+                if col_name in df.columns:
+                    try:
+                        rates[c] = float(row[col_name])
+                    except:
                         rates[c] = 1.0 / 6.0
-                win_rates[key] = rates
-        except Exception as e:
-            print(f"Error loading course_win_rate.csv: {e}")
-    print(f"Loaded stadium win rates for {len(win_rates)} race keys.")
+                else:
+                    rates[c] = 1.0 / 6.0
+            win_rates[key] = rates
+            
+        print(f"DEBUG: Successfully loaded stadium win rates for {len(win_rates)} keys.")
+    except Exception as e:
+        print(f"Error loading course_win_rate.csv: {e}")
     return win_rates
 
 def parse_jyo_and_race(rid: str, row: pd.Series):
@@ -65,7 +80,10 @@ def parse_jyo_and_race(rid: str, row: pd.Series):
             if not jyo:
                 jyo = clean_id[-4:-2].zfill(2)
             if not race_no:
-                race_no = str(int(clean_id[-2:]))
+                try:
+                    race_no = str(int(clean_id[-2:]))
+                except:
+                    race_no = clean_id[-2:]
     return jyo, race_no
 
 def load_repository_historical_data(repo_root: Path):
@@ -110,6 +128,7 @@ def load_repository_historical_data(repo_root: Path):
     print(f"Found od3 files: {len(od3_files)}")
     
     matched_count = 0
+    sample_checked = 0
     for od3_csv in od3_files:
         try:
             df_od3 = pd.read_csv(od3_csv)
@@ -120,14 +139,20 @@ def load_repository_historical_data(repo_root: Path):
                         rid = str(row[col]).strip()
                         break
                 
-                if not rid or rid not in payouts_dict:
+                if not rid:
+                    continue
+                
+                if sample_checked < 3:
+                    print(f"DEBUG OD3 row rid: {rid}, in payouts: {rid in payouts_dict}")
+                    sample_checked += 1
+
+                if rid not in payouts_dict:
                     continue
 
                 volatility = float(row.get("volatility", 1.5))
                 jyo, race_no = parse_jyo_and_race(rid, row)
                 key = f"{jyo}_{race_no}"
                 
-                # 場ごとの勝率データが見つからなければデフォルト均等確率
                 c_rates = stadium_win_rates.get(key, {i: 1.0/6.0 for i in range(1, 7)})
 
                 # オッズ抽出：50倍〜250倍の穴ゾーン
@@ -146,7 +171,6 @@ def load_repository_historical_data(repo_root: Path):
                 if not raw_odds:
                     continue
 
-                # 場ごとのコース勝率をベースにした確率計算
                 probs = {}
                 for k, o in raw_odds.items():
                     parts = k.split("-")
@@ -169,7 +193,6 @@ def load_repository_historical_data(repo_root: Path):
                 if prob_sum > 0:
                     probs = {k: p / prob_sum for k in probs.items()}
 
-                # 期待値フィルタリング（EV >= 1.1）
                 odds_dict = {}
                 filtered_probs = {}
                 for k, o in raw_odds.items():
@@ -191,7 +214,8 @@ def load_repository_historical_data(repo_root: Path):
                     "actual_result": actual_result
                 })
                 matched_count += 1
-        except Exception:
+        except Exception as e:
+            print(f"Error parsing od3 file {od3_csv}: {e}")
             continue
 
     print(f"Successfully matched and filtered {len(historical_races)} races for backtest using stadium win rates.")
