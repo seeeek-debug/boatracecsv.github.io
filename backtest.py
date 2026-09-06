@@ -18,10 +18,9 @@ STADIUM_ID_TO_NAME = {
 
 PROVEN_STADIUM_IDS = [4, 9, 12, 13, 15]
 
-def load_motor_abilities(file_path="boatracecsv.github.io/data/estimate/motor_ability_score_v4.csv"):
+def load_motor_abilities(file_path="data/estimate/motor_ability_score_v4.csv"):
     if os.path.exists(file_path):
         return pd.read_csv(file_path)
-    print(f"[警告] モーター能力ファイルが見つかりません: {file_path}")
     return pd.DataFrame()
 
 def load_sui_preview_data(file_path):
@@ -301,7 +300,7 @@ def send_discord_notification(message):
 
 def run_backtest():
     motor_df = load_motor_abilities()
-    base_data_dir = "boatracecsv.github.io/data"
+    base_data_dir = "data"
     
     start_date = datetime(2026, 7, 1)
     end_date = datetime(2026, 8, 31)
