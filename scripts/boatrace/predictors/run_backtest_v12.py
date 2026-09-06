@@ -121,7 +121,7 @@ def load_repository_historical_data(repo_root: Path):
         except Exception:
             continue
 
-    # 2. 直前オッズデータをロード（より厳選したフィルタを適用）
+    # 2. 直前オッズデータをロード（超厳選モード）
     od3_files = list(od3_root.glob("**/*.csv"))
     
     matched_count = 0
@@ -144,7 +144,7 @@ def load_repository_historical_data(repo_root: Path):
                 
                 c_rates = stadium_win_rates.get(key, {i: 1.0/6.0 for i in range(1, 7)})
 
-                # オッズ抽出：70倍〜200倍の厳選ゾーンに絞る
+                # オッズ抽出：100倍〜180倍の特選ゾーン
                 raw_odds = {}
                 for col in df_od3.columns:
                     if "-" in col:
@@ -152,7 +152,7 @@ def load_repository_historical_data(repo_root: Path):
                         if "-" in clean_key:
                             try:
                                 val = float(row[col])
-                                if 70.0 <= val <= 200.0:
+                                if 100.0 <= val <= 180.0:
                                     raw_odds[clean_key] = val
                             except ValueError:
                                 pass
@@ -182,12 +182,12 @@ def load_repository_historical_data(repo_root: Path):
                 if prob_sum > 0:
                     probs = {k: p_val / prob_sum for k, p_val in probs.items()}
 
-                # 期待値フィルタリング：EV >= 1.3 の高ハードルに設定
+                # 期待値フィルタリング：EV >= 1.5 の超高ハードル
                 odds_dict = {}
                 filtered_probs = {}
                 for k, o in raw_odds.items():
                     ev = probs.get(k, 0) * o
-                    if ev >= 1.3:
+                    if ev >= 1.5:
                         odds_dict[k] = o
                         filtered_probs[k] = probs[k]
 
@@ -207,7 +207,7 @@ def load_repository_historical_data(repo_root: Path):
         except Exception:
             continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Strict Mode).")
+    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Ultra Strict Mode).")
     return historical_races
 
 def main():
@@ -217,10 +217,10 @@ def main():
     historical_data = load_repository_historical_data(repo_root)
     
     if not historical_data:
-        print("No historical data could be loaded after strict filtering.")
+        print("No historical data could be loaded after ultra strict filtering.")
         return
     
-    print(f"=== V12 Longshot Skew Backtest Simulation (Strict Mode) ({len(historical_data)} races) ===")
+    print(f"=== V12 Longshot Skew Backtest Simulation (Ultra Strict Mode) ({len(historical_data)} races) ===")
     results = predictor.backtest_simulation(historical_data, initial_bankroll=1000000)
     
     print(f"初期資金: ¥{results['initial_bankroll']:,}")
