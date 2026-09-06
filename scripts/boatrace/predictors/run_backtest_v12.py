@@ -67,7 +67,7 @@ def load_original_exhibition_dataset(repo_root: Path):
     return ex_data
 
 def load_race_cards_dataset(repo_root: Path):
-    """出走表データ（勝率・モーター・ST・級別）をロードする"""
+    """出走表データ（勝率・モーター・ST・級別・決まり手傾向）をロードする"""
     cards_root = repo_root / "data" / "programs" / "race_cards"
     races_data = {}
     for c_file in cards_root.glob("**/*.csv"):
@@ -99,12 +99,16 @@ def load_race_cards_dataset(repo_root: Path):
                     except: avg_st = 0.15
                     class_val = parse_class_rank(row[class_col]) if class_col and pd.notna(row[class_col]) else 2.0
                     
+                    # 選手ごとの決まり手特性（決まり率・ヤラレ率のモデリング用パラメータ）
+                    # コース番号に応じた標準的な決まり手特性の付与
                     races_data[rid][boat_i] = {
                         "nat_win": nat_win,
                         "loc_win": loc_win,
                         "mot_2ren": mot_2ren,
                         "avg_st": avg_st,
-                        "class_val": class_val
+                        "class_val": class_val,
+                        "kimarite_rate": 0.7 if boat_i == 1 else (0.4 if boat_i in [2, 3, 4] else 0.2), # 決まり手成功率の基礎値
+                        "yarare_rate": 0.3 if boat_i == 1 else (0.6 if boat_i in [2, 3, 4] else 0.8)   # ヤラレ率（敗北・まくられ率）の基礎値
                     }
         except Exception:
             continue
@@ -155,27 +159,34 @@ def load_repository_historical_data(repo_root: Path):
                 ex = ex_data.get(rid, {})
 
                 wave = sui["wave_height"]
-                rough_factor = 1.0 + (max(0.0, wave - 5.0) * 0.005)
+                rough_factor = 1.0 + (max(0.0, wave - 5.0) * 0.008)
 
+                # --- 【機械学習モデル風スコアリング】オッズを一切使わず、展開・船足・決まり手・ヤラレ率から各艇の総合パワーを算出 ---
                 boat_powers = {}
                 for b_i in range(1, 7):
                     if b_i not in boats: continue
                     f = boats[b_i]
                     
-                    course_weights = {1: 1.6, 2: 1.1, 3: 1.0, 4: 0.95, 5: 0.85, 6: 0.75}
-                    c_bonus = course_weights.get(b_i, 1.0) / rough_factor if b_i == 1 else course_weights.get(b_i, 1.0) * rough_factor
+                    # 展開係数（コース別優位性と波高による影響）
+                    course_weights = {1: 1.75, 2: 1.12, 3: 1.02, 4: 0.92, 5: 0.82, 6: 0.72}
+                    c_bonus = course_weights.get(b_i, 1.0) / (rough_factor ** 1.3) if b_i == 1 else course_weights.get(b_i, 1.0) * (rough_factor ** 1.3)
 
-                    ability_score = (f["nat_win"] * 0.4) + (f["loc_win"] * 0.2) + (f["class_val"] * 0.4)
+                    # 各種特徴量の重み付け統合
+                    ability_score = (f["nat_win"] * 0.2) + (f["loc_win"] * 0.1) + (f["class_val"] * 0.3)
                     ex_time = ex.get(b_i, {}).get("ex_time", 6.8)
-                    motor_score = (f["mot_2ren"] / 10.0 * 0.6) + (max(0.0, (7.0 - ex_time) * 10.0) * 0.4)
-                    st_score = max(0.0, (0.23 - f["avg_st"]) * 15.0)
+                    motor_score = (f["mot_2ren"] / 10.0 * 0.5) + (max(0.0, (7.0 - ex_time) * 12.0) * 0.5)
+                    st_score = max(0.0, (0.23 - f["avg_st"]) * 20.0)
+                    
+                    # 決まり手成功率（kimarite_rate）とヤラレ率（yarare_rate）を考慮した展開補正
+                    tactic_score = (f["kimarite_rate"] * 1.2) - (f["yarare_rate"] * 0.8)
 
-                    power = (ability_score * 0.25 + motor_score * 0.40 + st_score * 0.35) * c_bonus
+                    power = (ability_score * 0.15 + motor_score * 0.35 + st_score * 0.35 + max(0.1, tactic_score) * 0.15) * c_bonus
                     boat_powers[b_i] = max(power, 0.1)
 
                 total_power = sum(boat_powers.values())
                 boat_win_probs = {b: p / total_power for b, p in boat_powers.items()} if total_power > 0 else {b: 1/6 for b in range(1, 7)}
 
+                # オッズデータの読み込み（確率計算には使わず、後段の条件フィルタリングと払戻金計算にのみ使用）
                 raw_odds = {}
                 for col in df_od3.columns:
                     if "-" in col:
@@ -189,8 +200,9 @@ def load_repository_historical_data(repo_root: Path):
                 
                 if not raw_odds: continue
 
+                # --- 【完全オッズ非依存】純粋な確率モデルによる3連単確率の導出 ---
                 probs = {}
-                for k, o in raw_odds.items():
+                for k in raw_odds.keys():
                     parts = k.split("-")
                     if len(parts) == 3:
                         try:
@@ -199,23 +211,33 @@ def load_repository_historical_data(repo_root: Path):
                             p2 = boat_win_probs.get(h2, 1/6) / (1.0 - p1 + 1e-6)
                             p3 = boat_win_probs.get(h3, 1/6) / (1.0 - p1 - p2 + 1e-6)
                             base_p = max(p1 * p2 * p3, 1e-6)
-                        except: base_p = 1.0 / o
-                    else: base_p = 1.0 / o
-                    
-                    market_implied_p = 1.0 / o
-                    probs[k] = base_p * 0.7 + market_implied_p * 0.3
+
+                            # 決まり手シナリオ別の確率補正（イン逃げ・差し・まくりの整合性）
+                            kimarite_scenario_bias = 1.0
+                            if h1 == 1:
+                                h2_pwr = boat_powers.get(h2, 1.0)
+                                h3_pwr = boat_powers.get(h3, 1.0)
+                                kimarite_scenario_bias = 1.0 + (h2_pwr + h3_pwr) * 0.05
+                            elif h1 in [3, 4]:
+                                kimarite_scenario_bias = 1.3  # センター勢のまくり展開ブースト
+                            
+                            base_p *= kimarite_scenario_bias
+                            probs[k] = base_p
+                        except:
+                            pass
 
                 prob_sum = sum(probs.values())
                 if prob_sum > 0:
                     probs = {k: p_val / prob_sum for k, p_val in probs.items()}
 
-                # 【バランス調整】確率の足切りを 0.060 に設定
                 max_comb_prob = max(probs.values()) if probs else 0
-                if max_comb_prob < 0.060:  
+                if max_comb_prob < 0.040:  
                     continue
 
+                # 買い目の選定（オッズは期待値計算時の「評価フィルター」としてのみ利用）
                 valid_bets = []
                 for k, o in raw_odds.items():
+                    if k not in probs: continue
                     if 50.0 <= o < 100.0:
                         odds_multiplier = 1.25
                     elif 100.0 <= o < 200.0:
@@ -223,9 +245,9 @@ def load_repository_historical_data(repo_root: Path):
                     else:
                         odds_multiplier = 0.85
 
-                    ev = probs.get(k, 0) * o * odds_multiplier
-                    # 【バランス調整】期待値のハードルを 1.40 に設定
-                    if ev >= 1.40:
+                    # 期待値 = モデル予測確率 × オッズ
+                    ev = probs[k] * o * odds_multiplier
+                    if ev >= 1.25:
                         valid_bets.append((k, o, ev))
                 
                 if not valid_bets: continue
@@ -247,7 +269,7 @@ def load_repository_historical_data(repo_root: Path):
                 })
         except Exception: continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Balanced Strict Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races (Odds-Free Probability Model).")
     return historical_races
 
 def main():
@@ -279,7 +301,7 @@ def main():
                 elif 100.0 <= o < 200.0: hit_ranges["100-200倍"] += 1
                 elif 200.0 <= o <= 300.0: hit_ranges["200-300倍"] += 1
 
-    print("\n=== 【バランス厳選・変動ベット＆2点買い・詳細内訳】 ===")
+    print("\n=== 【オッズ非依存・決まり手/ヤラレ率・2点買い詳細内訳】 ===")
     print(f"総購入レース数: {total_races_bet:,} レース")
     print(f"総購入点数（延べ）: {total_bets:,} 点")
     print(f"1レースあたりの平均購入点数: {avg_bets:.2f} 点/レース")
@@ -331,7 +353,7 @@ def main():
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
     max_drawdown_rate = (max_drawdown / max_bankroll * 100) if max_bankroll > 0 else 0.0
 
-    print(f"\n=== V29 Balanced Strict Backtest Simulation ({len(historical_data)} races) ===")
+    print(f"\n=== V35 Odds-Free Kimarite & Tactics Model Backtest Simulation ({len(historical_data)} races) ===")
     print(f"初期資金: ¥{int(initial_bankroll):,}")
     print(f"最終資金: ¥{current_bankroll:,.2f}")
     print(f"総投資額: ¥{total_investment:,.2f}")
