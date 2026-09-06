@@ -158,8 +158,8 @@ def load_repository_historical_data(repo_root: Path):
 
                 wave = sui["wave_height"]
                 
-                # 【厳選フィルター1】荒れすぎる水面（波高10cm超）のレースは運要素が強すぎるため除外
-                if wave > 10.0:
+                # 極端な荒れ水面（波高15cm超）のみカット
+                if wave > 15.0:
                     continue
 
                 rough_factor = 1.0 + (max(0.0, wave - 5.0) * 0.008)
@@ -227,8 +227,8 @@ def load_repository_historical_data(repo_root: Path):
 
                 max_comb_prob = max(probs.values()) if probs else 0
                 
-                # 【厳選フィルター2】モデルの確信度（最大確率）が低い混戦レースは一切見送り（閾値を 0.040 から 0.080 に大幅引き上げ）
-                if max_comb_prob < 0.080:  
+                # 【ちょうどええ塩梅のフィルター】確率閾値を 0.055 に設定（ノーマルよりは絞るが、しっかり数数百レースは拾う）
+                if max_comb_prob < 0.055:  
                     continue
 
                 valid_bets = []
@@ -242,8 +242,8 @@ def load_repository_historical_data(repo_root: Path):
                         odds_multiplier = 0.85
 
                     ev = probs[k] * o * odds_multiplier
-                    # 【厳選フィルター3】期待値のハードルも少し引き上げて質の高い買い目だけを残す
-                    if ev >= 1.35:
+                    # 期待値の閾値も 1.28 に調整
+                    if ev >= 1.28:
                         valid_bets.append((k, o, ev))
                 
                 if not valid_bets: continue
@@ -265,7 +265,7 @@ def load_repository_historical_data(repo_root: Path):
                 })
         except Exception: continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races (Strictly Filtered Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races (Balanced Filter Model).")
     return historical_races
 
 def main():
@@ -297,7 +297,7 @@ def main():
                 elif 100.0 <= o < 200.0: hit_ranges["100-200倍"] += 1
                 elif 200.0 <= o <= 300.0: hit_ranges["200-300倍"] += 1
 
-    print("\n=== 【厳選レース絞り込み・2点買い詳細内訳】 ===")
+    print("\n=== 【バランス調整版・2点買い詳細内訳】 ===")
     print(f"総購入レース数: {total_races_bet:,} レース")
     print(f"総購入点数（延べ）: {total_bets:,} 点")
     print(f"1レースあたりの平均購入点数: {avg_bets:.2f} 点/レース")
@@ -349,7 +349,7 @@ def main():
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
     max_drawdown_rate = (max_drawdown / max_bankroll * 100) if max_bankroll > 0 else 0.0
 
-    print(f"\n=== Strictly Filtered Model Backtest Simulation ({len(historical_data)} races) ===")
+    print(f"\n=== Balanced Filter Model Backtest Simulation ({len(historical_data)} races) ===")
     print(f"初期資金: ¥{int(initial_bankroll):,}")
     print(f"最終資金: ¥{current_bankroll:,.2f}")
     print(f"総投資額: ¥{total_investment:,.2f}")
