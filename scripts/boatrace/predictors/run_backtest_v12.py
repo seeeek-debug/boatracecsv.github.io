@@ -6,8 +6,6 @@ import numpy as np
 root_path = Path(__file__).resolve().parents[3]
 sys.path.append(str(root_path))
 
-from scripts.boatrace.predictors.v12_longshot_skew import V12LongshotSkewPredictor
-
 def parse_class_rank(val):
     """選手級別を数値化する"""
     s = str(val).strip().upper()
@@ -211,7 +209,6 @@ def load_repository_historical_data(repo_root: Path):
                 if prob_sum > 0:
                     probs = {k: p_val / prob_sum for k, p_val in probs.items()}
 
-                # 【レース数を数百レースに絞り込む厳選フィルター】
                 max_comb_prob = max(probs.values()) if probs else 0
                 if max_comb_prob < 0.055:  
                     continue
@@ -231,9 +228,8 @@ def load_repository_historical_data(repo_root: Path):
                 
                 if not valid_bets: continue
 
-                # 【買い目を上位2点に設定】
                 valid_bets.sort(key=lambda x: x[2], reverse=True)
-                top_bets = valid_bets[:2]
+                top_bets = valid_bets[:2] # 2点買い
 
                 odds_dict = {k: o for k, o, ev in top_bets}
                 filtered_probs = {k: probs[k] for k, o, ev in top_bets}
@@ -249,12 +245,11 @@ def load_repository_historical_data(repo_root: Path):
                 })
         except Exception: continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Hyper-Filtered 2-Bets Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Variable Bet Model).")
     return historical_races
 
 def main():
     repo_root = Path(__file__).resolve().parents[3]
-    predictor = V12LongshotSkewPredictor()
     
     historical_data = load_repository_historical_data(repo_root)
     if not historical_data:
@@ -282,7 +277,7 @@ def main():
                 elif 100.0 <= o < 200.0: hit_ranges["100-200倍"] += 1
                 elif 200.0 <= o <= 300.0: hit_ranges["200-300倍"] += 1
 
-    print("\n=== 【厳選レース×2点買い・詳細内訳】 ===")
+    print("\n=== 【変動ベット＆2点買い・詳細内訳】 ===")
     print(f"総購入レース数: {total_races_bet:,} レース")
     print(f"総購入点数（延べ）: {total_bets:,} 点")
     print(f"1レースあたりの平均購入点数: {avg_bets:.2f} 点/レース")
@@ -291,16 +286,59 @@ def main():
     print(f"的中オッズ帯別内訳: {hit_ranges}")
     print("----------------------------------------")
 
-    results = predictor.backtest_simulation(historical_data, initial_bankroll=1000000)
+    # 変動ベットによるカスタムシミュレーション（初期資金10万円、上限500円/点）
+    initial_bankroll = 100000.0
+    current_bankroll = initial_bankroll
+    total_investment = 0.0
+    total_payout = 0.0
+    max_bankroll = initial_bankroll
+    max_drawdown = 0.0
     
-    print(f"\n=== V25 Hyper-Filtered 2-Bets Backtest Simulation ({len(historical_data)} races) ===")
-    print(f"初期資金: ¥{results['initial_bankroll']:,}")
-    print(f"最終資金: ¥{results['final_bankroll']:,}")
-    print(f"総投資額: ¥{results['total_investment']:,.2f}")
-    print(f"総払戻金: ¥{results['total_payout']:,.2f}")
-    print(f"回収率 (ROI): {results['roi']:.2f}%")
-    print(f"最大ドローダウン (金額): ¥{results['max_drawdown']:,.2f}")
-    print(f"最大ドローダウン (率): {results['max_drawdown_rate']:.2f}%")
+    for r in historical_data:
+        actual = r['actual_result']
+        odds_dict = r['odds']
+        
+        if current_bankroll <= 0:
+            break
+            
+        # 変動ベット額の計算: 現在の資金の約0.6%を1点あたりのベースとし、最小100円、最大500円に制限
+        raw_bet = current_bankroll * 0.006
+        bet_amount = max(100, min(500, int(raw_bet / 100) * 100))
+        
+        for k, o in odds_dict.items():
+            if current_bankroll < bet_amount:
+                actual_bet = max(100, int(current_bankroll / 100) * 100)
+                if actual_bet < 100: actual_bet = 0
+            else:
+                actual_bet = bet_amount
+                
+            if actual_bet <= 0: continue
+            
+            current_bankroll -= actual_bet
+            total_investment += actual_bet
+            
+            if k == actual:
+                payout = actual_bet * o
+                current_bankroll += payout
+                total_payout += payout
+                
+        if current_bankroll > max_bankroll:
+            max_bankroll = current_bankroll
+        drawdown = max_bankroll - current_bankroll
+        if drawdown > max_drawdown:
+            max_drawdown = drawdown
+
+    roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
+    max_drawdown_rate = (max_drawdown / max_bankroll * 100) if max_bankroll > 0 else 0.0
+
+    print(f"\n=== V26 Variable Bet Backtest Simulation ({len(historical_data)} races) ===")
+    print(f"初期資金: ¥{results_initial if 'results_initial' in locals() else int(initial_bankroll):,}")
+    print(f"最終資金: ¥{current_bankroll:,.2f}")
+    print(f"総投資額: ¥{total_investment:,.2f}")
+    print(f"総払戻金: ¥{total_payout:,.2f}")
+    print(f"回収率 (ROI): {roi:.2f}%")
+    print(f"最大ドローダウン (金額): ¥{max_drawdown:,.2f}")
+    print(f"最大ドローダウン (率): {max_drawdown_rate:.2f}%")
     print("=== Backtest Finished Successfully ===")
 
 if __name__ == "__main__":
