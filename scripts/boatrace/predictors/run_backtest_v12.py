@@ -121,7 +121,7 @@ def load_repository_historical_data(repo_root: Path):
         except Exception:
             continue
 
-    # 2. 直前オッズデータをロード（根本改修：厳格な確率評価と絞り込み）
+    # 2. 直前オッズデータをロード（バランス型モデル）
     od3_files = list(od3_root.glob("**/*.csv"))
     
     matched_count = 0
@@ -144,7 +144,7 @@ def load_repository_historical_data(repo_root: Path):
                 
                 c_rates = stadium_win_rates.get(key, {i: 1.0/6.0 for i in range(1, 7)})
 
-                # ターゲット：中穴〜大穴ゾーン（60倍〜300倍）
+                # ターゲット：50倍〜250倍の中穴ゾーン
                 raw_odds = {}
                 for col in df_od3.columns:
                     if "-" in col:
@@ -152,7 +152,7 @@ def load_repository_historical_data(repo_root: Path):
                         if "-" in clean_key:
                             try:
                                 val = float(row[col])
-                                if 60.0 <= val <= 300.0:
+                                if 50.0 <= val <= 250.0:
                                     raw_odds[clean_key] = val
                             except ValueError:
                                 pass
@@ -160,7 +160,6 @@ def load_repository_historical_data(repo_root: Path):
                 if not raw_odds:
                     continue
 
-                # 確率のベース計算（スタジアム勝率をベースにした純粋な確率モデル）
                 probs = {}
                 for k, o in raw_odds.items():
                     parts = k.split("-")
@@ -176,26 +175,31 @@ def load_repository_historical_data(repo_root: Path):
                     else:
                         base_p = 1.0 / o
                     
-                    # 荒れ度（ボラティリティ）を控えめに反映
                     market_implied_p = 1.0 / o
-                    # モデル確率と市場確率のバランス型（過剰な歪みを作らない）
-                    probs[k] = base_p * 0.7 + market_implied_p * 0.3
+                    probs[k] = base_p * 0.6 + market_implied_p * 0.4
 
                 prob_sum = sum(probs.values())
                 if prob_sum > 0:
                     probs = {k: p_val / prob_sum for k, p_val in probs.items()}
 
-                # 厳格な期待値フィルター（EV >= 1.4 のみに限定し、かつ「選ばれた買い目がレース全体の少数を占める」場合のみ採用）
-                odds_dict = {}
-                filtered_probs = {}
+                # 期待値フィルター（EV >= 1.2）をクリアした買い目を集める
+                valid_bets = []
                 for k, o in raw_odds.items():
                     ev = probs.get(k, 0) * o
-                    if ev >= 1.4:
-                        odds_dict[k] = o
-                        filtered_probs[k] = probs[k]
+                    if ev >= 1.2:
+                        valid_bets.append((k, o, ev))
+                
+                if not valid_bets:
+                    continue
 
-                # ★ここが重要：買い目が多すぎたり（雑多に引っかかっている）、逆に全く無い場合はそのレースを「見送り」にする
-                if not odds_dict or len(odds_dict) > 3:
+                # 期待値が高い順にソートして、上位2点までに絞る
+                valid_bets.sort(key=lambda x: x[2], reverse=True)
+                top_bets = valid_bets[:2]
+
+                odds_dict = {k: o for k, o, ev in top_bets}
+                filtered_probs = {k: probs[k] for k, o, ev in top_bets}
+
+                if not odds_dict:
                     continue
 
                 actual_result = str(payouts_dict[rid]).strip()
@@ -211,7 +215,7 @@ def load_repository_historical_data(repo_root: Path):
         except Exception:
             continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Revamped V13 Strict Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Balanced Model).")
     return historical_races
 
 def main():
@@ -221,10 +225,10 @@ def main():
     historical_data = load_repository_historical_data(repo_root)
     
     if not historical_data:
-        print("No historical data could be loaded after revamped filtering.")
+        print("No historical data could be loaded after balanced filtering.")
         return
     
-    print(f"=== V13 Revamped Backtest Simulation ({len(historical_data)} races) ===")
+    print(f"=== V14 Balanced Backtest Simulation ({len(historical_data)} races) ==pss")
     results = predictor.backtest_simulation(historical_data, initial_bankroll=1000000)
     
     print(f"初期資金: ¥{results['initial_bankroll']:,}")
@@ -236,6 +240,6 @@ def main():
     print(f"最大ドローダウン (率): {results['max_drawdown_rate']:.2f}%")
     print("=== Backtest Finished Successfully ===")
 
-if __name__ == "%main__":
+if __name__ == "__main__":
     main()
 
