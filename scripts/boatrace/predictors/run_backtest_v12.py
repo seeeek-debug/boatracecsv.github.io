@@ -43,7 +43,7 @@ def load_repository_historical_data(repo_root: Path):
 
     print(f"Loaded total {len(payouts_dict)} payout records into dict.")
 
-    # 2. 直前オッズデータをロードして結合
+    # 2. 直前オッズデータをロードして結合（プレフィックスを除去してキーを統一）
     od3_files = list(od3_root.glob("**/*.csv"))
     print(f"Found od3 files: {len(od3_files)}")
     
@@ -61,16 +61,18 @@ def load_repository_historical_data(repo_root: Path):
                 if not rid or rid not in payouts_dict:
                     continue
 
-                # オッズ情報の抽出
+                # オッズ情報の抽出とキーのクレンジング（3連単_などのプレフィックスを除去）
                 odds_dict = {}
                 for col in df_od3.columns:
                     if "-" in col:
-                        try:
-                            val = float(row[col])
-                            if val > 0:
-                                odds_dict[col] = val
-                        except ValueError:
-                            pass
+                        clean_key = col.replace("3連単_", "").replace("3連複_", "").strip()
+                        if "-" in clean_key:
+                            try:
+                                val = float(row[col])
+                                if val > 0:
+                                    odds_dict[clean_key] = val
+                            except ValueError:
+                                pass
                 
                 if not odds_dict:
                     continue
@@ -101,12 +103,6 @@ def main():
         print("No historical data could be loaded.")
         return
     
-    # デバッグ用：最初の3件のデータ構造と中身をログ出力して確認
-    print("--- DEBUG: First 3 historical races sample ---")
-    for i in range(min(3, len(historical_data))):
-        sample = historical_data[i]
-        print(f"Race {i}: ID={sample['id']}, Actual Result={repr(sample['actual_result'])}, Odds Keys Sample={list(sample['odds'].keys())[:3]}")
-
     print(f"=== V12 Longshot Skew Backtest Simulation ({len(historical_data)} races) ===")
     results = predictor.backtest_simulation(historical_data, initial_bankroll=1000000)
     
