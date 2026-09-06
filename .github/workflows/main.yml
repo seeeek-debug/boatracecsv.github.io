@@ -1,4 +1,4 @@
-Name: Boat Race Prediction & Notification
+name: Boat Race Prediction & Notification
 
 on:
   workflow_dispatch:
