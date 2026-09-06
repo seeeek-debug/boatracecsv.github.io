@@ -172,8 +172,6 @@ def load_repository_historical_data(repo_root: Path):
                     motor_score = (f["mot_2ren"] / 10.0 * 0.6) + (max(0.0, (7.0 - ex_time) * 10.0) * 0.4)
                     st_score = max(0.0, (0.23 - f["avg_st"]) * 15.0)
 
-                    # 【モーターとSTの評価ウェイトを強化】
-                    # 総合力(ability)を 0.25 に下げ、モーター(motor)を 0.40、ST(st)を 0.35 に引き上げ
                     power = (ability_score * 0.25 + motor_score * 0.40 + st_score * 0.35) * c_bonus
                     boat_powers[b_i] = max(power, 0.1)
 
@@ -213,9 +211,9 @@ def load_repository_historical_data(repo_root: Path):
                 if prob_sum > 0:
                     probs = {k: p_val / prob_sum for k, p_val in probs.items()}
 
-                # レース厳選フィルター
+                # 【レース数を数百レースに絞り込む厳選フィルター】
                 max_comb_prob = max(probs.values()) if probs else 0
-                if max_comb_prob < 0.035:  
+                if max_comb_prob < 0.055:  
                     continue
 
                 valid_bets = []
@@ -233,8 +231,9 @@ def load_repository_historical_data(repo_root: Path):
                 
                 if not valid_bets: continue
 
+                # 【買い目を上位2点に設定】
                 valid_bets.sort(key=lambda x: x[2], reverse=True)
-                top_bets = valid_bets[:1]
+                top_bets = valid_bets[:2]
 
                 odds_dict = {k: o for k, o, ev in top_bets}
                 filtered_probs = {k: probs[k] for k, o, ev in top_bets}
@@ -250,7 +249,7 @@ def load_repository_historical_data(repo_root: Path):
                 })
         except Exception: continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Motor & ST Boosted Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Hyper-Filtered 2-Bets Model).")
     return historical_races
 
 def main():
@@ -283,7 +282,7 @@ def main():
                 elif 100.0 <= o < 200.0: hit_ranges["100-200倍"] += 1
                 elif 200.0 <= o <= 300.0: hit_ranges["200-300倍"] += 1
 
-    print("\n=== 【モーター・ST強化勝負・詳細内訳】 ===")
+    print("\n=== 【厳選レース×2点買い・詳細内訳】 ===")
     print(f"総購入レース数: {total_races_bet:,} レース")
     print(f"総購入点数（延べ）: {total_bets:,} 点")
     print(f"1レースあたりの平均購入点数: {avg_bets:.2f} 点/レース")
@@ -294,7 +293,7 @@ def main():
 
     results = predictor.backtest_simulation(historical_data, initial_bankroll=1000000)
     
-    print(f"\n=== V24 Motor & ST Boosted Backtest Simulation ({len(historical_data)} races) ===")
+    print(f"\n=== V25 Hyper-Filtered 2-Bets Backtest Simulation ({len(historical_data)} races) ===")
     print(f"初期資金: ¥{results['initial_bankroll']:,}")
     print(f"最終資金: ¥{results['final_bankroll']:,}")
     print(f"総投資額: ¥{results['total_investment']:,.2f}")
