@@ -1,0 +1,31 @@
+name: Sync Data (5m)
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  sync-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure Git User
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.io"
+
+      - name: Pull data from upstream
+        run: |
+          git remote add upstream https://github.com/boatracecsv/boatracecsv.github.io.git
+          git fetch upstream
+          git checkout upstream/main -- data/
+
+      - name: Commit and push changes
+        run: |
+          git add data/
+          git commit -m "Auto-sync data folder [skip ci]" || echo "No changes to commit"
+          git push
+
