@@ -4,7 +4,6 @@ import json
 import urllib.request
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(line_buffering=True)
@@ -17,6 +16,7 @@ STADIUM_ID_TO_NAME = {
 }
 
 PROVEN_STADIUM_IDS = [4, 9, 12, 13, 15]
+INITIAL_CAPITAL = 100000
 
 def load_motor_abilities(file_path="data/estimate/motor_ability_score_v4.csv"):
     if os.path.exists(file_path):
@@ -164,29 +164,6 @@ def load_original_exhibition_data(file_path):
         orig_dict[race_code] = boat_orig
     return orig_dict
 
-def load_race_result(file_path):
-    if not os.path.exists(file_path):
-        return {}
-    df = pd.read_csv(file_path)
-    result_dict = {}
-    for idx, row in df.iterrows():
-        race_code = None
-        for col in ['レースコード', 'race_id', 'race_code']:
-            if col in df.columns:
-                race_code = str(row.get(col)).strip()
-                break
-        if not race_code:
-            continue
-        try:
-            r1 = int(row.get('1着艇番', 0))
-            r2 = int(row.get('2着艇番', 0))
-            r3 = int(row.get('3着艇番', 0))
-            if r1 and r2 and r3:
-                result_dict[race_code] = f"{r1}-{r2}-{r3}"
-        except Exception:
-            pass
-    return result_dict
-
 def generate_target_return_bets_custom(boat_data_list, race_actual_odds, stt_info, orig_info, stadium_id):
     boat_scores = {}
     for data in boat_data_list:
@@ -284,7 +261,9 @@ def generate_target_return_bets_custom(boat_data_list, race_actual_odds, stt_inf
 def send_discord_notification(message):
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook_url:
+        print("Discord Webhook URLが設定されていません。")
         return
+    
     payload = {"content": message}
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
@@ -292,113 +271,182 @@ def send_discord_notification(message):
         data=data,
         headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
     )
+    
     try:
         with urllib.request.urlopen(req) as response:
-            pass
+            if response.status == 204:
+                print("Discordへの通知が完了しました。")
+            else:
+                print(f"Discord通知レスポンス: {response.status}")
     except Exception as e:
         print(f"Discord通知エラー: {e}")
 
-def run_backtest():
+def run_monthly_backtest(start_date="2026-07-01", end_date="2026-08-31"):
     motor_df = load_motor_abilities()
-    base_data_dir = "data"
+    dates = pd.date_range(start=start_date, end=end_date, freq="D")
     
-    start_date = datetime(2026, 7, 1)
-    end_date = datetime(2026, 8, 31)
+    trade_history = []
+    stadium_stats = {s_id: {"count": 0, "hits": 0, "inv": 0, "pay": 0} for s_id in PROVEN_STADIUM_IDS}
     
-    initial_funds = 100000
-    current_funds = initial_funds
-    peak_funds = initial_funds
+    print(f"=== 7・8月2ヶ月間テスト ＆ 資金推移・ドローダウン分析 ({start_date} 〜 {end_date}) ===")
+    
+    for single_date in dates:
+        year = single_date.strftime("%Y")
+        month = single_date.strftime("%m")
+        day = single_date.strftime("%d")
+        
+        result_path = f"data/results/payouts/{year}/{month}/{day}.csv"
+        race_card_path = f"data/programs/race_cards/{year}/{month}/{day}.csv"
+        preview_odds_path = f"data/previews/od3/{year}/{month}/{day}.csv"
+        stt_path = f"data/previews/stt/{year}/{month}/{day}.csv"
+        orig_path = f"data/previews/original_exhibition/{year}/{month}/{day}.csv"
+        sui_preview_path = f"data/previews/sui/{year}/{month}/{day}.csv"
+        
+        if not os.path.exists(result_path) or not os.path.exists(race_card_path):
+            continue
+            
+        results_df = pd.read_csv(result_path)
+        races_dict = load_race_cards(race_card_path, motor_df)
+        odds_dict = load_preview_odds(preview_odds_path)
+        stt_dict = load_stt_data(stt_path)
+        orig_dict = load_original_exhibition_data(orig_path)
+        sui_dict = load_sui_preview_data(sui_preview_path)
+        
+        for idx, row in results_df.iterrows():
+            race_code = ""
+            for col in results_df.columns:
+                if 'レースコード' in str(col) or 'race_code' in str(col).lower() or 'race_id' in str(col).lower():
+                    race_code = str(row.get(col, '')).strip()
+                    break
+            if not race_code:
+                race_code = str(row.get('レースコード', idx + 1))
+                
+            stadium_id = 12
+            for col in results_df.columns:
+                if 'レース場' in str(col) or 'stadium' in str(col).lower() or '場コード' in str(col):
+                    try:
+                        stadium_id = int(row.get(col, 12))
+                    except ValueError:
+                        pass
+                    break
+            
+            if stadium_id not in PROVEN_STADIUM_IDS:
+                continue
+            
+            sui_info = sui_dict.get(race_code, {})
+            wind_speed = sui_info.get('wind_speed', 0.0)
+            wave_cm = sui_info.get('wave_cm', 0.0)
+            max_wave = 10.0 if stadium_id == 4 else 3.0
+            
+            if wind_speed >= 5.0 or wave_cm >= max_wave:
+                continue
+            
+            winning_combo = ""
+            if '3連単_組番' in row and pd.notna(row['3連単_組番']):
+                winning_combo = str(row['3連単_組番']).strip().replace('=', '-')
+            
+            payout_yen = float(row.get('3連単_払戻金', 0)) if pd.notna(row.get('3連単_払戻金', 0)) else 0.0
+            
+            if race_code not in races_dict:
+                continue
+                
+            allocated_bets = generate_target_return_bets_custom(
+                races_dict[race_code], odds_dict.get(race_code, {}), stt_dict.get(race_code, {}), orig_dict.get(race_code, {}), stadium_id
+            )
+            
+            if allocated_bets is None:
+                continue
+            
+            investment = sum(amount for combo, amount, odds in allocated_bets)
+            stadium_stats[stadium_id]["count"] += 1
+            stadium_stats[stadium_id]["inv"] += investment
+            
+            payout_total = 0.0
+            hit_in_race = False
+            for combo, amount, odds in allocated_bets:
+                if combo == winning_combo:
+                    hit_in_race = True
+                    payout_added = (payout_yen / 100) * amount
+                    payout_total += payout_added
+                    stadium_stats[stadium_id]["pay"] += payout_added
+            
+            if hit_in_race:
+                stadium_stats[stadium_id]["hits"] += 1
+
+            profit = payout_total - investment
+            trade_history.append({
+                'datetime': single_date,
+                'race_code': race_code,
+                'investment': investment,
+                'payout': payout_total,
+                'profit': profit
+            })
+
+    trade_history.sort(key=lambda x: (x['datetime'], x['race_code']))
+    
+    current_capital = INITIAL_CAPITAL
+    peak_capital = INITIAL_CAPITAL
     max_drawdown_amount = 0
-    max_drawdown_pct = 0.0
-    
-    total_investment = 0
-    total_payout = 0
-    
-    current_date = start_date
-    while current_date <= end_date:
-        year = current_date.strftime("%Y")
-        month = current_date.strftime("%m")
-        day = current_date.strftime("%d")
+    max_drawdown_rate = 0.0
+    min_capital = INITIAL_CAPITAL
+    max_capital = INITIAL_CAPITAL
+
+    total_inv = 0
+    total_pay = 0
+
+    for t in trade_history:
+        current_capital += t['profit']
+        total_inv += t['investment']
+        total_pay += t['payout']
         
-        race_card_path = f"{base_data_dir}/programs/race_cards/{year}/{month}/{day}.csv"
-        
-        if os.path.exists(race_card_path):
-            preview_odds_path = f"{base_data_dir}/previews/od3/{year}/{month}/{day}.csv"
-            stt_path = f"{base_data_dir}/previews/stt/{year}/{month}/{day}.csv"
-            orig_path = f"{base_data_dir}/previews/original_exhibition/{year}/{month}/{day}.csv"
-            sui_preview_path = f"{base_data_dir}/previews/sui/{year}/{month}/{day}.csv"
-            result_path = f"{base_data_dir}/results/realtime/{year}/{month}/{day}.csv"
+        if current_capital > max_capital:
+            max_capital = current_capital
+        if current_capital < min_capital:
+            min_capital = current_capital
             
-            races_dict = load_race_cards(race_card_path, motor_df)
-            odds_dict = load_preview_odds(preview_odds_path)
-            stt_dict = load_stt_data(stt_path)
-            orig_dict = load_original_exhibition_data(orig_path)
-            sui_dict = load_sui_preview_data(sui_preview_path)
-            result_dict = load_race_result(result_path)
-            
-            for race_code, boat_data_list in races_dict.items():
-                stadium_id = 12
-                try:
-                    stadium_id = int(str(race_code)[:2])
-                except ValueError:
-                    pass
-                    
-                if stadium_id not in PROVEN_STADIUM_IDS:
-                    continue
-                    
-                sui_info = sui_dict.get(race_code, {})
-                wind_speed = sui_info.get('wind_speed', 0.0)
-                wave_cm = sui_info.get('wave_cm', 0.0)
-                max_wave = 10.0 if stadium_id == 4 else 3.0
-                
-                if wind_speed >= 5.0 or wave_cm >= max_wave:
-                    continue
-                    
-                allocated_bets = generate_target_return_bets_custom(
-                    boat_data_list, odds_dict.get(race_code, {}), stt_dict.get(race_code, {}), orig_dict.get(race_code, {}), stadium_id
-                )
-                
-                if allocated_bets:
-                    actual_result = result_dict.get(race_code, None)
-                    for combo, amount, odds in allocated_bets:
-                        total_investment += amount
-                        current_funds -= amount
-                        
-                        payout = 0
-                        if actual_result and combo == actual_result:
-                            payout = amount * odds
-                            total_payout += payout
-                            current_funds += payout
-                        
-                        if current_funds > peak_funds:
-                            peak_funds = current_funds
-                        
-                        drawdown_amount = peak_funds - current_funds
-                        if drawdown_amount > max_drawdown_amount:
-                            max_drawdown_amount = drawdown_amount
-                            if peak_funds > 0:
-                                max_drawdown_pct = (drawdown_amount / peak_funds) * 100
-                                
-        current_date += timedelta(days=1)
+        if current_capital > peak_capital:
+            peak_capital = current_capital
         
-    net_profit = current_funds - initial_funds
-    recovery_rate = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
-    
-    msg = (
+        drawdown_amount = peak_capital - current_capital
+        if drawdown_amount > max_drawdown_amount:
+            max_drawdown_amount = drawdown_amount
+            
+        if peak_capital > 0:
+            drawdown_rate = (drawdown_amount / peak_capital) * 100
+            if drawdown_rate > max_drawdown_rate:
+                max_drawdown_rate = drawdown_rate
+
+    roi = (total_pay / total_inv * 100) if total_inv > 0 else 0
+    net_profit = total_pay - total_inv
+
+    # コンソール出力
+    print("\n" + "="*50)
+    print(f" 🎯 資金推移・リスク分析結果 ({start_date} 〜 {end_date})")
+    print("="*50)
+    print(f" 初期資金       : {INITIAL_CAPITAL:,} 円")
+    print(f" 最終資金       : {current_capital:,.0f} 円")
+    print(f" 総純利益       : {net_profit:+,.0f} 円")
+    print(f" 総合回収率(ROI): {roi:.2f}%")
+    print(f" 期間中最高資金 : {max_capital:,.0f} 円")
+    print(f" 期間中最安資金 : {min_capital:,.0f} 円")
+    print(f" 最大ドローダウン(金額)   : -{max_drawdown_amount:,.0f} 円")
+    print(f" 最大ドローダウン(下落率) : -{max_drawdown_rate:.2f} %")
+    print("="*50)
+
+    # Discordへ通知するメッセージを作成して送信
+    discord_message = (
+        "**【ボートレース バックテスト結果通知】**\n"
         "```text\n"
-        "【ボートレースバックテスト結果通知】\n"
-        f"対象期間     : 2026-07-01 ~ 2026-08-31\n"
-        f"初期資金     : {initial_funds:,} 円\n"
-        f"最終資金     : {current_funds:,} 円\n"
-        f"総純利益     : {net_profit:+d} 円\n"
-        f"総合回収率(ROI): {recovery_rate:.2f} %\n"
-        f"最大ドローダウン : -{max_drawdown_pct:.2f} % (-{max_drawdown_amount:,} 円)\n"
+        f" 対象期間       : {start_date} 〜 {end_date}\n"
+        f" 初期資金       : {INITIAL_CAPITAL:,} 円\n"
+        f" 最終資金       : {current_capital:,.0f} 円\n"
+        f" 総純利益       : {net_profit:+,.0f} 円\n"
+        f" 総合回収率(ROI): {roi:.2f} %\n"
+        f" 最大ドローダウン : -{max_drawdown_rate:.2f} % (-{max_drawdown_amount:,.0f} 円)\n"
         "```"
     )
-    
-    print(msg)
-    send_discord_notification(msg)
+    send_discord_notification(discord_message)
 
 if __name__ == "__main__":
-    run_backtest()
+    run_monthly_backtest("2026-07-01", "2026-08-31")
 
