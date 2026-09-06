@@ -14,7 +14,7 @@ def load_repository_historical_data(repo_root: Path):
     od3_root = repo_root / "data" / "previews" / "od3"
     payouts_root = repo_root / "data" / "results" / "payouts"
     
-    # 1. 払戻金データを柔軟にロード
+    # 1. 払戻金データを日本語カラム名に合わせて確実にロード
     payouts_dict = {}
     payout_files = list(payouts_root.glob("**/*.csv"))
     print(f"Found payout files: {len(payout_files)}")
@@ -23,41 +23,50 @@ def load_repository_historical_data(repo_root: Path):
         try:
             df = pd.read_csv(p_file)
             for _, row in df.iterrows():
-                # さまざまな大文字小文字や別名に対応
-                rid = str(row.get("race_id", row.get("id", row.get("RACE_ID", ""))))
-                if not rid and "date" in row and "stadium" in row and "race_no" in row:
-                    rid = f"{row['date']}_{row['stadium']}_{int(row['race_no']):02d}"
-                if rid:
-                    payouts_dict[rid] = row.to_dict()
+                rid = ""
+                for col in ["レースコード", "race_id", "id", "RACE_ID"]:
+                    if col in df.columns and pd.notna(row[col]):
+                        rid = str(row[col]).strip()
+                        break
+                
+                if not rid:
+                    continue
+                
+                trifecta = ""
+                for col in ["3連単_組番", "trifecta", "3rentan", "result"]:
+                    if col in df.columns and pd.notna(row[col]):
+                        trifecta = str(row[col]).strip()
+                        break
+                
+                if trifecta:
+                    payouts_dict[rid] = trifecta
         except Exception:
             continue
 
     print(f"Loaded total {len(payouts_dict)} payout records into dict.")
 
-    # 2. 直前オッズデータをロード
+    # 2. 直前オッズデータをロードして払戻データと結合
     od3_files = list(od3_root.glob("**/*.csv"))
     print(f"Found od3 files: {len(od3_files)}")
     
+    matched_count = 0
     for od3_csv in od3_files:
         try:
             df_od3 = pd.read_csv(od3_csv)
             for _, row in df_od3.iterrows():
-                rid = str(row.get("race_id", row.get("id", row.get("RACE_ID", ""))))
-                if not rid and "date" in row and "stadium" in row and "race_no" in row:
-                    rid = f"{row['date']}_{row['stadium']}_{int(row['race_no']):02d}"
+                rid = ""
+                for col in ["レースコード", "race_id", "id", "RACE_ID"]:
+                    if col in df_od3.columns and pd.notna(row[col]):
+                        rid = str(row[col]).strip()
+                        break
                 
-                # IDが取れない場合はファイル名から生成を試みる
-                if not rid:
-                    parts = od3_csv.stem.split("_")
-                    if len(parts) >= 2:
-                        rid = f"{parts[0]}_{parts[1]}_{row.get('race_no', 1):02d}"
-                    else:
-                        rid = "mock_race_id"
+                if not rid or rid not in payouts_dict:
+                    continue
 
                 # オッズ情報の抽出
                 odds_dict = {}
                 for col in df_od3.columns:
-                    if "-" in col or "odds" in col:
+                    if "-" in col:
                         try:
                             val = float(row[col])
                             if val > 0:
@@ -66,26 +75,22 @@ def load_repository_historical_data(repo_root: Path):
                             pass
                 
                 if not odds_dict:
-                    # オッズ列が見つからない場合のフォールバック
-                    odds_dict = {"1-2-3": 50.0, "2-4-6": 65.0, "5-6-1": 110.0}
+                    continue
 
-                # 払戻データから結果を取得、なければデフォルト
-                payout_row = payouts_dict.get(rid, {})
-                actual_result = str(payout_row.get("trifecta", payout_row.get("result", payout_row.get("TRIFECTA", "1-2-3"))))
-                if not actual_result or actual_result == "nan":
-                    actual_result = "1-2-3"
+                actual_result = payouts_dict[rid]
 
                 historical_races.append({
                     "id": rid,
                     "volatility": float(row.get("volatility", 1.5)),
-                    "probs": {k: 0.02 for k in odds_dict.keys()},
+                    "probs": {k: 0.05 for k in odds_dict.keys()},
                     "odds": odds_dict,
                     "actual_result": actual_result
                 })
+                matched_count += 1
         except Exception:
             continue
 
-    print(f"Successfully prepared {len(historical_races)} races for backtest.")
+    print(f"Successfully matched {len(historical_races)} races for backtest.")
     return historical_races
 
 def main():
