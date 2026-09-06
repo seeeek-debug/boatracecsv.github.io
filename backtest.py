@@ -18,7 +18,7 @@ STADIUM_ID_TO_NAME = {
 
 PROVEN_STADIUM_IDS = [4, 9, 12, 13, 15]
 
-def load_motor_abilities(file_path="data/estimate/motor_ability_score_v4.csv"):
+def load_motor_abilities(file_path="boatracecsv.github.io/data/estimate/motor_ability_score_v4.csv"):
     if os.path.exists(file_path):
         return pd.read_csv(file_path)
     return pd.DataFrame()
@@ -242,16 +242,15 @@ def generate_target_return_bets_custom(boat_data_list, race_actual_odds, stt_inf
     if total_cp > 0:
         combo_probs = {k: v / total_cp for k, v in combo_probs.items()}
 
-    # 的中が出るように適切なオッズ・期待値範囲に調整
     if stadium_id in [9, 13]:  
-        min_odds, max_odds = 10.0, 50.0
-        min_ev = 1.05
+        min_odds, max_odds = 15.0, 40.0
+        min_ev = 1.20
         max_bets = 3
         bet_amount = 200
         require_boat1_win = True
     else:  
-        min_odds, max_odds = 8.0, 60.0
-        min_ev = 1.10
+        min_odds, max_odds = 12.0, 50.0
+        min_ev = 1.25
         max_bets = 1
         bet_amount = 400
         require_boat1_win = False
@@ -301,7 +300,7 @@ def send_discord_notification(message):
 
 def run_backtest():
     motor_df = load_motor_abilities()
-    base_data_dir = "data"
+    base_data_dir = "boatracecsv.github.io/data"
     
     start_date = datetime(2026, 7, 1)
     end_date = datetime(2026, 8, 31)
