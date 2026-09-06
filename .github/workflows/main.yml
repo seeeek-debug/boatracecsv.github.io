@@ -1,0 +1,41 @@
+name: Boat Race Prediction & Notification
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/10 * * * *'
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas numpy requests
+
+      - name: Get current date
+        id: date
+        run: echo "TODAY=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+
+      - name: Restore notified history cache
+        uses: actions/cache@v4
+        with:
+          path: data/notified_races.json
+          key: notified-races-${{ env.TODAY }}-${{ github.run_number }}
+          restore-keys: |
+            notified-races-${{ env.TODAY }}-
+
+      - name: Run prediction script
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          python main.py
+
