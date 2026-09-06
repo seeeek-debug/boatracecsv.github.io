@@ -12,7 +12,6 @@ def load_stadium_win_rates(repo_root: Path):
     csv_path = repo_root / "data" / "estimate" / "stadium" / "course_win_rate.csv"
     win_rates = {}
     if not csv_path.exists():
-        print(f"DEBUG: course_win_rate.csv not found at {csv_path}")
         return win_rates
     
     try:
@@ -24,9 +23,6 @@ def load_stadium_win_rates(repo_root: Path):
                 continue
         else:
             df = pd.read_csv(csv_path, encoding="utf-8", errors="ignore")
-
-        print(f"DEBUG: course_win_rate.csv columns: {list(df.columns)}")
-        print(f"DEBUG: course_win_rate.csv total rows: {len(df)}")
         
         for _, row in df.iterrows():
             jyo_raw = None
@@ -63,10 +59,8 @@ def load_stadium_win_rates(repo_root: Path):
                 if not found_rate:
                     rates[c] = 1.0 / 6.0
             win_rates[key] = rates
-            
-        print(f"DEBUG: Successfully loaded stadium win rates for {len(win_rates)} keys.")
-    except Exception as e:
-        print(f"Error loading course_win_rate.csv: {e}")
+    except Exception:
+        pass
     return win_rates
 
 def parse_jyo_and_race(rid: str, row: pd.Series):
@@ -104,7 +98,6 @@ def load_repository_historical_data(repo_root: Path):
     # 1. 払戻金データをロード
     payouts_dict = {}
     payout_files = list(payouts_root.glob("**/*.csv"))
-    print(f"Found payout files: {len(payout_files)}")
     
     for p_file in payout_files:
         try:
@@ -128,11 +121,8 @@ def load_repository_historical_data(repo_root: Path):
         except Exception:
             continue
 
-    print(f"Loaded total {len(payouts_dict)} payout records into dict.")
-
-    # 2. 直前オッズデータをロード
+    # 2. 直前オッズデータをロード（より厳選したフィルタを適用）
     od3_files = list(od3_root.glob("**/*.csv"))
-    print(f"Found od3 files: {len(od3_files)}")
     
     matched_count = 0
     for od3_csv in od3_files:
@@ -154,7 +144,7 @@ def load_repository_historical_data(repo_root: Path):
                 
                 c_rates = stadium_win_rates.get(key, {i: 1.0/6.0 for i in range(1, 7)})
 
-                # オッズ抽出：50倍〜250倍の穴ゾーン
+                # オッズ抽出：70倍〜200倍の厳選ゾーンに絞る
                 raw_odds = {}
                 for col in df_od3.columns:
                     if "-" in col:
@@ -162,7 +152,7 @@ def load_repository_historical_data(repo_root: Path):
                         if "-" in clean_key:
                             try:
                                 val = float(row[col])
-                                if 50.0 <= val <= 250.0:
+                                if 70.0 <= val <= 200.0:
                                     raw_odds[clean_key] = val
                             except ValueError:
                                 pass
@@ -192,11 +182,12 @@ def load_repository_historical_data(repo_root: Path):
                 if prob_sum > 0:
                     probs = {k: p_val / prob_sum for k, p_val in probs.items()}
 
+                # 期待値フィルタリング：EV >= 1.3 の高ハードルに設定
                 odds_dict = {}
                 filtered_probs = {}
                 for k, o in raw_odds.items():
                     ev = probs.get(k, 0) * o
-                    if ev >= 1.1:
+                    if ev >= 1.3:
                         odds_dict[k] = o
                         filtered_probs[k] = probs[k]
 
@@ -216,7 +207,7 @@ def load_repository_historical_data(repo_root: Path):
         except Exception:
             continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races for backtest using stadium win rates.")
+    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Strict Mode).")
     return historical_races
 
 def main():
@@ -226,10 +217,10 @@ def main():
     historical_data = load_repository_historical_data(repo_root)
     
     if not historical_data:
-        print("No historical data could be loaded after filtering.")
+        print("No historical data could be loaded after strict filtering.")
         return
     
-    print(f"=== V12 Longshot Skew Backtest Simulation (Odds >= 50 with Stadium Data) ({len(historical_data)} races) ===")
+    print(f"=== V12 Longshot Skew Backtest Simulation (Strict Mode) ({len(historical_data)} races) ===")
     results = predictor.backtest_simulation(historical_data, initial_bankroll=1000000)
     
     print(f"初期資金: ¥{results['initial_bankroll']:,}")
