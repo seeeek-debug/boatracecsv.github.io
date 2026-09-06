@@ -85,7 +85,7 @@ def load_original_exhibition_dataset(repo_root: Path):
     return ex_data
 
 def load_race_cards_dataset(repo_root: Path):
-    """出走表データ（勝率・モーター・ST・級別・決まり手傾向）をロードする"""
+    """出走表データ（勝率・モーター・ST・級別）をロードする"""
     cards_root = repo_root / "data" / "programs" / "race_cards"
     races_data = {}
     for c_file in cards_root.glob("**/*.csv"):
@@ -169,11 +169,7 @@ def load_repository_historical_data(repo_root: Path):
                 if not rid or rid not in payouts_dict or rid not in races_data:
                     continue
 
-                # --- 【レース場フィルター】インが強すぎて中穴が出にくい会場（大村・徳山・芦屋など）は除外 ---
                 venue = get_venue_name(rid, od3_csv)
-                EXCLUDE_VENUES = ["大村", "徳山", "芦屋"]
-                if venue in EXCLUDE_VENUES:
-                    continue
 
                 volatility = float(row.get("volatility", 1.5))
                 if volatility < 1.2:
@@ -282,7 +278,7 @@ def load_repository_historical_data(repo_root: Path):
                 })
         except Exception: continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races (Venue-Filtered 30-50x Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races (All-Venue 30-50x Model).")
     return historical_races
 
 def main():
@@ -299,23 +295,6 @@ def main():
     hit_count = 0
     venue_results = {}
 
-    for r in historical_data:
-        actual = r['actual_result']
-        v = r['venue']
-        if v not in venue_results:
-            venue_results[v] = {"races": 0, "hits": 0, "investment": 0, "payout": 0}
-        venue_results[v]["races"] += 1
-
-        for k in r['odds'].keys():
-            if k == actual:
-                hit_count += 1
-
-    print(f"\n=== 【会場フィルター型30〜50倍中穴特化・2点買い実績】 ===")
-    print(f"総購入レース数: {total_races_bet:,} レース")
-    print(f"総購入点数（延べ）: {total_bets:,} 点")
-    print(f"的中総数: {hit_count:,} 本")
-    print("----------------------------------------")
-
     initial_bankroll = 100000.0
     current_bankroll = initial_bankroll
     total_investment = 0.0
@@ -328,6 +307,10 @@ def main():
         odds_dict = r['odds']
         v = r['venue']
         
+        if v not in venue_results:
+            venue_results[v] = {"races": 0, "hits": 0, "investment": 0, "payout": 0}
+        venue_results[v]["races"] += 1
+        
         if current_bankroll <= 0:
             break
             
@@ -336,6 +319,7 @@ def main():
         
         race_investment = 0
         race_payout = 0
+        race_hit = False
         
         for k, o in odds_dict.items():
             if current_bankroll < bet_amount:
@@ -355,7 +339,12 @@ def main():
                 current_bankroll += payout
                 total_payout += payout
                 race_payout += payout
+                hit_count += 1
+                race_hit = True
         
+        if race_hit:
+            venue_results[v]["hits"] += 1
+            
         venue_results[v]["investment"] += race_investment
         venue_results[v]["payout"] += race_payout
                 
@@ -368,7 +357,11 @@ def main():
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
     max_drawdown_rate = (max_drawdown / max_bankroll * 100) if max_bankroll > 0 else 0.0
 
-    print(f"\n=== Venue-Filtered 30-50x Model Backtest Simulation ({len(historical_data)} races) ===")
+    print(f"\n=== 【全場対象 30〜50倍中穴特化・2点買い実績】 ===")
+    print(f"総購入レース数: {total_races_bet:,} レース")
+    print(f"総購入点数（延べ）: {total_bets:,} 点")
+    print(f"的中総数: {hit_count:,} 本")
+    print("----------------------------------------")
     print(f"初期資金: ¥{int(initial_bankroll):,}")
     print(f"最終資金: ¥{current_bankroll:,.2f}")
     print(f"総投資額: ¥{total_investment:,.2f}")
@@ -378,9 +371,18 @@ def main():
     print(f"最大ドローダウン (率): {max_drawdown_rate:.2f}%")
     
     print("\n=== 【開催場別の成績詳細】 ===")
-    for v, stats in sorted(venue_results.items(), key=lambda x: (x[1]["payout"]/max(1, x[1]["investment"])), reverse=True):
-        v_roi = (stats["payout"] / stats["investment"] * 100) if stats["investment"] > 0 else 0.0
-        print(f"{v:4s} | 購入レース: {stats['races']:3d} | 投資: ¥{stats['investment']:7,d} | 払戻: ¥{stats['payout']:8,d} | 回収率: {v_roi:6.2f}%")
+    print(f"{'場名':4s} | {'購入R':5s} | {'的中数':5s} | {'的中率':6s} | {'投資額':10s} | {'払戻金':10s} | {'回収率':6s}")
+    print("-" * 65)
+    
+    sorted_venues = sorted(venue_results.items(), key=lambda x: (x[1]["payout"] / max(1, x[1]["investment"])), reverse=True)
+    for v, stats in sorted_venues:
+        v_races = stats['races']
+        v_hits = stats['hits']
+        v_hit_rate = (v_hits / v_races * 100) if v_races > 0 else 0.0
+        v_inv = stats['investment']
+        v_pay = stats['payout']
+        v_roi = (v_pay / v_inv * 100) if v_inv > 0 else 0.0
+        print(f"{v:4s} | {v_races:5d} | {v_hits:5d} | {v_hit_rate:5.1f}% | ¥{v_inv:9,d} | ¥{v_pay:9,d} | {v_roi:5.1f}%")
 
     print("=== Backtest Finished Successfully ===")
 
