@@ -209,8 +209,9 @@ def load_repository_historical_data(repo_root: Path):
                 if prob_sum > 0:
                     probs = {k: p_val / prob_sum for k, p_val in probs.items()}
 
+                # 【厳選強化】モデルの予測確率の足切りを 0.055 -> 0.070 に引き上げ
                 max_comb_prob = max(probs.values()) if probs else 0
-                if max_comb_prob < 0.055:  
+                if max_comb_prob < 0.070:  
                     continue
 
                 valid_bets = []
@@ -223,7 +224,8 @@ def load_repository_historical_data(repo_root: Path):
                         odds_multiplier = 0.85
 
                     ev = probs.get(k, 0) * o * odds_multiplier
-                    if ev >= 1.35:
+                    # 【厳選強化】期待値のハードルを 1.35 -> 1.45 に引き上げ
+                    if ev >= 1.45:
                         valid_bets.append((k, o, ev))
                 
                 if not valid_bets: continue
@@ -245,7 +247,7 @@ def load_repository_historical_data(repo_root: Path):
                 })
         except Exception: continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Variable Bet Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races for backtest (Super Strict Model).")
     return historical_races
 
 def main():
@@ -277,7 +279,7 @@ def main():
                 elif 100.0 <= o < 200.0: hit_ranges["100-200倍"] += 1
                 elif 200.0 <= o <= 300.0: hit_ranges["200-300倍"] += 1
 
-    print("\n=== 【変動ベット＆2点買い・詳細内訳】 ===")
+    print("\n=== 【超厳選・変動ベット＆2点買い・詳細内訳】 ===")
     print(f"総購入レース数: {total_races_bet:,} レース")
     print(f"総購入点数（延べ）: {total_bets:,} 点")
     print(f"1レースあたりの平均購入点数: {avg_bets:.2f} 点/レース")
@@ -286,7 +288,7 @@ def main():
     print(f"的中オッズ帯別内訳: {hit_ranges}")
     print("----------------------------------------")
 
-    # 変動ベットによるカスタムシミュレーション（初期資金10万円、上限500円/点）
+    # 初期資金10万円、100円スタートで資金に応じて変動（最大500円/点）
     initial_bankroll = 100000.0
     current_bankroll = initial_bankroll
     total_investment = 0.0
@@ -301,8 +303,7 @@ def main():
         if current_bankroll <= 0:
             break
             
-        # 変動ベット額の計算: 現在の資金の約0.6%を1点あたりのベースとし、最小100円、最大500円に制限
-        raw_bet = current_bankroll * 0.006
+        raw_bet = current_bankroll * 0.001
         bet_amount = max(100, min(500, int(raw_bet / 100) * 100))
         
         for k, o in odds_dict.items():
@@ -331,8 +332,8 @@ def main():
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
     max_drawdown_rate = (max_drawdown / max_bankroll * 100) if max_bankroll > 0 else 0.0
 
-    print(f"\n=== V26 Variable Bet Backtest Simulation ({len(historical_data)} races) ===")
-    print(f"初期資金: ¥{results_initial if 'results_initial' in locals() else int(initial_bankroll):,}")
+    print(f"\n=== V28 Super Strict Backtest Simulation ({len(historical_data)} races) ===")
+    print(f"初期資金: ¥{int(initial_bankroll):,}")
     print(f"最終資金: ¥{current_bankroll:,.2f}")
     print(f"総投資額: ¥{total_investment:,.2f}")
     print(f"総払戻金: ¥{total_payout:,.2f}")
