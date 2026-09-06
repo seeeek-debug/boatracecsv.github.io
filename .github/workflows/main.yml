@@ -1,4 +1,4 @@
-name: Boat Race Prediction & Notification
+Name: Boat Race Prediction & Notification
 
 on:
   workflow_dispatch:
@@ -38,4 +38,3 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           python main.py
-
