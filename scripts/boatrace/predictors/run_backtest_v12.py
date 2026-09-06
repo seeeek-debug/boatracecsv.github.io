@@ -321,7 +321,7 @@ def main():
             v = r['venue']
             
             if v not in venue_results:
-                venue_results[v] = {"races": 0, "hits": 0, "investment": 0, "payout": 0}
+                venue_results[v] = {"races": 0, "hits": 0, "investment": 0.0, "payout": 0.0}
             venue_results[v]["races"] += 1
             
             if current_bankroll <= 0:
@@ -387,13 +387,14 @@ def main():
         print(f"{'場名':4s} | {'購入R':5s} | {'的中数':5s} | {'的中率':6s} | {'投資額':10s} | {'払戻金':10s} | {'回収率':6s}")
         print("-" * 65)
         
-        sorted_venues = sorted(venue_results.items(), key=lambda x: (x[1]["payout"] / max(1, x[1]["investment"])), reverse=True)
+        sorted_venues = sorted(venue_results.items(), key=lambda x: (x[1]["payout"] / max(1.0, x[1]["investment"])), reverse=True)
         for v, stats in sorted_venues:
             v_races = stats['races']
             v_hits = stats['hits']
             v_hit_rate = (v_hits / v_races * 100) if v_races > 0 else 0.0
-            v_inv = stats['investment']
-            v_pay = stats['payout']
+            # 整数にキャストしてフォーマットエラーを防ぐ
+            v_inv = int(stats['investment'])
+            v_pay = int(stats['payout'])
             v_roi = (v_pay / v_inv * 100) if v_inv > 0 else 0.0
             print(f"{v:4s} | {v_races:5d} | {v_hits:5d} | {v_hit_rate:5.1f}% | ¥{v_inv:9,d} | ¥{v_pay:9,d} | {v_roi:5.1f}%")
 
