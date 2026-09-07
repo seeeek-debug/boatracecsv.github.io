@@ -207,7 +207,6 @@ def load_repository_historical_data(repo_root: Path):
     if not od3_root.exists():
         return historical_races
 
-    # 的中実績のあった場（勝ち組）だけに完全に絞り込む
     active_venues = ["浜名湖", "芦屋", "尼崎", "下関", "戸田", "蒲郡"]
 
     for od3_csv in od3_root.glob("**/*.csv"):
@@ -225,7 +224,6 @@ def load_repository_historical_data(repo_root: Path):
                 row_dict = row.to_dict()
                 v_code, venue = get_venue_name_and_code(rid, row_dict, od3_csv)
                 
-                # 的中実績のない場は対象外としてスキップ
                 if venue not in active_venues:
                     continue
 
@@ -329,7 +327,7 @@ def load_repository_historical_data(repo_root: Path):
                 })
         except Exception: continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races (Selective Venue-Only Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races (Max 800 JPY Per Race Model).")
     return historical_races
 
 def main():
@@ -364,7 +362,8 @@ def main():
             if current_bankroll <= 0: break
                 
             raw_bet = current_bankroll * 0.001
-            bet_amount = max(100, min(500, int(raw_bet / 100) * 100))
+            # 1点あたりの上限を400円に変更（2点で最大800円）
+            bet_amount = max(100, min(400, int(raw_bet / 100) * 100))
             
             race_investment = 0
             race_payout = 0
@@ -397,7 +396,7 @@ def main():
         roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
         max_drawdown_rate = (max_drawdown / max_bankroll * 100) if max_bankroll > 0 else 0.0
 
-        print(f"\n=== 【厳選特化型・30〜50倍中穴特化モデル】 ===")
+        print(f"\n=== 【1レース最大800円制限・厳選特化モデル】 ===")
         print(f"総購入レース数: {total_races_bet:,} レース")
         print(f"総購入点数（延べ）: {total_bets:,} 点")
         print(f"的中総数: {hit_count:,} 本")
