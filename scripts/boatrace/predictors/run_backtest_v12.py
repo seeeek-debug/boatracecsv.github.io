@@ -16,12 +16,8 @@ def parse_class_rank(val):
     if "B2" in s: return 1.0
     return 2.0
 
-def get_venue_name(rid: str, file_path: Path = None) -> str:
-    """レースIDやファイルパスから開催場名を特定する"""
-    venue_names = ["桐生", "戸田", "江戸川", "平和島", "多摩川", "浜名湖", "蒲郡", "常滑", "津", "三国", "びわこ", "住之江", "尼崎", "鳴門", "丸亀", "児島", "宮島", "徳山", "下関", "若松", "芦屋", "福岡", "唐津", "大村"]
-    for v in venue_names:
-        if v in rid or (file_path and v in str(file_path)):
-            return v
+def get_venue_name(rid: str, row_data: dict = None, file_path: Path = None) -> str:
+    """レースIDやファイルパスから開催場名を正確に特定する"""
     venue_codes = {
         "01": "桐生", "02": "戸田", "03": "江戸川", "04": "平和島", "05": "多摩川",
         "06": "浜名湖", "07": "蒲郡", "08": "常滑", "09": "津", "10": "三国",
@@ -29,9 +25,34 @@ def get_venue_name(rid: str, file_path: Path = None) -> str:
         "16": "児島", "17": "宮島", "18": "徳山", "19": "下関", "20": "若松",
         "21": "芦屋", "22": "福岡", "23": "唐津", "24": "大村"
     }
+    
+    # 1. 行データに「レース場」カラムがあればそれを使用する
+    if row_data:
+        for col in ["レース場", "venue", "venue_code", "場コード"]:
+            if col in row_data and pd.notna(row_data[col]):
+                val = str(row_data[col]).strip().zfill(2)
+                if val in venue_codes:
+                    return venue_codes[val]
+                if row_data[col] in venue_codes.values():
+                    return str(row_data[col])
+
+    # 2. レースコードの構造（例: 202608011001 -> 8~9文字目が場コード）から正確に抽出
+    rid_str = str(rid).strip()
+    if len(rid_str) >= 10:
+        code_candidate = rid_str[8:10]
+        if code_candidate in venue_codes:
+            return venue_codes[code_candidate]
+
+    # 3. フォールバック（従来の部分一致）
     for code, name in venue_codes.items():
-        if code in rid or (file_path and f"_{code}_" in str(file_path)):
+        if f"_{code}_" in rid_str or rid_str.startswith(code):
             return name
+            
+    venue_names = list(venue_codes.values())
+    for v in venue_names:
+        if v in rid_str or (file_path and v in str(file_path)):
+            return v
+            
     return "その他"
 
 def load_sui_dataset(repo_root: Path):
@@ -39,11 +60,8 @@ def load_sui_dataset(repo_root: Path):
     sui_root = repo_root / "data" / "previews" / "sui"
     sui_data = {}
     if not sui_root.exists():
-        print(f"[DEBUG] sui folder not found: {sui_root}")
         return sui_data
-    files = list(sui_root.glob("**/*.csv"))
-    print(f"[DEBUG] sui CSV files found: {len(files)}")
-    for f in files:
+    for f in sui_root.glob("**/*.csv"):
         try:
             df = pd.read_csv(f)
             for _, row in df.iterrows():
@@ -61,7 +79,6 @@ def load_sui_dataset(repo_root: Path):
                 sui_data[rid] = {"wave_height": wave_height}
         except Exception:
             continue
-    print(f"[DEBUG] Loaded sui records: {len(sui_data)}")
     return sui_data
 
 def load_original_exhibition_dataset(repo_root: Path):
@@ -69,11 +86,8 @@ def load_original_exhibition_dataset(repo_root: Path):
     ex_root = repo_root / "data" / "previews" / "original_exhibition"
     ex_data = {}
     if not ex_root.exists():
-        print(f"[DEBUG] original_exhibition folder not found: {ex_root}")
         return ex_data
-    files = list(ex_root.glob("**/*.csv"))
-    print(f"[DEBUG] original_exhibition CSV files found: {len(files)}")
-    for f in files:
+    for f in ex_root.glob("**/*.csv"):
         try:
             df = pd.read_csv(f)
             for _, row in df.iterrows():
@@ -94,7 +108,6 @@ def load_original_exhibition_dataset(repo_root: Path):
                     ex_data[rid][boat_i] = {"ex_time": time_val}
         except Exception:
             continue
-    print(f"[DEBUG] Loaded original_exhibition records: {len(ex_data)}")
     return ex_data
 
 def load_race_cards_dataset(repo_root: Path):
@@ -102,11 +115,8 @@ def load_race_cards_dataset(repo_root: Path):
     cards_root = repo_root / "data" / "programs" / "race_cards"
     races_data = {}
     if not cards_root.exists():
-        print(f"[DEBUG] race_cards folder not found: {cards_root}")
         return races_data
-    files = list(cards_root.glob("**/*.csv"))
-    print(f"[DEBUG] race_cards CSV files found: {len(files)}")
-    for c_file in files:
+    for c_file in cards_root.glob("**/*.csv"):
         try:
             df = pd.read_csv(c_file)
             for _, row in df.iterrows():
@@ -146,7 +156,6 @@ def load_race_cards_dataset(repo_root: Path):
                     }
         except Exception:
             continue
-    print(f"[DEBUG] Loaded race_cards records: {len(races_data)}")
     return races_data
 
 def load_repository_historical_data(repo_root: Path):
@@ -156,9 +165,7 @@ def load_repository_historical_data(repo_root: Path):
     
     payouts_dict = {}
     if payouts_root.exists():
-        payout_files = list(payouts_root.glob("**/*.csv"))
-        print(f"[DEBUG] payouts CSV files found: {len(payout_files)}")
-        for p_file in payout_files:
+        for p_file in payouts_root.glob("**/*.csv"):
             try:
                 df = pd.read_csv(p_file)
                 for _, row in df.iterrows():
@@ -173,7 +180,6 @@ def load_repository_historical_data(repo_root: Path):
                             payouts_dict[rid] = str(row[col]).strip()
                             break
             except Exception: continue
-    print(f"[DEBUG] Loaded payouts records: {len(payouts_dict)}")
 
     races_data = load_race_cards_dataset(repo_root)
     sui_data = load_sui_dataset(repo_root)
@@ -183,12 +189,7 @@ def load_repository_historical_data(repo_root: Path):
         print(f"Warning: {od3_root} does not exist.")
         return historical_races
 
-    od3_files = list(od3_root.glob("**/*.csv"))
-    print(f"[DEBUG] od3 CSV files found: {len(od3_files)}")
-    
-    venue_file_counts = {}
-
-    for od3_csv in od3_files:
+    for od3_csv in od3_root.glob("**/*.csv"):
         try:
             df_od3 = pd.read_csv(od3_csv)
             for _, row in df_od3.iterrows():
@@ -201,8 +202,8 @@ def load_repository_historical_data(repo_root: Path):
                 if not rid or rid not in payouts_dict or rid not in races_data:
                     continue
 
-                venue = get_venue_name(rid, od3_csv)
-                venue_file_counts[venue] = venue_file_counts.get(venue, 0) + 1
+                row_dict = row.to_dict()
+                venue = get_venue_name(rid, row_dict, od3_csv)
 
                 volatility = float(row.get("volatility", 1.5))
                 if volatility < 1.2:
@@ -311,7 +312,6 @@ def load_repository_historical_data(repo_root: Path):
                 })
         except Exception: continue
 
-    print(f"[DEBUG] Venue-wise matched race counts: {venue_file_counts}")
     print(f"Successfully matched and filtered {len(historical_races)} races (All-Venue 30-50x Model).")
     return historical_races
 
