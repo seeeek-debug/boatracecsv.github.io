@@ -8,7 +8,6 @@ root_path = Path(__file__).resolve().parents[3]
 sys.path.append(str(root_path))
 
 def parse_class_rank(val):
-    """選手級別を数値化する"""
     s = str(val).strip().upper()
     if "A1" in s: return 4.0
     if "A2" in s: return 3.0
@@ -17,7 +16,6 @@ def parse_class_rank(val):
     return 2.0
 
 def get_venue_name_and_code(rid: str, row_data: dict = None, file_path: Path = None):
-    """レースIDやファイルパスから開催場名と場コード（2桁）を正確に特定する"""
     venue_codes = {
         "01": "桐生", "02": "戸田", "03": "江戸川", "04": "平和島", "05": "多摩川",
         "06": "浜名湖", "07": "蒲郡", "08": "常滑", "09": "津", "10": "三国",
@@ -53,7 +51,6 @@ def get_venue_name_and_code(rid: str, row_data: dict = None, file_path: Path = N
     return "02", "戸田"
 
 def get_season_by_date(rid: str) -> str:
-    """レースIDの日付から季節を判定する（春:3-5月, 夏:6-8月, 秋:9-11月, 冬:12-2月）"""
     rid_str = str(rid).strip()
     if len(rid_str) >= 8:
         try:
@@ -67,7 +64,6 @@ def get_season_by_date(rid: str) -> str:
     return "夏"
 
 def load_stadium_win_rates(repo_root: Path):
-    """場別・季節別のコース勝率データをロードする"""
     win_rate_path = repo_root / "data" / "estimate" / "stadium" / "win_rate.csv"
     stadium_weights = {}
     if not win_rate_path.exists():
@@ -108,9 +104,61 @@ def load_sui_dataset(repo_root: Path):
                     if col in df.columns and pd.notna(row[col]):
                         try: wave_height = float(row[col]); break
                         except: pass
-                sui_data[rid] = {"wave_height": wave_height}
+                
+                wind_speed = 0.0
+                for col in ["風速(m)", "wind_speed", "風速"]:
+                    if col in df.columns and pd.notna(row[col]):
+                        try: wind_speed = float(row[col]); break
+                        except: pass
+
+                wind_direction = 0
+                for col in ["風向", "wind_direction"]:
+                    if col in df.columns and pd.notna(row[col]):
+                        try: wind_direction = int(row[col]); break
+                        except: pass
+
+                sui_data[rid] = {
+                    "wave_height": wave_height,
+                    "wind_speed": wind_speed,
+                    "wind_direction": wind_direction
+                }
         except Exception: continue
     return sui_data
+
+def load_stt_dataset(repo_root: Path):
+    stt_root = repo_root / "data" / "previews" / "stt"
+    stt_data = {}
+    if not stt_root.exists(): return stt_data
+    for f in stt_root.glob("**/*.csv"):
+        try:
+            df = pd.read_csv(f)
+            for _, row in df.iterrows():
+                rid = ""
+                for col in ["レースコード", "race_id", "id", "RACE_ID"]:
+                    if col in df.columns and pd.notna(row[col]):
+                        rid = str(row[col]).strip(); break
+                if not rid: continue
+                
+                boat_courses = {}
+                boat_sts = {}
+                for boat_i in range(1, 7):
+                    c_col = next((c for c in [f"艇{boat_i}_コース", f"boat_{boat_i}_course"] if c in df.columns), None)
+                    if c_col and pd.notna(row[c_col]):
+                        try: boat_courses[boat_i] = int(row[c_col])
+                        except: boat_courses[boat_i] = boat_i
+                    else:
+                        boat_courses[boat_i] = boat_i
+
+                    st_col = next((c for c in [f"艇{boat_i}_スタート展示", f"boat_{boat_i}_st"] if c in df.columns), None)
+                    if st_col and pd.notna(row[st_col]):
+                        try: boat_sts[boat_i] = float(row[st_col])
+                        except: boat_sts[boat_i] = 0.15
+                    else:
+                        boat_sts[boat_i] = 0.15
+
+                stt_data[rid] = {"courses": boat_courses, "sts": boat_sts}
+        except Exception: continue
+    return stt_data
 
 def load_original_exhibition_dataset(repo_root: Path):
     ex_root = repo_root / "data" / "previews" / "original_exhibition"
@@ -133,7 +181,24 @@ def load_original_exhibition_dataset(repo_root: Path):
                         if c in df.columns and pd.notna(row[c]):
                             try: time_val = float(row[c]); break
                             except: pass
-                    ex_data[rid][boat_i] = {"ex_time": time_val}
+                    
+                    turn_val = 37.0
+                    for c in [f"{prefix}値1", f"{prefix}まわり足", f"boat_{boat_i}_turn"]:
+                        if c in df.columns and pd.notna(row[c]):
+                            try: turn_val = float(row[c]); break
+                            except: pass
+
+                    straight_val = 5.8
+                    for c in [f"{prefix}値2", f"{prefix}直線足", f"boat_{boat_i}_straight"]:
+                        if c in df.columns and pd.notna(row[c]):
+                            try: straight_val = float(row[c]); break
+                            except: pass
+
+                    ex_data[rid][boat_i] = {
+                        "ex_time": time_val,
+                        "turn_val": turn_val,
+                        "straight_val": straight_val
+                    }
         except Exception: continue
     return ex_data
 
@@ -201,13 +266,12 @@ def load_repository_historical_data(repo_root: Path):
 
     races_data = load_race_cards_dataset(repo_root)
     sui_data = load_sui_dataset(repo_root)
+    stt_data = load_stt_dataset(repo_root)
     ex_data = load_original_exhibition_dataset(repo_root)
     stadium_win_rates = load_stadium_win_rates(repo_root)
 
     if not od3_root.exists():
         return historical_races
-
-    active_venues = ["浜名湖", "芦屋", "尼崎", "下関", "戸田", "蒲郡"]
 
     for od3_csv in od3_root.glob("**/*.csv"):
         try:
@@ -223,23 +287,21 @@ def load_repository_historical_data(repo_root: Path):
 
                 row_dict = row.to_dict()
                 v_code, venue = get_venue_name_and_code(rid, row_dict, od3_csv)
-                
-                if venue not in active_venues:
-                    continue
-
                 season = get_season_by_date(rid)
 
                 volatility = float(row.get("volatility", 1.5))
                 if volatility < 1.2: continue
 
                 boats = races_data[rid]
-                sui = sui_data.get(rid, {"wave_height": 1.0})
+                sui = sui_data.get(rid, {"wave_height": 1.0, "wind_speed": 0.0, "wind_direction": 0})
+                stt = stt_data.get(rid, {"courses": {i:i for i in range(1,7)}, "sts": {i:0.15 for i in range(1,7)}})
                 ex = ex_data.get(rid, {})
 
                 wave = sui["wave_height"]
                 if wave > 15.0: continue
 
-                rough_factor = 1.0 + (max(0.0, wave - 5.0) * 0.008)
+                wind_speed = sui["wind_speed"]
+                rough_factor = 1.0 + (max(0.0, wave - 5.0) * 0.008) + (max(0.0, wind_speed - 3.0) * 0.005)
 
                 default_weights = {1: 7.0, 2: 5.0, 3: 5.0, 4: 4.8, 5: 4.5, 6: 3.0}
                 raw_stadium_weights = stadium_win_rates.get((v_code, season), default_weights)
@@ -251,17 +313,34 @@ def load_repository_historical_data(repo_root: Path):
                     course_weights[b_i] = d_w * 0.9 + s_w * 0.1
 
                 boat_powers = {}
+                actual_courses = stt["courses"]
+                boat_sts = stt["sts"]
+
                 for b_i in range(1, 7):
                     if b_i not in boats: continue
                     f = boats[b_i]
                     
+                    real_c = actual_courses.get(b_i, b_i)
+                    course_shift_penalty = 1.0
+                    if b_i == 1 and real_c > 1:
+                        course_shift_penalty = 0.75
+                    elif real_c < b_i:
+                        course_shift_penalty = 1.15
+
                     c_base = course_weights.get(b_i, 5.0)
-                    c_bonus = (c_base / 5.0) / (rough_factor ** 1.3) if b_i == 1 else (c_base / 5.0) * (rough_factor ** 1.3)
+                    c_bonus = ((c_base / 5.0) / (rough_factor ** 1.3) if b_i == 1 else (c_base / 5.0) * (rough_factor ** 1.3)) * course_shift_penalty
 
                     ability_score = (f["nat_win"] * 0.2) + (f["loc_win"] * 0.1) + (f["class_val"] * 0.3)
-                    ex_time = ex.get(b_i, {}).get("ex_time", 6.8)
-                    motor_score = (f["mot_2ren"] / 10.0 * 0.5) + (max(0.0, (7.0 - ex_time) * 12.0) * 0.5)
-                    st_score = max(0.0, (0.23 - f["avg_st"]) * 20.0)
+                    
+                    ex_info = ex.get(b_i, {"ex_time": 6.8, "turn_val": 37.0, "straight_val": 5.8})
+                    ex_time = ex_info["ex_time"]
+                    turn_val = ex_info["turn_val"]
+                    
+                    motor_score = (f["mot_2ren"] / 10.0 * 0.4) + (max(0.0, (7.0 - ex_time) * 10.0) * 0.3) + (min(turn_val, 40.0) * 0.3)
+                    
+                    real_st = boat_sts.get(b_i, f["avg_st"])
+                    st_score = max(0.0, (0.23 - real_st) * 20.0)
+                    
                     tactic_score = (f["kimarite_rate"] * 1.2) - (f["yarare_rate"] * 0.8)
 
                     power = (ability_score * 0.15 + motor_score * 0.35 + st_score * 0.35 + max(0.1, tactic_score) * 0.15) * c_bonus
@@ -327,7 +406,7 @@ def load_repository_historical_data(repo_root: Path):
                 })
         except Exception: continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races (Fixed 400 JPY Per Bet Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races (All Venues + Multi-Data Integration Model).")
     return historical_races
 
 def main():
@@ -361,9 +440,7 @@ def main():
             
             if current_bankroll <= 0: break
                 
-            # 1点あたり400円固定（2点で最大800円）
             bet_amount = 400
-            
             race_investment = 0
             race_payout = 0
             race_hit = False
@@ -384,50 +461,4 @@ def main():
                     hit_count += 1
                     race_hit = True
             
-            if race_hit: venue_results[v]["hits"] += 1
-            venue_results[v]["investment"] += race_investment
-            venue_results[v]["payout"] += race_payout
-                    
-            if current_bankroll > max_bankroll: max_bankroll = current_bankroll
-            drawdown = max_bankroll - current_bankroll
-            if drawdown > max_drawdown: max_drawdown = drawdown
-
-        roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
-        max_drawdown_rate = (max_drawdown / max_bankroll * 100) if max_bankroll > 0 else 0.0
-
-        print(f"\n=== 【1点400円・1レース最大800円固定モデル】 ===")
-        print(f"総購入レース数: {total_races_bet:,} レース")
-        print(f"総購入点数（延べ）: {total_bets:,} 点")
-        print(f"的中総数: {hit_count:,} 本")
-        print("----------------------------------------")
-        print(f"初期資金: ¥{int(initial_bankroll):,}")
-        print(f"最終資金: ¥{current_bankroll:,.2f}")
-        print(f"総投資額: ¥{total_investment:,.2f}")
-        print(f"総払戻金: ¥{total_payout:,.2f}")
-        print(f"回収率 (ROI): {roi:.2f}%")
-        print(f"最大ドローダウン (金額): ¥{max_drawdown:,.2f}")
-        print(f"最大ドローダウン (率): {max_drawdown_rate:.2f}%")
-        
-        print("\n=== 【開催場別の成績詳細】 ===")
-        print(f"{'場名':4s} | {'購入R':5s} | {'的中数':5s} | {'的中率':6s} | {'投資額':10s} | {'払戻金':10s} | {'回収率':6s}")
-        print("-" * 65)
-        
-        sorted_venues = sorted(venue_results.items(), key=lambda x: (x[1]["payout"] / max(1.0, x[1]["investment"])), reverse=True)
-        for v, stats in sorted_venues:
-            v_races = stats['races']
-            v_hits = stats['hits']
-            v_hit_rate = (v_hits / v_races * 100) if v_races > 0 else 0.0
-            v_inv = int(stats['investment'])
-            v_pay = int(stats['payout'])
-            v_roi = (v_pay / v_inv * 100) if v_inv > 0 else 0.0
-            print(f"{v:4s} | {v_races:5d} | {v_hits:5d} | {v_hit_rate:5.1f}% | ¥{v_inv:9,d} | ¥{v_pay:9,d} | {v_roi:5.1f}%")
-
-        print("=== Backtest Finished Successfully ===")
-    except Exception as e:
-        print(f"CRITICAL ERROR: {e}")
-        traceback.print_exc()
-        sys.exit(1)
-
-if __name__ == "__main__":
-    main()
 
