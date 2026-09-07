@@ -204,15 +204,15 @@ def main():
 
                     season = get_season_by_date(rid)
                     volatility = float(row.get("volatility", 1.5))
-                    if volatility > 1.9: continue
+                    if volatility > 1.5: continue  # ボラティリティを1.5以下に厳格化
 
                     boats = races_data[rid]
                     sui = sui_data.get(rid, {"wave_height": 1.0})
                     ex = ex_data.get(rid, {})
 
                     wave = sui["wave_height"]
-                    if wave > 8.0: continue
-                    rough_factor = 1.0 + (max(0.0, wave - 5.0) * 0.008)
+                    if wave > 5.0: continue     # 波高も5cm以下に厳格化
+                    rough_factor = 1.0 + (max(0.0, wave - 3.0) * 0.008)
 
                     default_weights = {1: 7.0, 2: 5.0, 3: 5.0, 4: 4.8, 5: 4.5, 6: 3.0}
                     raw_stadium_weights = stadium_win_rates.get((v_code, season), default_weights)
@@ -252,7 +252,6 @@ def main():
                     sorted_boats = sorted(boat_powers.items(), key=lambda x: x[1], reverse=True)
                     top_boats = [b[0] for b in sorted_boats[:4]]
 
-                    # --- 組み合わせごとにスコアを計算してオッズ20~60倍の中から上位3点に絞り込む ---
                     candidates = []
                     for h1 in top_boats:
                         for h2 in top_boats:
@@ -344,7 +343,7 @@ def main():
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
 
-    print(f"\n=== 【全場対象・3点絞り込み版 (ボル1.9以下・波高8cm以下・オッズ20~60倍)】 ===")
+    print(f"\n=== 【全場対象・厳選絞り込み版 (ボル1.5以下・波高5cm以下・オッズ20~60倍)】 ===")
     print(f"総購入レース数: {len(historical_races):,} レース")
     print(f"的中総数: {hit_count:,} 本")
     print("----------------------------------------")
