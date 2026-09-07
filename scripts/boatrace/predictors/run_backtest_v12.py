@@ -79,8 +79,10 @@ def load_stadium_win_rates(repo_root: Path):
             for i in range(1, 7):
                 col_name = f"{i}コース勝率"
                 if col_name in df.columns:
-                    try: weights[i] = float(row[col_name])
-                    except Exception: weights[i] = 5.0
+                    try:
+                        weights[i] = float(row[col_name])
+                    except Exception:
+                        weights[i] = 5.0
             stadium_weights[(v_code, season)] = weights
     except Exception:
         pass
@@ -102,20 +104,29 @@ def load_sui_dataset(repo_root: Path):
                 wave_height = 1.0
                 for col in ["波の高さ(cm)", "wave_height", "波高"]:
                     if col in df.columns and pd.notna(row[col]):
-                        try: wave_height = float(row[col]); break
-                        except Exception: pass
+                        try:
+                            wave_height = float(row[col])
+                            break
+                        except Exception:
+                            pass
                 
                 wind_speed = 0.0
                 for col in ["風速(m)", "wind_speed", "風速"]:
                     if col in df.columns and pd.notna(row[col]):
-                        try: wind_speed = float(row[col]); break
-                        except Exception: pass
+                        try:
+                            wind_speed = float(row[col])
+                            break
+                        except Exception:
+                            pass
 
                 wind_direction = 0
                 for col in ["風向", "wind_direction"]:
                     if col in df.columns and pd.notna(row[col]):
-                        try: wind_direction = int(row[col]); break
-                        except Exception: pass
+                        try:
+                            wind_direction = int(row[col])
+                            break
+                        except Exception:
+                            pass
 
                 sui_data[rid] = {
                     "wave_height": wave_height,
@@ -145,15 +156,19 @@ def load_stt_dataset(repo_root: Path):
                 for boat_i in range(1, 7):
                     c_col = next((c for c in [f"艇{boat_i}_コース", f"boat_{boat_i}_course"] if c in df.columns), None)
                     if c_col and pd.notna(row[c_col]):
-                        try: boat_courses[boat_i] = int(row[c_col])
-                        except Exception: boat_courses[boat_i] = boat_i
+                        try:
+                            boat_courses[boat_i] = int(row[c_col])
+                        except Exception:
+                            boat_courses[boat_i] = boat_i
                     else:
                         boat_courses[boat_i] = boat_i
 
                     st_col = next((c for c in [f"艇{boat_i}_スタート展示", f"boat_{boat_i}_st"] if c in df.columns), None)
                     if st_col and pd.notna(row[st_col]):
-                        try: boat_sts[boat_i] = float(row[st_col])
-                        except Exception: boat_sts[boat_i] = 0.15
+                        try:
+                            boat_sts[boat_i] = float(row[st_col])
+                        except Exception:
+                            boat_sts[boat_i] = 0.15
                     else:
                         boat_sts[boat_i] = 0.15
 
@@ -181,20 +196,29 @@ def load_original_exhibition_dataset(repo_root: Path):
                     time_val = 6.8
                     for c in [f"{prefix}展示タイム", f"{prefix}タイム", f"boat_{boat_i}_ex_time"]:
                         if c in df.columns and pd.notna(row[c]):
-                            try: time_val = float(row[c]); break
-                            except Exception: pass
+                            try:
+                                time_val = float(row[c])
+                                break
+                            except Exception:
+                                pass
                     
                     turn_val = 37.0
                     for c in [f"{prefix}値1", f"{prefix}まわり足", f"boat_{boat_i}_turn"]:
                         if c in df.columns and pd.notna(row[c]):
-                            try: turn_val = float(row[c]); break
-                            except Exception: pass
+                            try:
+                                turn_val = float(row[c])
+                                break
+                            except Exception:
+                                pass
 
                     straight_val = 5.8
                     for c in [f"{prefix}値2", f"{prefix}直線足", f"boat_{boat_i}_straight"]:
                         if c in df.columns and pd.notna(row[c]):
-                            try: straight_val = float(row[c]); break
-                            except Exception: pass
+                            try:
+                                straight_val = float(row[c])
+                                break
+                            except Exception:
+                                pass
 
                     ex_data[rid][boat_i] = {
                         "ex_time": time_val,
@@ -227,14 +251,22 @@ def load_race_cards_dataset(repo_root: Path):
                     avg_st_col = next((c for c in [f"{prefix}平均ST", f"boat_{boat_i}_avg_st"] if c in df.columns), None)
                     class_col = next((c for c in [f"{prefix}級別", f"boat_{boat_i}_class"] if c in df.columns), None)
                     
-                    try: nat_win = float(row[nat_win_col]) if nat_win_col and pd.notna(row[nat_win_col]) else 5.0
-                    except Exception: nat_win = 5.0
-                    try: loc_win = float(row[loc_win_col]) if loc_win_col and pd.notna(row[loc_win_col]) else 5.0
-                    except Exception: loc_win = 5.0
-                    try: mot_2ren = float(row[mot_2ren_col]) if mot_2ren_col and pd.notna(row[mot_2ren_col]) else 30.0
-                    except Exception: mot_2ren = 30.0
-                    try: avg_st = float(row[avg_st_col]) if avg_st_col and pd.notna(row[avg_st_col]) else 0.15
-                    except Exception: avg_st = 0.15
+                    try:
+                        nat_win = float(row[nat_win_col]) if nat_win_col and pd.notna(row[nat_win_col]) else 5.0
+                    except Exception:
+                        nat_win = 5.0
+                    try:
+                        loc_win = float(row[loc_win_col]) if loc_win_col and pd.notna(row[loc_win_col]) else 5.0
+                    except Exception:
+                        loc_win = 5.0
+                    try:
+                        mot_2ren = float(row[mot_2ren_col]) if mot_2ren_col and pd.notna(row[mot_2ren_col]) else 30.0
+                    except Exception:
+                        mot_2ren = 30.0
+                    try:
+                        avg_st = float(row[avg_st_col]) if avg_st_col and pd.notna(row[avg_st_col]) else 0.15
+                    except Exception:
+                        avg_st = 0.15
                     class_val = parse_class_rank(row[class_col]) if class_col and pd.notna(row[class_col]) else 2.0
                     
                     races_data[rid][boat_i] = {
@@ -359,8 +391,10 @@ def load_repository_historical_data(repo_root: Path):
                     if "-" in col:
                         clean_key = col.replace("3連単_", "").replace("3連複_", "").strip()
                         if "-" in clean_key:
-                            try: raw_odds[clean_key] = float(row[col])
-                            except ValueError: pass
+                            try:
+                                raw_odds[clean_key] = float(row[col])
+                            except ValueError:
+                                pass
                 
                 if not raw_odds: continue
 
@@ -436,29 +470,4 @@ def main():
         max_drawdown = 0.0
         
         for r in historical_data:
-            actual = r['actual_result']
-            odds_dict = r['odds']
-            v = r['venue']
-            
-            if v not in venue_results:
-                venue_results[v] = {"races": 0, "hits": 0, "investment": 0.0, "payout": 0.0}
-            venue_results[v]["races"] += 1
-            
-            if current_bankroll <= 0: break
-                
-            bet_amount = 400
-            race_investment = 0
-            race_payout = 0
-            race_hit = False
-            
-            for k, o in odds_dict.items():
-                actual_bet = bet_amount if current_bankroll >= bet_amount else max(100, int(current_bankroll / 100) * 100)
-                if actual_bet <= 0: continue
-                
-                current_bankroll -= actual_bet
-                total_investment += actual_bet
-                race_investment += actual_bet
-                
-                if k == actual:
-                    payout = actual_bet * o
-
+     
