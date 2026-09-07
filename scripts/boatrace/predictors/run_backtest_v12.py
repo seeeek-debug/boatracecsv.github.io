@@ -280,8 +280,7 @@ def main():
                     for k, p in comb_probs.items():
                         if k in raw_odds:
                             odds_val = raw_odds[k]
-                            # 【4場特化・中穴バランスモデルの厳選条件】
-                            if 20.0 <= odds_val <= 40.0 and p >= 0.02:
+                            if 20.0 <= odds_val <= 80.0 and p >= 0.015:
                                 target_odds_combos[k] = p * odds_val
 
                     if len(target_odds_combos) < 2: continue
@@ -364,7 +363,7 @@ def main():
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
 
-    print(f"\n=== 【4場特化・中穴バランスモデル（厳選版）結果】 ===")
+    print(f"\n=== 【最強4場特化モデル結果（浜名湖・芦屋・尼崎・下関）】 ===")
     print(f"総購入レース数: {len(historical_races):,} レース")
     print(f"的中総数: {hit_count:,} 本")
     print("----------------------------------------")
