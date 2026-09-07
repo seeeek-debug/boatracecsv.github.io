@@ -164,7 +164,6 @@ def main():
     od3_root = repo_root / "data" / "previews" / "od3"
     payouts_root = repo_root / "data" / "results" / "payouts"
     
-    # 戸田と蒲郡を除外し、高回収率を叩き出した4場（浜名湖・芦屋・尼崎・下関）だけに絞り込み
     target_venues = ["浜名湖", "芦屋", "尼崎", "下関"]
 
     payouts_dict = {}
@@ -311,6 +310,10 @@ def main():
     hit_count = 0
     venue_results = {}
 
+    peak_bankroll = initial_bankroll
+    max_drawdown = 0.0
+    max_drawdown_pct = 0.0
+
     for r in historical_races:
         actual = r['actual_result']
         odds_dict = r['odds']
@@ -347,6 +350,17 @@ def main():
         venue_results[v]["investment"] += race_investment
         venue_results[v]["payout"] += race_payout
 
+        if current_bankroll > peak_bankroll:
+            peak_bankroll = current_bankroll
+        
+        drawdown = peak_bankroll - current_bankroll
+        drawdown_pct = (drawdown / peak_bankroll * 100) if peak_bankroll > 0 else 0.0
+        
+        if drawdown > max_drawdown:
+            max_drawdown = drawdown
+        if drawdown_pct > max_drawdown_pct:
+            max_drawdown_pct = drawdown_pct
+
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
 
     print(f"\n=== 【最強4場特化モデル結果（浜名湖・芦屋・尼崎・下関）】 ===")
@@ -358,6 +372,7 @@ def main():
     print(f"総投資額: ¥{total_investment:,.2f}")
     print(f"総払戻金: ¥{total_payout:,.2f}")
     print(f"回収率 (ROI): {roi:.2f}%")
+    print(f"最大ドローダウン: ¥{max_drawdown:,.2f} ({max_drawdown_pct:.2f}%)")
     
     print("\n=== 【開催場別の成績詳細】 ===")
     for v, stats in venue_results.items():
@@ -368,3 +383,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
