@@ -204,14 +204,15 @@ def main():
 
                     season = get_season_by_date(rid)
                     volatility = float(row.get("volatility", 1.5))
-                    if volatility > 1.5: continue  # ボラティリティを1.5以下に厳格化
+                    
+                    # --- ボラティリティを逆に上げる（1.5未満の堅いレースを外して、荒れるレースだけ狙う） ---
+                    if volatility < 1.5: continue
 
                     boats = races_data[rid]
                     sui = sui_data.get(rid, {"wave_height": 1.0})
                     ex = ex_data.get(rid, {})
 
                     wave = sui["wave_height"]
-                    if wave > 5.0: continue     # 波高も5cm以下に厳格化
                     rough_factor = 1.0 + (max(0.0, wave - 3.0) * 0.008)
 
                     default_weights = {1: 7.0, 2: 5.0, 3: 5.0, 4: 4.8, 5: 4.5, 6: 3.0}
@@ -343,7 +344,7 @@ def main():
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
 
-    print(f"\n=== 【全場対象・厳選絞り込み版 (ボル1.5以下・波高5cm以下・オッズ20~60倍)】 ===")
+    print(f"\n=== 【荒れるレース狙い版 (ボル1.5以上・オッズ20~60倍・3点)】 ===")
     print(f"総購入レース数: {len(historical_races):,} レース")
     print(f"的中総数: {hit_count:,} 本")
     print("----------------------------------------")
