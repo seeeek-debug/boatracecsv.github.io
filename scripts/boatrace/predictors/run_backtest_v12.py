@@ -204,14 +204,14 @@ def main():
 
                     season = get_season_by_date(rid)
                     volatility = float(row.get("volatility", 1.5))
-                    if volatility < 1.2: continue
+                    if volatility > 2.2: continue
 
                     boats = races_data[rid]
                     sui = sui_data.get(rid, {"wave_height": 1.0})
                     ex = ex_data.get(rid, {})
 
                     wave = sui["wave_height"]
-                    if wave > 15.0: continue
+                    if wave > 10.0: continue
                     rough_factor = 1.0 + (max(0.0, wave - 5.0) * 0.008)
 
                     default_weights = {1: 7.0, 2: 5.0, 3: 5.0, 4: 4.8, 5: 4.5, 6: 3.0}
@@ -239,9 +239,6 @@ def main():
                         power = (ability_score * 0.15 + motor_score * 0.35 + st_score * 0.35 + max(0.1, tactic_score) * 0.15) * c_bonus
                         boat_powers[b_i] = max(power, 0.1)
 
-                    total_power = sum(boat_powers.values())
-                    boat_win_probs = {b: p / total_power for b, p in boat_powers.items()} if total_power > 0 else {b: 1/6 for b in range(1, 7)}
-
                     raw_odds = {}
                     for col in df_od3.columns:
                         if "-" in col:
@@ -252,45 +249,25 @@ def main():
                     
                     if not raw_odds: continue
 
-                    comb_probs = {}
-                    for h1 in range(1, 7):
-                        for h2 in range(1, 7):
+                    # モデルのパワー順に上位4艇をピックアップ
+                    sorted_boats = sorted(boat_powers.items(), key=lambda x: x[1], reverse=True)
+                    top_boats = [b[0] for b in sorted_boats[:4]]
+
+                    # 上位4艇の組み合わせの中から、オッズが「15倍〜50倍」の中穴ゾーンだけを抽出
+                    odds_dict = {}
+                    filtered_probs = {}
+                    
+                    for h1 in top_boats:
+                        for h2 in top_boats:
                             if h2 == h1: continue
-                            for h3 in range(1, 7):
+                            for h3 in top_boats:
                                 if h3 == h1 or h3 == h2: continue
                                 k = f"{h1}-{h2}-{h3}"
                                 if k in raw_odds:
-                                    p1 = boat_win_probs.get(h1, 1/6)
-                                    p2 = boat_win_probs.get(h2, 1/6) / (1.0 - p1 + 1e-6)
-                                    p3 = boat_win_probs.get(h3, 1/6) / (1.0 - p1 - p2 + 1e-6)
-                                    base_p = max(p1 * p2 * p3, 1e-6)
-                                    comb_probs[k] = base_p
-
-                    prob_sum = sum(comb_probs.values())
-                    if prob_sum > 0:
-                        comb_probs = {k: p_val / prob_sum for k, p_val in comb_probs.items()}
-
-                    if not comb_probs: continue
-
-                    # --- 期待値 (EV = 確率 × オッズ) が1.0以上のものを狙う方式に変更 ---
-                    target_odds_combos = {}
-                    for k, p in comb_probs.items():
-                        if k in raw_odds:
-                            odds_val = raw_odds[k]
-                            ev = p * odds_val
-                            if ev >= 1.0:  # 期待値1.0倍以上（プラス期待値）を対象に
-                                target_odds_combos[k] = ev
-
-                    if not target_odds_combos: continue
-
-                    sorted_target = sorted(target_odds_combos.items(), key=lambda x: x[1], reverse=True)
-                    
-                    odds_dict = {}
-                    filtered_probs = {}
-                    for k, ev in sorted_target[:2]:  # 上位2点まで購入
-                        if k in raw_odds:
-                            odds_dict[k] = raw_odds[k]
-                            filtered_probs[k] = comb_probs[k]
+                                    odds_val = raw_odds[k]
+                                    if 15.0 <= odds_val <= 50.0:
+                                        odds_dict[k] = odds_val
+                                        filtered_probs[k] = 1.0 # 確率計算せずダミー
 
                     if not odds_dict: continue
 
@@ -323,13 +300,13 @@ def main():
         
         if current_bankroll <= 0: break
             
-        bet_amount = 400
+        bet_amount = 100
         race_investment = 0
         race_payout = 0
         race_hit = False
         
         for k, o in odds_dict.items():
-            actual_bet = bet_amount if current_bankroll >= bet_amount else max(100, int(current_bankroll / 100) * 100)
+            actual_bet = bet_amount if current_bankroll >= bet_amount else 100
             if actual_bet <= 0: continue
             
             current_bankroll -= actual_bet
@@ -361,7 +338,7 @@ def main():
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
 
-    print(f"\n=== 【期待値ベースモデル結果】 ===")
+    print(f"\n=== 【中穴オッズフィルターモデル結果 (15倍〜50倍)】 ===")
     print(f"総購入レース数: {len(historical_races):,} レース")
     print(f"的中総数: {hit_count:,} 本")
     print("----------------------------------------")
