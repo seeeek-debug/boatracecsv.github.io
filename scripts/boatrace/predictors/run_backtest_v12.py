@@ -164,8 +164,8 @@ def main():
     od3_root = repo_root / "data" / "previews" / "od3"
     payouts_root = repo_root / "data" / "results" / "payouts"
     
-    # 200.75%を叩き出した最強6場専用の独立スクリプト
-    target_venues = ["浜名湖", "芦屋", "尼崎", "下関", "戸田", "蒲郡"]
+    # 戸田と蒲郡を除外し、高回収率を叩き出した4場（浜名湖・芦屋・尼崎・下関）だけに絞り込み
+    target_venues = ["浜名湖", "芦屋", "尼崎", "下関"]
 
     payouts_dict = {}
     if payouts_root.exists():
@@ -349,7 +349,7 @@ def main():
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
 
-    print(f"\n=== 【最強6場特化モデル（単独スクリプト）】 ===")
+    print(f"\n=== 【最強4場特化モデル結果（浜名湖・芦屋・尼崎・下関）】 ===")
     print(f"総購入レース数: {len(historical_races):,} レース")
     print(f"的中総数: {hit_count:,} 本")
     print("----------------------------------------")
@@ -368,4 +368,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
