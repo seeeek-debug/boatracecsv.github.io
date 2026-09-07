@@ -201,7 +201,6 @@ def main():
 
                     row_dict = row.to_dict()
                     v_code, venue = get_venue_name_and_code(rid, row_dict, od3_csv)
-                    # 全場対応のため会場の絞り込みを解除
 
                     season = get_season_by_date(rid)
                     volatility = float(row.get("volatility", 1.5))
@@ -273,21 +272,22 @@ def main():
 
                     if not comb_probs: continue
 
+                    # --- 期待値 (EV = 確率 × オッズ) が1.0以上のものを狙う方式に変更 ---
                     target_odds_combos = {}
                     for k, p in comb_probs.items():
                         if k in raw_odds:
                             odds_val = raw_odds[k]
-                            # --- 全場対応・オッズ100倍以上かつ確率0.01以上に緩和 ---
-                            if odds_val >= 100.0 and p >= 0.01:
-                                target_odds_combos[k] = p * odds_val
+                            ev = p * odds_val
+                            if ev >= 1.0:  # 期待値1.0倍以上（プラス期待値）を対象に
+                                target_odds_combos[k] = ev
 
-                    if len(target_odds_combos) < 2: continue
+                    if not target_odds_combos: continue
 
                     sorted_target = sorted(target_odds_combos.items(), key=lambda x: x[1], reverse=True)
                     
                     odds_dict = {}
                     filtered_probs = {}
-                    for k, ev in sorted_target[:2]:
+                    for k, ev in sorted_target[:2]:  # 上位2点まで購入
                         if k in raw_odds:
                             odds_dict[k] = raw_odds[k]
                             filtered_probs[k] = comb_probs[k]
@@ -361,7 +361,7 @@ def main():
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
 
-    print(f"\n=== 【全場対応・万舟狙いモデル結果】 ===")
+    print(f"\n=== 【期待値ベースモデル結果】 ===")
     print(f"総購入レース数: {len(historical_races):,} レース")
     print(f"的中総数: {hit_count:,} 本")
     print("----------------------------------------")
