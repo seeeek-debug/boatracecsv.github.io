@@ -122,7 +122,8 @@ def load_sui_dataset(repo_root: Path):
                     "wind_speed": wind_speed,
                     "wind_direction": wind_direction
                 }
-        except Exception: continue
+        except Exception:
+            continue
     return sui_data
 
 def load_stt_dataset(repo_root: Path):
@@ -157,7 +158,8 @@ def load_stt_dataset(repo_root: Path):
                         boat_sts[boat_i] = 0.15
 
                 stt_data[rid] = {"courses": boat_courses, "sts": boat_sts}
-        except Exception: continue
+        except Exception:
+            continue
     return stt_data
 
 def load_original_exhibition_dataset(repo_root: Path):
@@ -199,7 +201,8 @@ def load_original_exhibition_dataset(repo_root: Path):
                         "turn_val": turn_val,
                         "straight_val": straight_val
                     }
-        except Exception: continue
+        except Exception:
+            continue
     return ex_data
 
 def load_race_cards_dataset(repo_root: Path):
@@ -240,7 +243,8 @@ def load_race_cards_dataset(repo_root: Path):
                         "kimarite_rate": 0.7 if boat_i == 1 else (0.4 if boat_i in [2, 3, 4] else 0.2),
                         "yarare_rate": 0.3 if boat_i == 1 else (0.6 if boat_i in [2, 3, 4] else 0.8)
                     }
-        except Exception: continue
+        except Exception:
+            continue
     return races_data
 
 def load_repository_historical_data(repo_root: Path):
@@ -262,7 +266,8 @@ def load_repository_historical_data(repo_root: Path):
                     for col in ["3連単_組番", "trifecta", "3rentan", "result"]:
                         if col in df.columns and pd.notna(row[col]):
                             payouts_dict[rid] = str(row[col]).strip(); break
-            except Exception: continue
+            except Exception:
+                continue
 
     races_data = load_race_cards_dataset(repo_root)
     sui_data = load_sui_dataset(repo_root)
@@ -404,7 +409,8 @@ def load_repository_historical_data(repo_root: Path):
                     "probs": filtered_probs, "odds": odds_dict,
                     "actual_result": str(payouts_dict[rid]).strip()
                 })
-        except Exception: continue
+        except Exception:
+            continue
 
     print(f"Successfully matched and filtered {len(historical_races)} races (All Venues + Multi-Data Integration Model).")
     return historical_races
@@ -458,7 +464,4 @@ def main():
                     current_bankroll += payout
                     total_payout += payout
                     race_payout += payout
-                    hit_count += 1
-                    race_hit = True
-            
-
+        
