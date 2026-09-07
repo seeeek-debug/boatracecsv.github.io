@@ -204,14 +204,14 @@ def main():
 
                     season = get_season_by_date(rid)
                     volatility = float(row.get("volatility", 1.5))
-                    if volatility > 2.2: continue
+                    if volatility > 1.9: continue  # ボラティリティ制限を1.9に変更
 
                     boats = races_data[rid]
                     sui = sui_data.get(rid, {"wave_height": 1.0})
                     ex = ex_data.get(rid, {})
 
                     wave = sui["wave_height"]
-                    if wave > 10.0: continue
+                    if wave > 8.0: continue     # 波高制限を8cmに設定
                     rough_factor = 1.0 + (max(0.0, wave - 5.0) * 0.008)
 
                     default_weights = {1: 7.0, 2: 5.0, 3: 5.0, 4: 4.8, 5: 4.5, 6: 3.0}
@@ -249,11 +249,9 @@ def main():
                     
                     if not raw_odds: continue
 
-                    # モデルのパワー順に上位4艇をピックアップ
                     sorted_boats = sorted(boat_powers.items(), key=lambda x: x[1], reverse=True)
                     top_boats = [b[0] for b in sorted_boats[:4]]
 
-                    # 上位4艇の組み合わせの中から、オッズが「15倍〜50倍」の中穴ゾーンだけを抽出
                     odds_dict = {}
                     filtered_probs = {}
                     
@@ -265,9 +263,9 @@ def main():
                                 k = f"{h1}-{h2}-{h3}"
                                 if k in raw_odds:
                                     odds_val = raw_odds[k]
-                                    if 15.0 <= odds_val <= 50.0:
+                                    if 20.0 <= odds_val <= 60.0:
                                         odds_dict[k] = odds_val
-                                        filtered_probs[k] = 1.0 # 確率計算せずダミー
+                                        filtered_probs[k] = 1.0
 
                     if not odds_dict: continue
 
@@ -338,7 +336,7 @@ def main():
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
 
-    print(f"\n=== 【中穴オッズフィルターモデル結果 (15倍〜50倍)】 ===")
+    print(f"\n=== 【全場対象・調整版モデル結果 (ボル1.9以下・波高8cm以下・オッズ20~60倍)】 ===")
     print(f"総購入レース数: {len(historical_races):,} レース")
     print(f"的中総数: {hit_count:,} 本")
     print("----------------------------------------")
