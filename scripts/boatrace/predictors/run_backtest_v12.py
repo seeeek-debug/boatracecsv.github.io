@@ -64,7 +64,7 @@ def get_season_by_date(rid: str) -> str:
             return "冬"
         except:
             pass
-    return "夏" # デフォルト
+    return "夏"
 
 def load_stadium_win_rates(repo_root: Path):
     """場別・季節別のコース勝率データをロードする"""
@@ -235,9 +235,15 @@ def load_repository_historical_data(repo_root: Path):
 
                 rough_factor = 1.0 + (max(0.0, wave - 5.0) * 0.008)
 
-                # 場別・季節別の勝率データをベースウェイトとして取得（なければデフォルト）
+                # 一律基本ウェイト(8割)をベースに、場別・季節別データ(2割)をマイルドにブレンド
                 default_weights = {1: 7.0, 2: 5.0, 3: 5.0, 4: 4.8, 5: 4.5, 6: 3.0}
-                course_weights = stadium_win_rates.get((v_code, season), default_weights)
+                raw_stadium_weights = stadium_win_rates.get((v_code, season), default_weights)
+                
+                course_weights = {}
+                for b_i in range(1, 7):
+                    d_w = default_weights.get(b_i, 5.0)
+                    s_w = raw_stadium_weights.get(b_i, d_w)
+                    course_weights[b_i] = d_w * 0.8 + s_w * 0.2
 
                 boat_powers = {}
                 for b_i in range(1, 7):
@@ -316,7 +322,7 @@ def load_repository_historical_data(repo_root: Path):
                 })
         except Exception: continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races (All-Venue 30-50x Stadium-Season Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races (Mild Stadium-Season Blended Model).")
     return historical_races
 
 def main():
@@ -384,7 +390,7 @@ def main():
         roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
         max_drawdown_rate = (max_drawdown / max_bankroll * 100) if max_bankroll > 0 else 0.0
 
-        print(f"\n=== 【全場対象 30〜50倍中穴特化・場別季節別勝率モデル】 ===")
+        print(f"\n=== 【マイルド場特性ブレンド・30〜50倍中穴特化モデル】 ===")
         print(f"総購入レース数: {total_races_bet:,} レース")
         print(f"総購入点数（延べ）: {total_bets:,} 点")
         print(f"的中総数: {hit_count:,} 本")
