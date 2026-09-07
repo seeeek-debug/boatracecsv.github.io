@@ -327,7 +327,7 @@ def load_repository_historical_data(repo_root: Path):
                 })
         except Exception: continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races (Max 800 JPY Per Race Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races (Fixed 400 JPY Per Bet Model).")
     return historical_races
 
 def main():
@@ -361,9 +361,8 @@ def main():
             
             if current_bankroll <= 0: break
                 
-            raw_bet = current_bankroll * 0.001
-            # 1点あたりの上限を400円に変更（2点で最大800円）
-            bet_amount = max(100, min(400, int(raw_bet / 100) * 100))
+            # 1点あたり400円固定（2点で最大800円）
+            bet_amount = 400
             
             race_investment = 0
             race_payout = 0
@@ -396,7 +395,7 @@ def main():
         roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
         max_drawdown_rate = (max_drawdown / max_bankroll * 100) if max_bankroll > 0 else 0.0
 
-        print(f"\n=== 【1レース最大800円制限・厳選特化モデル】 ===")
+        print(f"\n=== 【1点400円・1レース最大800円固定モデル】 ===")
         print(f"総購入レース数: {total_races_bet:,} レース")
         print(f"総購入点数（延べ）: {total_bets:,} 点")
         print(f"的中総数: {hit_count:,} 本")
