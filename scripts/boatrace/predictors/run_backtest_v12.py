@@ -59,7 +59,7 @@ def get_season_by_date(rid: str) -> str:
             if month in [6, 7, 8]: return "夏"
             if month in [9, 10, 11]: return "秋"
             return "冬"
-        except:
+        except Exception:
             pass
     return "夏"
 
@@ -80,7 +80,7 @@ def load_stadium_win_rates(repo_root: Path):
                 col_name = f"{i}コース勝率"
                 if col_name in df.columns:
                     try: weights[i] = float(row[col_name])
-                    except: weights[i] = 5.0
+                    except Exception: weights[i] = 5.0
             stadium_weights[(v_code, season)] = weights
     except Exception:
         pass
@@ -103,19 +103,19 @@ def load_sui_dataset(repo_root: Path):
                 for col in ["波の高さ(cm)", "wave_height", "波高"]:
                     if col in df.columns and pd.notna(row[col]):
                         try: wave_height = float(row[col]); break
-                        except: pass
+                        except Exception: pass
                 
                 wind_speed = 0.0
                 for col in ["風速(m)", "wind_speed", "風速"]:
                     if col in df.columns and pd.notna(row[col]):
                         try: wind_speed = float(row[col]); break
-                        except: pass
+                        except Exception: pass
 
                 wind_direction = 0
                 for col in ["風向", "wind_direction"]:
                     if col in df.columns and pd.notna(row[col]):
                         try: wind_direction = int(row[col]); break
-                        except: pass
+                        except Exception: pass
 
                 sui_data[rid] = {
                     "wave_height": wave_height,
@@ -146,14 +146,14 @@ def load_stt_dataset(repo_root: Path):
                     c_col = next((c for c in [f"艇{boat_i}_コース", f"boat_{boat_i}_course"] if c in df.columns), None)
                     if c_col and pd.notna(row[c_col]):
                         try: boat_courses[boat_i] = int(row[c_col])
-                        except: boat_courses[boat_i] = boat_i
+                        except Exception: boat_courses[boat_i] = boat_i
                     else:
                         boat_courses[boat_i] = boat_i
 
                     st_col = next((c for c in [f"艇{boat_i}_スタート展示", f"boat_{boat_i}_st"] if c in df.columns), None)
                     if st_col and pd.notna(row[st_col]):
                         try: boat_sts[boat_i] = float(row[st_col])
-                        except: boat_sts[boat_i] = 0.15
+                        except Exception: boat_sts[boat_i] = 0.15
                     else:
                         boat_sts[boat_i] = 0.15
 
@@ -182,19 +182,19 @@ def load_original_exhibition_dataset(repo_root: Path):
                     for c in [f"{prefix}展示タイム", f"{prefix}タイム", f"boat_{boat_i}_ex_time"]:
                         if c in df.columns and pd.notna(row[c]):
                             try: time_val = float(row[c]); break
-                            except: pass
+                            except Exception: pass
                     
                     turn_val = 37.0
                     for c in [f"{prefix}値1", f"{prefix}まわり足", f"boat_{boat_i}_turn"]:
                         if c in df.columns and pd.notna(row[c]):
                             try: turn_val = float(row[c]); break
-                            except: pass
+                            except Exception: pass
 
                     straight_val = 5.8
                     for c in [f"{prefix}値2", f"{prefix}直線足", f"boat_{boat_i}_straight"]:
                         if c in df.columns and pd.notna(row[c]):
                             try: straight_val = float(row[c]); break
-                            except: pass
+                            except Exception: pass
 
                     ex_data[rid][boat_i] = {
                         "ex_time": time_val,
@@ -228,13 +228,13 @@ def load_race_cards_dataset(repo_root: Path):
                     class_col = next((c for c in [f"{prefix}級別", f"boat_{boat_i}_class"] if c in df.columns), None)
                     
                     try: nat_win = float(row[nat_win_col]) if nat_win_col and pd.notna(row[nat_win_col]) else 5.0
-                    except: nat_win = 5.0
+                    except Exception: nat_win = 5.0
                     try: loc_win = float(row[loc_win_col]) if loc_win_col and pd.notna(row[loc_win_col]) else 5.0
-                    except: loc_win = 5.0
+                    except Exception: loc_win = 5.0
                     try: mot_2ren = float(row[mot_2ren_col]) if mot_2ren_col and pd.notna(row[mot_2ren_col]) else 30.0
-                    except: mot_2ren = 30.0
+                    except Exception: mot_2ren = 30.0
                     try: avg_st = float(row[avg_st_col]) if avg_st_col and pd.notna(row[avg_st_col]) else 0.15
-                    except: avg_st = 0.15
+                    except Exception: avg_st = 0.15
                     class_val = parse_class_rank(row[class_col]) if class_col and pd.notna(row[class_col]) else 2.0
                     
                     races_data[rid][boat_i] = {
@@ -461,7 +461,4 @@ def main():
                 
                 if k == actual:
                     payout = actual_bet * o
-                    current_bankroll += payout
-                    total_payout += payout
-                    race_payout += payout
-        
+
