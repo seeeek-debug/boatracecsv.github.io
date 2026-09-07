@@ -204,14 +204,14 @@ def main():
 
                     season = get_season_by_date(rid)
                     volatility = float(row.get("volatility", 1.5))
-                    if volatility > 1.9: continue  # ボラティリティ制限を1.9に変更
+                    if volatility > 1.9: continue
 
                     boats = races_data[rid]
                     sui = sui_data.get(rid, {"wave_height": 1.0})
                     ex = ex_data.get(rid, {})
 
                     wave = sui["wave_height"]
-                    if wave > 8.0: continue     # 波高制限を8cmに設定
+                    if wave > 8.0: continue
                     rough_factor = 1.0 + (max(0.0, wave - 5.0) * 0.008)
 
                     default_weights = {1: 7.0, 2: 5.0, 3: 5.0, 4: 4.8, 5: 4.5, 6: 3.0}
@@ -252,9 +252,8 @@ def main():
                     sorted_boats = sorted(boat_powers.items(), key=lambda x: x[1], reverse=True)
                     top_boats = [b[0] for b in sorted_boats[:4]]
 
-                    odds_dict = {}
-                    filtered_probs = {}
-                    
+                    # --- 組み合わせごとにスコアを計算してオッズ20~60倍の中から上位3点に絞り込む ---
+                    candidates = []
                     for h1 in top_boats:
                         for h2 in top_boats:
                             if h2 == h1: continue
@@ -264,8 +263,17 @@ def main():
                                 if k in raw_odds:
                                     odds_val = raw_odds[k]
                                     if 20.0 <= odds_val <= 60.0:
-                                        odds_dict[k] = odds_val
-                                        filtered_probs[k] = 1.0
+                                        combo_score = boat_powers[h1] * 2.0 + boat_powers[h2] * 1.0 + boat_powers[h3] * 0.5
+                                        candidates.append((k, odds_val, combo_score))
+
+                    candidates.sort(key=lambda x: x[2], reverse=True)
+                    top_candidates = candidates[:3]
+
+                    odds_dict = {}
+                    filtered_probs = {}
+                    for k, o, _ in top_candidates:
+                        odds_dict[k] = o
+                        filtered_probs[k] = 1.0
 
                     if not odds_dict: continue
 
@@ -336,7 +344,7 @@ def main():
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
 
-    print(f"\n=== 【全場対象・調整版モデル結果 (ボル1.9以下・波高8cm以下・オッズ20~60倍)】 ===")
+    print(f"\n=== 【全場対象・3点絞り込み版 (ボル1.9以下・波高8cm以下・オッズ20~60倍)】 ===")
     print(f"総購入レース数: {len(historical_races):,} レース")
     print(f"的中総数: {hit_count:,} 本")
     print("----------------------------------------")
