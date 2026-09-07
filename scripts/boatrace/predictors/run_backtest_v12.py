@@ -163,8 +163,6 @@ def main():
     repo_root = Path(__file__).resolve().parents[3]
     od3_root = repo_root / "data" / "previews" / "od3"
     payouts_root = repo_root / "data" / "results" / "payouts"
-    
-    target_venues = ["浜名湖", "芦屋", "尼崎", "下関"]
 
     payouts_dict = {}
     if payouts_root.exists():
@@ -203,8 +201,7 @@ def main():
 
                     row_dict = row.to_dict()
                     v_code, venue = get_venue_name_and_code(rid, row_dict, od3_csv)
-                    if venue not in target_venues:
-                        continue
+                    # 全場対応のため会場の絞り込みを解除
 
                     season = get_season_by_date(rid)
                     volatility = float(row.get("volatility", 1.5))
@@ -280,8 +277,8 @@ def main():
                     for k, p in comb_probs.items():
                         if k in raw_odds:
                             odds_val = raw_odds[k]
-                            # --- オッズ100倍以上かつ確率0.02以上に設定 ---
-                            if odds_val >= 100.0 and p >= 0.02:
+                            # --- 全場対応・オッズ100倍以上かつ確率0.01以上に緩和 ---
+                            if odds_val >= 100.0 and p >= 0.01:
                                 target_odds_combos[k] = p * odds_val
 
                     if len(target_odds_combos) < 2: continue
@@ -364,7 +361,7 @@ def main():
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
 
-    print(f"\n=== 【最強4場特化モデル（万舟超厳選）結果】 ===")
+    print(f"\n=== 【全場対応・万舟狙いモデル結果】 ===")
     print(f"総購入レース数: {len(historical_races):,} レース")
     print(f"的中総数: {hit_count:,} 本")
     print("----------------------------------------")
@@ -376,7 +373,7 @@ def main():
     print(f"最大ドローダウン: ¥{max_drawdown:,.2f} ({max_drawdown_pct:.2f}%)")
     
     print("\n=== 【開催場別の成績詳細】 ===")
-    for v, stats in venue_results.items():
+    for v, stats in sorted(venue_results.items(), key=lambda x: x[1]['races'], reverse=True):
         v_inv = int(stats['investment'])
         v_pay = int(stats['payout'])
         v_roi = (v_pay / v_inv * 100) if v_inv > 0 else 0.0
