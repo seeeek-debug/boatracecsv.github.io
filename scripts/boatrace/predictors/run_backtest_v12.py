@@ -39,8 +39,11 @@ def load_sui_dataset(repo_root: Path):
     sui_root = repo_root / "data" / "previews" / "sui"
     sui_data = {}
     if not sui_root.exists():
+        print(f"[DEBUG] sui folder not found: {sui_root}")
         return sui_data
-    for f in sui_root.glob("**/*.csv"):
+    files = list(sui_root.glob("**/*.csv"))
+    print(f"[DEBUG] sui CSV files found: {len(files)}")
+    for f in files:
         try:
             df = pd.read_csv(f)
             for _, row in df.iterrows():
@@ -58,6 +61,7 @@ def load_sui_dataset(repo_root: Path):
                 sui_data[rid] = {"wave_height": wave_height}
         except Exception:
             continue
+    print(f"[DEBUG] Loaded sui records: {len(sui_data)}")
     return sui_data
 
 def load_original_exhibition_dataset(repo_root: Path):
@@ -65,8 +69,11 @@ def load_original_exhibition_dataset(repo_root: Path):
     ex_root = repo_root / "data" / "previews" / "original_exhibition"
     ex_data = {}
     if not ex_root.exists():
+        print(f"[DEBUG] original_exhibition folder not found: {ex_root}")
         return ex_data
-    for f in ex_root.glob("**/*.csv"):
+    files = list(ex_root.glob("**/*.csv"))
+    print(f"[DEBUG] original_exhibition CSV files found: {len(files)}")
+    for f in files:
         try:
             df = pd.read_csv(f)
             for _, row in df.iterrows():
@@ -87,6 +94,7 @@ def load_original_exhibition_dataset(repo_root: Path):
                     ex_data[rid][boat_i] = {"ex_time": time_val}
         except Exception:
             continue
+    print(f"[DEBUG] Loaded original_exhibition records: {len(ex_data)}")
     return ex_data
 
 def load_race_cards_dataset(repo_root: Path):
@@ -94,8 +102,11 @@ def load_race_cards_dataset(repo_root: Path):
     cards_root = repo_root / "data" / "programs" / "race_cards"
     races_data = {}
     if not cards_root.exists():
+        print(f"[DEBUG] race_cards folder not found: {cards_root}")
         return races_data
-    for c_file in cards_root.glob("**/*.csv"):
+    files = list(cards_root.glob("**/*.csv"))
+    print(f"[DEBUG] race_cards CSV files found: {len(files)}")
+    for c_file in files:
         try:
             df = pd.read_csv(c_file)
             for _, row in df.iterrows():
@@ -135,6 +146,7 @@ def load_race_cards_dataset(repo_root: Path):
                     }
         except Exception:
             continue
+    print(f"[DEBUG] Loaded race_cards records: {len(races_data)}")
     return races_data
 
 def load_repository_historical_data(repo_root: Path):
@@ -144,7 +156,9 @@ def load_repository_historical_data(repo_root: Path):
     
     payouts_dict = {}
     if payouts_root.exists():
-        for p_file in payouts_root.glob("**/*.csv"):
+        payout_files = list(payouts_root.glob("**/*.csv"))
+        print(f"[DEBUG] payouts CSV files found: {len(payout_files)}")
+        for p_file in payout_files:
             try:
                 df = pd.read_csv(p_file)
                 for _, row in df.iterrows():
@@ -159,6 +173,7 @@ def load_repository_historical_data(repo_root: Path):
                             payouts_dict[rid] = str(row[col]).strip()
                             break
             except Exception: continue
+    print(f"[DEBUG] Loaded payouts records: {len(payouts_dict)}")
 
     races_data = load_race_cards_dataset(repo_root)
     sui_data = load_sui_dataset(repo_root)
@@ -168,7 +183,12 @@ def load_repository_historical_data(repo_root: Path):
         print(f"Warning: {od3_root} does not exist.")
         return historical_races
 
-    for od3_csv in od3_root.glob("**/*.csv"):
+    od3_files = list(od3_root.glob("**/*.csv"))
+    print(f"[DEBUG] od3 CSV files found: {len(od3_files)}")
+    
+    venue_file_counts = {}
+
+    for od3_csv in od3_files:
         try:
             df_od3 = pd.read_csv(od3_csv)
             for _, row in df_od3.iterrows():
@@ -182,6 +202,7 @@ def load_repository_historical_data(repo_root: Path):
                     continue
 
                 venue = get_venue_name(rid, od3_csv)
+                venue_file_counts[venue] = venue_file_counts.get(venue, 0) + 1
 
                 volatility = float(row.get("volatility", 1.5))
                 if volatility < 1.2:
@@ -290,6 +311,7 @@ def load_repository_historical_data(repo_root: Path):
                 })
         except Exception: continue
 
+    print(f"[DEBUG] Venue-wise matched race counts: {venue_file_counts}")
     print(f"Successfully matched and filtered {len(historical_races)} races (All-Venue 30-50x Model).")
     return historical_races
 
@@ -392,7 +414,6 @@ def main():
             v_races = stats['races']
             v_hits = stats['hits']
             v_hit_rate = (v_hits / v_races * 100) if v_races > 0 else 0.0
-            # 整数にキャストしてフォーマットエラーを防ぐ
             v_inv = int(stats['investment'])
             v_pay = int(stats['payout'])
             v_roi = (v_pay / v_inv * 100) if v_inv > 0 else 0.0
