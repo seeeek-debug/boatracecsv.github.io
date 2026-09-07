@@ -280,7 +280,8 @@ def main():
                     for k, p in comb_probs.items():
                         if k in raw_odds:
                             odds_val = raw_odds[k]
-                            if 30.0 <= odds_val <= 50.0 and p >= 0.02:
+                            # --- オッズ100倍以上かつ確率0.02以上に設定 ---
+                            if odds_val >= 100.0 and p >= 0.02:
                                 target_odds_combos[k] = p * odds_val
 
                     if len(target_odds_combos) < 2: continue
@@ -363,7 +364,7 @@ def main():
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
 
-    print(f"\n=== 【最強4場特化モデル結果（浜名湖・芦屋・尼崎・下関）】 ===")
+    print(f"\n=== 【最強4場特化モデル（万舟超厳選）結果】 ===")
     print(f"総購入レース数: {len(historical_races):,} レース")
     print(f"的中総数: {hit_count:,} 本")
     print("----------------------------------------")
