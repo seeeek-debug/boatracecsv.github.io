@@ -207,6 +207,9 @@ def load_repository_historical_data(repo_root: Path):
     if not od3_root.exists():
         return historical_races
 
+    # 的中実績のあった場（勝ち組）だけに完全に絞り込む
+    active_venues = ["浜名湖", "芦屋", "尼崎", "下関", "戸田", "蒲郡"]
+
     for od3_csv in od3_root.glob("**/*.csv"):
         try:
             df_od3 = pd.read_csv(od3_csv)
@@ -221,6 +224,11 @@ def load_repository_historical_data(repo_root: Path):
 
                 row_dict = row.to_dict()
                 v_code, venue = get_venue_name_and_code(rid, row_dict, od3_csv)
+                
+                # 的中実績のない場は対象外としてスキップ
+                if venue not in active_venues:
+                    continue
+
                 season = get_season_by_date(rid)
 
                 volatility = float(row.get("volatility", 1.5))
@@ -235,20 +243,14 @@ def load_repository_historical_data(repo_root: Path):
 
                 rough_factor = 1.0 + (max(0.0, wave - 5.0) * 0.008)
 
-                # 成績が良かった場（浜名湖、芦屋、尼崎、下関、戸田、蒲郡）だけ場特性をブレンドし、
-                # あかんかったその他の場は元の安定した一律基本ウェイト100%に戻す
-                effective_venues = ["浜名湖", "芦屋", "尼崎", "下関", "戸田", "蒲郡"]
                 default_weights = {1: 7.0, 2: 5.0, 3: 5.0, 4: 4.8, 5: 4.5, 6: 3.0}
                 raw_stadium_weights = stadium_win_rates.get((v_code, season), default_weights)
                 
                 course_weights = {}
                 for b_i in range(1, 7):
                     d_w = default_weights.get(b_i, 5.0)
-                    if venue in effective_venues:
-                        s_w = raw_stadium_weights.get(b_i, d_w)
-                        course_weights[b_i] = d_w * 0.9 + s_w * 0.1
-                    else:
-                        course_weights[b_i] = d_w
+                    s_w = raw_stadium_weights.get(b_i, d_w)
+                    course_weights[b_i] = d_w * 0.9 + s_w * 0.1
 
                 boat_powers = {}
                 for b_i in range(1, 7):
@@ -327,7 +329,7 @@ def load_repository_historical_data(repo_root: Path):
                 })
         except Exception: continue
 
-    print(f"Successfully matched and filtered {len(historical_races)} races (Hybrid Venue-Selective Model).")
+    print(f"Successfully matched and filtered {len(historical_races)} races (Selective Venue-Only Model).")
     return historical_races
 
 def main():
@@ -395,7 +397,7 @@ def main():
         roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
         max_drawdown_rate = (max_drawdown / max_bankroll * 100) if max_bankroll > 0 else 0.0
 
-        print(f"\n=== 【ハイブリッド場選択型・30〜50倍中穴特化モデル】 ===")
+        print(f"\n=== 【厳選特化型・30〜50倍中穴特化モデル】 ===")
         print(f"総購入レース数: {total_races_bet:,} レース")
         print(f"総購入点数（延べ）: {total_bets:,} 点")
         print(f"的中総数: {hit_count:,} 本")
