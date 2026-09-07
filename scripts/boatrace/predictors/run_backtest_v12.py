@@ -73,7 +73,8 @@ def load_stadium_win_rates(repo_root: Path):
         for _, row in df.iterrows():
             v_code = str(row.get("場コード", "")).strip().zfill(2)
             season = str(row.get("季節", "")).strip()
-            if not v_code or not season: continue
+            if not v_code or not season:
+                continue
             
             weights = {}
             for i in range(1, 7):
@@ -91,7 +92,8 @@ def load_stadium_win_rates(repo_root: Path):
 def load_sui_dataset(repo_root: Path):
     sui_root = repo_root / "data" / "previews" / "sui"
     sui_data = {}
-    if not sui_root.exists(): return sui_data
+    if not sui_root.exists():
+        return sui_data
     for f in sui_root.glob("**/*.csv"):
         try:
             df = pd.read_csv(f)
@@ -99,8 +101,10 @@ def load_sui_dataset(repo_root: Path):
                 rid = ""
                 for col in ["レースコード", "race_id", "id", "RACE_ID"]:
                     if col in df.columns and pd.notna(row[col]):
-                        rid = str(row[col]).strip(); break
-                if not rid: continue
+                        rid = str(row[col]).strip()
+                        break
+                if not rid:
+                    continue
                 wave_height = 1.0
                 for col in ["波の高さ(cm)", "wave_height", "波高"]:
                     if col in df.columns and pd.notna(row[col]):
@@ -140,7 +144,8 @@ def load_sui_dataset(repo_root: Path):
 def load_stt_dataset(repo_root: Path):
     stt_root = repo_root / "data" / "previews" / "stt"
     stt_data = {}
-    if not stt_root.exists(): return stt_data
+    if not stt_root.exists():
+        return stt_data
     for f in stt_root.glob("**/*.csv"):
         try:
             df = pd.read_csv(f)
@@ -148,8 +153,10 @@ def load_stt_dataset(repo_root: Path):
                 rid = ""
                 for col in ["レースコード", "race_id", "id", "RACE_ID"]:
                     if col in df.columns and pd.notna(row[col]):
-                        rid = str(row[col]).strip(); break
-                if not rid: continue
+                        rid = str(row[col]).strip()
+                        break
+                if not rid:
+                    continue
                 
                 boat_courses = {}
                 boat_sts = {}
@@ -180,7 +187,8 @@ def load_stt_dataset(repo_root: Path):
 def load_original_exhibition_dataset(repo_root: Path):
     ex_root = repo_root / "data" / "previews" / "original_exhibition"
     ex_data = {}
-    if not ex_root.exists(): return ex_data
+    if not ex_root.exists():
+        return ex_data
     for f in ex_root.glob("**/*.csv"):
         try:
             df = pd.read_csv(f)
@@ -188,9 +196,12 @@ def load_original_exhibition_dataset(repo_root: Path):
                 rid = ""
                 for col in ["レースコード", "race_id", "id", "RACE_ID"]:
                     if col in df.columns and pd.notna(row[col]):
-                        rid = str(row[col]).strip(); break
-                if not rid: continue
-                if rid not in ex_data: ex_data[rid] = {}
+                        rid = str(row[col]).strip()
+                        break
+                if not rid:
+                    continue
+                if rid not in ex_data:
+                    ex_data[rid] = {}
                 for boat_i in range(1, 7):
                     prefix = f"艇{boat_i}_"
                     time_val = 6.8
@@ -232,7 +243,8 @@ def load_original_exhibition_dataset(repo_root: Path):
 def load_race_cards_dataset(repo_root: Path):
     cards_root = repo_root / "data" / "programs" / "race_cards"
     races_data = {}
-    if not cards_root.exists(): return races_data
+    if not cards_root.exists():
+        return races_data
     for c_file in cards_root.glob("**/*.csv"):
         try:
             df = pd.read_csv(c_file)
@@ -240,9 +252,12 @@ def load_race_cards_dataset(repo_root: Path):
                 rid = ""
                 for col in ["レースコード", "race_id", "id", "RACE_ID"]:
                     if col in df.columns and pd.notna(row[col]):
-                        rid = str(row[col]).strip(); break
-                if not rid: continue
-                if rid not in races_data: races_data[rid] = {}
+                        rid = str(row[col]).strip()
+                        break
+                if not rid:
+                    continue
+                if rid not in races_data:
+                    races_data[rid] = {}
                 for boat_i in range(1, 7):
                     prefix = f"艇{boat_i}_"
                     nat_win_col = next((c for c in [f"{prefix}全国勝率", f"boat_{boat_i}_national_win_rate"] if c in df.columns), None)
@@ -293,11 +308,14 @@ def load_repository_historical_data(repo_root: Path):
                     rid = ""
                     for col in ["レースコード", "race_id", "id", "RACE_ID"]:
                         if col in df.columns and pd.notna(row[col]):
-                            rid = str(row[col]).strip(); break
-                    if not rid: continue
+                            rid = str(row[col]).strip()
+                            break
+                    if not rid:
+                        continue
                     for col in ["3連単_組番", "trifecta", "3rentan", "result"]:
                         if col in df.columns and pd.notna(row[col]):
-                            payouts_dict[rid] = str(row[col]).strip(); break
+                            payouts_dict[rid] = str(row[col]).strip()
+                            break
             except Exception:
                 continue
 
@@ -317,7 +335,8 @@ def load_repository_historical_data(repo_root: Path):
                 rid = ""
                 for col in ["レースコード", "race_id", "id", "RACE_ID"]:
                     if col in df_od3.columns and pd.notna(row[col]):
-                        rid = str(row[col]).strip(); break
+                        rid = str(row[col]).strip()
+                        break
                 
                 if not rid or rid not in payouts_dict or rid not in races_data:
                     continue
@@ -327,15 +346,17 @@ def load_repository_historical_data(repo_root: Path):
                 season = get_season_by_date(rid)
 
                 volatility = float(row.get("volatility", 1.5))
-                if volatility < 1.2: continue
+                if volatility < 1.2:
+                    continue
 
                 boats = races_data[rid]
                 sui = sui_data.get(rid, {"wave_height": 1.0, "wind_speed": 0.0, "wind_direction": 0})
-                stt = stt_data.get(rid, {"courses": {i:i for i in range(1,7)}, "sts": {i:0.15 for i in range(1,7)}})
+                stt = stt_data.get(rid, {"courses": {i: i for i in range(1, 7)}, "sts": {i: 0.15 for i in range(1, 7)}})
                 ex = ex_data.get(rid, {})
 
                 wave = sui["wave_height"]
-                if wave > 15.0: continue
+                if wave > 15.0:
+                    continue
 
                 wind_speed = sui["wind_speed"]
                 rough_factor = 1.0 + (max(0.0, wave - 5.0) * 0.008) + (max(0.0, wind_speed - 3.0) * 0.005)
@@ -354,7 +375,8 @@ def load_repository_historical_data(repo_root: Path):
                 boat_sts = stt["sts"]
 
                 for b_i in range(1, 7):
-                    if b_i not in boats: continue
+                    if b_i not in boats:
+                        continue
                     f = boats[b_i]
                     
                     real_c = actual_courses.get(b_i, b_i)
@@ -396,14 +418,17 @@ def load_repository_historical_data(repo_root: Path):
                             except ValueError:
                                 pass
                 
-                if not raw_odds: continue
+                if not raw_odds:
+                    continue
 
                 comb_probs = {}
                 for h1 in range(1, 7):
                     for h2 in range(1, 7):
-                        if h2 == h1: continue
+                        if h2 == h1:
+                            continue
                         for h3 in range(1, 7):
-                            if h3 == h1 or h3 == h2: continue
+                            if h3 == h1 or h3 == h2:
+                                continue
                             k = f"{h1}-{h2}-{h3}"
                             if k in raw_odds:
                                 p1 = boat_win_probs.get(h1, 1/6)
@@ -416,7 +441,8 @@ def load_repository_historical_data(repo_root: Path):
                 if prob_sum > 0:
                     comb_probs = {k: p_val / prob_sum for k, p_val in comb_probs.items()}
 
-                if not comb_probs: continue
+                if not comb_probs:
+                    continue
 
                 target_odds_combos = {}
                 for k, p in comb_probs.items():
@@ -425,7 +451,8 @@ def load_repository_historical_data(repo_root: Path):
                         if 30.0 <= odds_val <= 50.0 and p >= 0.02:
                             target_odds_combos[k] = p * odds_val
 
-                if len(target_odds_combos) < 2: continue
+                if len(target_odds_combos) < 2:
+                    continue
 
                 sorted_target = sorted(target_odds_combos.items(), key=lambda x: x[1], reverse=True)
                 
@@ -436,7 +463,8 @@ def load_repository_historical_data(repo_root: Path):
                         odds_dict[k] = raw_odds[k]
                         filtered_probs[k] = comb_probs[k]
 
-                if not odds_dict: continue
+                if not odds_dict:
+                    continue
 
                 historical_races.append({
                     "id": rid, "venue": venue, "volatility": volatility,
@@ -452,22 +480,4 @@ def load_repository_historical_data(repo_root: Path):
 def main():
     try:
         repo_root = Path(__file__).resolve().parents[3]
-        historical_data = load_repository_historical_data(repo_root)
-        if not historical_data:
-            print("No historical data could be loaded.")
-            return
-        
-        total_races_bet = len(historical_data)
-        total_bets = sum(len(r['odds']) for r in historical_data)
-        
-        hit_count = 0
-        venue_results = {}
-        initial_bankroll = 100000.0
-        current_bankroll = initial_bankroll
-        total_investment = 0.0
-        total_payout = 0.0
-        max_bankroll = initial_bankroll
-        max_drawdown = 0.0
-        
-        for r in historical_data:
-     
+        historical_data = load_repository
