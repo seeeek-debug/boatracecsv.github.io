@@ -51,15 +51,32 @@ def get_season_by_date(rid):
             pass
     return "夏"
 
+def calculate_power_logic_a(boats):
+    boat_powers = {}
+    for i in range(1, 7):
+        if i not in boats: continue
+        f = boats[i]
+        power = (f["nat_win"] * 0.2 + f["loc_win"] * 0.1 + f["class_val"] * 0.3 + f["mot_2ren"] * 0.4)
+        boat_powers[i] = max(power, 0.1)
+    return boat_powers
+
+def calculate_power_logic_b(boats):
+    boat_powers = {}
+    for i in range(1, 7):
+        if i not in boats: continue
+        f = boats[i]
+        power = (f["nat_win"] * 0.25 + f["loc_win"] * 0.15 + f["class_val"] * 0.3 + f["mot_2ren"] * 0.3)
+        boat_powers[i] = max(power, 0.1)
+    return boat_powers
+
 def main():
     repo_root = Path(__file__).resolve().parents[3]
     od3_root = repo_root / "data" / "previews" / "od3"
     payouts_root = repo_root / "data" / "results" / "payouts"
     
-    # ユーザー指定の10場のみをターゲットに設定
-    allowed_venues = ["戸田", "江戸川", "蒲郡", "津", "三国", "びわこ", "浜名湖", "芦屋", "尼崎", "下関"]
-    # 前回の高回収率ロジックを適用する4場
-    prev_logic_venues = ["浜名湖", "芦屋", "尼崎", "下関"]
+    group_a_venues = ["浜名湖", "芦屋", "尼崎", "下関"]
+    group_b_venues = ["戸田", "江戸川", "蒲郡", "津", "三国", "びわこ"]
+    allowed_venues = group_a_venues + group_b_venues
 
     payouts_dict = {}
     if payouts_root.exists():
@@ -114,8 +131,6 @@ def main():
                     continue
                 
                 v_code, venue = get_venue_name_and_code(rid, row.to_dict(), od3_csv)
-                
-                # 指定された10場以外は除外
                 if venue not in allowed_venues:
                     continue
 
@@ -133,19 +148,12 @@ def main():
                             except: pass
                 if not raw_odds: continue
 
-                boat_powers = {}
-                for i in range(1, 7):
-                    if i not in boats: continue
-                    f = boats[i]
-                    
-                    # 浜名湖・芦屋・尼崎・下関は前回の高回収率ロジックを適用
-                    if venue in prev_logic_venues:
-                        power = (f["nat_win"] * 0.2 + f["loc_win"] * 0.1 + f["class_val"] * 0.3 + f["mot_2ren"] * 0.4)
-                    else:
-                        # 他の6場は現在のロジックを適用
-                        power = (f["nat_win"] * 0.25 + f["loc_win"] * 0.15 + f["class_val"] * 0.3 + f["mot_2ren"] * 0.3)
-                    
-                    boat_powers[i] = max(power, 0.1)
+                if venue in group_a_venues:
+                    boat_powers = calculate_power_logic_a(boats)
+                elif venue in group_b_venues:
+                    boat_powers = calculate_power_logic_b(boats)
+                else:
+                    continue
 
                 total_p = sum(boat_powers.values())
                 boat_probs = {b: p / total_p for b, p in boat_powers.items()}
@@ -218,7 +226,7 @@ def main():
         if race_hit: venue_results[v]["hits"] += 1
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
-    print(f"\n=== 【指定10場限定カスタムモデル結果】 ===")
+    print(f"\n=== 【完全分離ロジック混成モデル結果】 ===")
     print(f"総購入レース数: {len(historical_races):,} レース")
     print(f"的中総数: {hit_count:,} 本")
     print(f"初期資金: ¥{int(initial_bankroll):,}")
