@@ -164,7 +164,8 @@ def main():
     od3_root = repo_root / "data" / "previews" / "od3"
     payouts_root = repo_root / "data" / "results" / "payouts"
     
-    target_venues = ["浜名湖", "芦屋", "尼崎", "下関", "戸田", "蒲郡"]
+    # 再び実績のある手堅い4場（浜名湖・芦屋・尼崎・下関）に戻してノイズをカット
+    target_venues = ["浜名湖", "芦屋", "尼崎", "下関"]
 
     payouts_dict = {}
     if payouts_root.exists():
@@ -196,7 +197,7 @@ def main():
                     rid = ""
                     for col in ["レースコード", "race_id", "id", "RACE_ID"]:
                         if col in df_od3.columns and pd.notna(row[col]):
-                            rid = str(row[col]).strip(); break
+                            rid = str(row[col].strip()); break
                     
                     if not rid or rid not in payouts_dict or rid not in races_data:
                         continue
@@ -208,7 +209,7 @@ def main():
 
                     season = get_season_by_date(rid)
                     volatility = float(row.get("volatility", 1.5))
-                    if volatility < 1.1: continue
+                    if volatility < 1.2: continue  # ボラティリティのハードルを少し戻す
 
                     boats = races_data[rid]
                     sui = sui_data.get(rid, {"wave_height": 1.0})
@@ -280,7 +281,8 @@ def main():
                     for k, p in comb_probs.items():
                         if k in raw_odds:
                             odds_val = raw_odds[k]
-                            if 15.0 <= odds_val <= 80.0 and p >= 0.015:
+                            # 【変更】オッズ範囲を20倍〜60倍に設定（広すぎず狭すぎない中穴狙い）
+                            if 20.0 <= odds_val <= 60.0 and p >= 0.02:
                                 target_odds_combos[k] = p * odds_val
 
                     if len(target_odds_combos) < 2: continue
@@ -350,7 +352,6 @@ def main():
         venue_results[v]["investment"] += race_investment
         venue_results[v]["payout"] += race_payout
 
-        # ドローダウンの計算・更新
         if current_bankroll > peak_bankroll:
             peak_bankroll = current_bankroll
         
@@ -364,7 +365,7 @@ def main():
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
 
-    print(f"\n=== 【バランス調整モデル結果（最大ドローダウン追加）】 ===")
+    print(f"\n=== 【4場特化・中穴バランスモデル結果】 ===")
     print(f"総購入レース数: {len(historical_races):,} レース")
     print(f"的中総数: {hit_count:,} 本")
     print("----------------------------------------")
