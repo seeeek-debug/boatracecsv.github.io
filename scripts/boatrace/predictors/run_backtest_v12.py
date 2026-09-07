@@ -205,8 +205,8 @@ def main():
                     season = get_season_by_date(rid)
                     volatility = float(row.get("volatility", 1.5))
                     
-                    # --- ボラティリティを逆に上げる（1.5未満の堅いレースを外して、荒れるレースだけ狙う） ---
-                    if volatility < 1.5: continue
+                    # --- ボラティリティ1.9以上に設定 ---
+                    if volatility < 1.9: continue
 
                     boats = races_data[rid]
                     sui = sui_data.get(rid, {"wave_height": 1.0})
@@ -262,7 +262,8 @@ def main():
                                 k = f"{h1}-{h2}-{h3}"
                                 if k in raw_odds:
                                     odds_val = raw_odds[k]
-                                    if 20.0 <= odds_val <= 60.0:
+                                    # --- オッズの制限を 50〜150倍 に引き上げ ---
+                                    if 50.0 <= odds_val <= 150.0:
                                         combo_score = boat_powers[h1] * 2.0 + boat_powers[h2] * 1.0 + boat_powers[h3] * 0.5
                                         candidates.append((k, odds_val, combo_score))
 
@@ -344,7 +345,7 @@ def main():
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
 
-    print(f"\n=== 【荒れるレース狙い版 (ボル1.5以上・オッズ20~60倍・3点)】 ===")
+    print(f"\n=== 【高ボラティリティ＆超高オッズ狙い版 (ボル1.9以上・オッズ50~150倍・3点)】 ===")
     print(f"総購入レース数: {len(historical_races):,} レース")
     print(f"的中総数: {hit_count:,} 本")
     print("----------------------------------------")
