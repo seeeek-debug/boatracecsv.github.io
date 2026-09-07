@@ -208,14 +208,14 @@ def main():
 
                     season = get_season_by_date(rid)
                     volatility = float(row.get("volatility", 1.5))
-                    if volatility < 1.0: continue  # ボラティリティのハードルを現実的に緩和
+                    if volatility < 1.5: continue
 
                     boats = races_data[rid]
                     sui = sui_data.get(rid, {"wave_height": 1.0})
                     ex = ex_data.get(rid, {})
 
                     wave = sui["wave_height"]
-                    if wave > 15.0: continue
+                    if wave > 10.0: continue
                     rough_factor = 1.0 + (max(0.0, wave - 5.0) * 0.008)
 
                     default_weights = {1: 7.0, 2: 5.0, 3: 5.0, 4: 4.8, 5: 4.5, 6: 3.0}
@@ -280,8 +280,8 @@ def main():
                     for k, p in comb_probs.items():
                         if k in raw_odds:
                             odds_val = raw_odds[k]
-                            # 【修正】オッズ範囲を15倍〜50倍、確率の足切りを p >= 0.01 に緩和してレース数を確保
-                            if 15.0 <= odds_val <= 50.0 and p >= 0.01:
+                            # 【4場特化・中穴バランスモデルの厳選条件】
+                            if 20.0 <= odds_val <= 40.0 and p >= 0.02:
                                 target_odds_combos[k] = p * odds_val
 
                     if len(target_odds_combos) < 2: continue
@@ -364,7 +364,7 @@ def main():
 
     roi = (total_payout / total_investment * 100) if total_investment > 0 else 0.0
 
-    print(f"\n=== 【4場特化・適正オッズ帯モデル結果】 ===")
+    print(f"\n=== 【4場特化・中穴バランスモデル（厳選版）結果】 ===")
     print(f"総購入レース数: {len(historical_races):,} レース")
     print(f"的中総数: {hit_count:,} 本")
     print("----------------------------------------")
