@@ -179,52 +179,55 @@ def evaluate_relative_from_past_exhibition(val1, val2, val3, df_past_exh, motor_
         except Exception:
             pass
 
-    # スコアベースの算出（10段階評価用：1.0〜10.0のスケール）
-    score = 5.0  
+    # 出足スコアの算出 (1〜10)
+    deashi_base = 5.0
+    if motor_2ren >= 50.0: deashi_base += 2.5
+    elif motor_2ren >= 45.0: deashi_base += 1.8
+    elif motor_2ren >= 40.0: deashi_base += 1.0
+    elif motor_2ren >= 35.0: deashi_base += 0.5
+    elif motor_2ren < 30.0: deashi_base -= 1.0
 
-    # モーター2連対率による基礎点 (20%〜60%をベースに調整)
-    if motor_2ren >= 50.0: score += 3.0
-    elif motor_2ren >= 45.0: score += 2.2
-    elif motor_2ren >= 40.0: score += 1.5
-    elif motor_2ren >= 35.0: score += 0.8
-    elif motor_2ren >= 30.0: score += 0.0
-    else: score -= 1.0
+    if win_rate >= 7.5: deashi_base += 1.5
+    elif win_rate >= 6.5: deashi_base += 1.0
+    elif win_rate >= 5.5: deashi_base += 0.5
+    elif win_rate < 4.5: deashi_base -= 1.0
 
-    # 勝率による補正
-    if win_rate >= 7.5: score += 1.5
-    elif win_rate >= 6.5: score += 1.0
-    elif win_rate >= 5.5: score += 0.5
-    elif win_rate < 4.5: score -= 1.0
+    # 伸びスコアの算出 (1〜10)
+    nobi_base = 5.0
+    if motor_2ren >= 50.0: nobi_base += 2.5
+    elif motor_2ren >= 45.0: nobi_base += 1.8
+    elif motor_2ren >= 40.0: nobi_base += 1.0
+    elif motor_2ren >= 35.0: nobi_base += 0.5
+    elif motor_2ren < 30.0: nobi_base -= 1.0
 
-    # 展示タイム等の評価（値がある場合）
-    deashi_score = 0
-    if val2 > 0:
-        if val2 <= mean_val2 - 0.05: deashi_score += 2
-        elif val2 <= mean_val2: deashi_score += 1
-    if val1 > 0:
-        if val1 <= mean_val1 - 0.3: deashi_score += 2
-        elif val1 <= mean_val1: deashi_score += 1
+    if win_rate >= 7.5: nobi_base += 1.5
+    elif win_rate >= 6.5: nobi_base += 1.0
+    elif win_rate >= 5.5: nobi_base += 0.5
+    elif win_rate < 4.5: nobi_base -= 1.0
 
-    nobi_score = 0
-    if val3 > 0:
-        if val3 <= mean_val3 - 0.04: nobi_score += 2
-        elif val3 <= mean_val3: nobi_score += 1
+    # 展示タイムによる微調整
+    if val2 > 0 and val2 <= mean_val2 - 0.05: deashi_base += 1.5
+    elif val2 > 0 and val2 <= mean_val2: deashi_base += 0.8
+    if val1 > 0 and val1 <= mean_val1 - 0.3: deashi_base += 1.5
 
-    score += (deashi_score * 0.3) + (nobi_score * 0.3)
+    if val3 > 0 and val3 <= mean_val3 - 0.04: nobi_base += 1.5
+    elif val3 > 0 and val3 <= mean_val3: nobi_base += 0.8
 
-    # 1〜10の範囲に丸める
-    final_score = int(np.clip(round(score), 1, 10))
+    deashi_score = int(np.clip(round(deashi_base), 1, 10))
+    nobi_score = int(np.clip(round(nobi_base), 1, 10))
+    
+    # 総合機力評価
+    overall_base = (deashi_score + nobi_score) / 2
+    overall_score = int(np.clip(round(overall_base), 1, 10))
 
-    # 10段階評価の表示を作成 (★10 〜 ★1)
-    rank_stars = "★" * final_score + "☆" * (10 - final_score)
-    overall_rank = f"【{final_score} / 10】 {rank_stars}"
+    rank_stars = "★" * overall_score + "☆" * (10 - overall_score)
+    overall_rank = f"【{overall_score} / 10】 {rank_stars}"
 
-    # 出足・伸びの個別評価（重複絵文字を修正）
-    deashi_eval = "超抜" if deashi_score >= 2 else ("良" if deashi_score >= 1 else "平")
-    nobi_eval = "強力" if nobi_score >= 2 else ("良好" if nobi_score >= 1 else "標準")
+    deashi_eval = f"【{deashi_score}/10】"
+    nobi_eval = f"【{nobi_score}/10】"
 
-    if nobi_score > deashi_score: foot_type = "伸び足型"
-    elif deashi_score > nobi_score: foot_type = "出足型"
+    if nobi_score > deashi_score + 1: foot_type = "伸び足型"
+    elif deashi_score > nobi_score + 1: foot_type = "出足型"
     else: foot_type = "バランス型"
 
     return overall_rank, foot_type, deashi_eval, nobi_eval
@@ -332,7 +335,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
                 "st": float(row_race.get(f"艇{b_no}_全国平均ST", 0.15))
             })
 
-            # 見やすさを改善したレイアウト
             eval_detail = (
                 f"**#{b_no} {r_name}** ({r_class})  |  機力評価: {overall_rank}\n"
                 f"└ 勝率: **{win_rate:.2f}**  /  出足: {deashi_eval}  /  伸び: {nobi_eval} ({foot_type})\n"
