@@ -146,48 +146,79 @@ def load_race_card(venue, venue_code, year, month, day_str):
         pass
     return None, path
 
-def load_original_exhibition(year, month, day_str):
-    # 修正: 会場別ではなく日別のCSVファイル（例: 02.csv）を取得する
-    path = f"data/previews/original_exhibition/{year}/{month}/{day_str}.csv"
-    df = fetch_github_csv(path)
-    return df
+def load_past_3months_original_exhibition(venue_code, year, month):
+    dfs = []
+    dt = datetime(int(year), int(month), 1)
+    for _ in range(3):
+        y = dt.strftime("%Y")
+        m = dt.strftime("%m")
+        path = f"data/previews/original_exhibition/{y}/{m}/{venue_code}.csv"
+        df = fetch_github_csv(path)
+        if df is not None and not df.empty:
+            dfs.append(df)
+        dt = (dt - timedelta(days=1)).replace(day=1)
+        
+    if dfs:
+        return pd.concat(dfs, ignore_index=True)
+    return None
 
-def evaluate_from_exhibition_times(motor_2ren, val1, val2, val3):
+def evaluate_relative_from_past_exhibition(val1, val2, val3, df_past_exh, motor_2ren):
+    mean_val1, mean_val2, mean_val3 = 37.0, 5.50, 6.72
+    if df_past_exh is not None and not df_past_exh.empty:
+        try:
+            v1_cols = [c for c in df_past_exh.columns if "値1" in c]
+            v2_cols = [c for c in df_past_exh.columns if "値2" in c]
+            v3_cols = [c for c in df_past_exh.columns if "値3" in c]
+            
+            if v1_cols:
+                mean_val1 = df_past_exh[v1_cols].astype(float).replace(0, np.nan).mean().mean()
+            if v2_cols:
+                mean_val2 = df_past_exh[v2_cols].astype(float).replace(0, np.nan).mean().mean()
+            if v3_cols:
+                mean_val3 = df_past_exh[v3_cols].astype(float).replace(0, np.nan).mean().mean()
+        except Exception:
+            pass
+
     deashi_score = 0
     if val2 > 0:
-        if val2 <= 5.45: deashi_score += 2
-        elif val2 <= 5.55: deashi_score += 1
+        if val2 <= mean_val2 - 0.05: deashi_score += 2
+        elif val2 <= mean_val2: deashi_score += 1
     if val1 > 0:
-        if val1 <= 36.8: deashi_score += 2
-        elif val1 <= 37.3: deashi_score += 1
+        if val1 <= mean_val1 - 0.3: deashi_score += 2
+        elif val1 <= mean_val1: deashi_score += 1
 
-    if deashi_score >= 3: deashi_eval = "🔥S"
-    elif deashi_score >= 2: deashi_eval = "⭐A+"
-    elif deashi_score >= 1: deashi_eval = "✨A"
-    else: deashi_eval = "⚖️B+"
+    if val1 == 0.0 and val2 == 0.0:
+        if motor_2ren >= 45.0: deashi_score += 2
+        elif motor_2ren >= 38.0: deashi_score += 1
+
+    if deashi_score >= 3: deashi_eval = "🔥S (3ヶ月平均比 超抜)"
+    elif deashi_score >= 2: deashi_eval = "⭐A+ (平均以上)"
+    elif deashi_score >= 1: deashi_eval = "✨A (標準上位)"
+    else: deashi_eval = "⚖️B+ (平均並み)"
 
     nobi_score = 0
     if val3 > 0:
-        if val3 <= 6.65: nobi_score += 2
-        elif val3 <= 6.78: nobi_score += 1
+        if val3 <= mean_val3 - 0.04: nobi_score += 2
+        elif val3 <= mean_val3: nobi_score += 1
+        
+    if val3 == 0.0 and motor_2ren >= 40.0:
+        nobi_score += 1
 
-    if nobi_score >= 2: nobi_eval = "🔥S"
-    elif nobi_score >= 1: nobi_eval = "⭐A+"
-    else: nobi_eval = "✨A"
+    if nobi_score >= 2: nobi_eval = "🔥S (伸び強力)"
+    elif nobi_score >= 1: nobi_eval = "⭐A+ (直線良好)"
+    else: nobi_eval = "✨A (標準)"
 
-    time_score = deashi_score + nobi_score
-    overall_score = 0
-    if motor_2ren >= 45.0: overall_score += 3
-    elif motor_2ren >= 38.0: overall_score += 2
-    elif motor_2ren >= 32.0: overall_score += 1
+    overall_score = deashi_score + nobi_score
+    if motor_2ren >= 45.0: overall_score += 2
+    elif motor_2ren >= 38.0: overall_score += 1
 
-    overall_score += time_score
-
+    # 6段階評価 (S, A+, A, B+, B, C)
     if overall_score >= 6: overall_rank = "🔥S"
-    elif overall_score >= 4: overall_rank = "⭐A+"
-    elif overall_score >= 3: overall_rank = "✨A"
-    elif overall_score >= 2: overall_rank = "⚖️B+"
-    else: overall_rank = "🔄B"
+    elif overall_score >= 5: overall_rank = "⭐A+"
+    elif overall_score >= 4: overall_rank = "✨A"
+    elif overall_score >= 3: overall_rank = "⚖️B+"
+    elif overall_score >= 2: overall_rank = "🔄B"
+    else: overall_rank = "⚠️C"
 
     if nobi_score > deashi_score: foot_type = "🚀伸び足特化型"
     elif deashi_score > nobi_score: foot_type = "🌀出足・回り足型"
@@ -239,10 +270,11 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
     in_rate = race_course_rate.get(1, 50.0)
 
     df_card, _ = load_race_card(venue, venue_code, year, month, day_str)
-    df_exh = load_original_exhibition(year, month, day_str)
+    df_past_exh = load_past_3months_original_exhibition(venue_code, year, month)
 
     summary_text = f"🏟️ **【{venue}場 R{r}】 AIレース分析 ({date_str})**\n"
-    summary_text += f"📝 水面特性: *{tendency}* (1コース勝率: {in_rate:.1f}%)\n\n"
+    summary_text += f"📝 水面特性: *{tendency}* (1コース勝率: {in_rate:.1f}%)\n"
+    summary_text += f"📊 評価基準: 過去3ヶ月間のオリジナル展示平均値と比較した6段階相対評価\n\n"
     
     if df_card is None or df_card.empty:
         return summary_text + f"⚠️ 出走表データが取得できませんでした。"
@@ -257,20 +289,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
     else:
         if len(df_card) >= r:
             row_race = df_card.iloc[r-1]
-
-    # 日別展示データから「該当会場」と「該当レース」の行を絞り込む
-    row_exh = None
-    if df_exh is not None and not df_exh.empty:
-        venue_col = next((c for c in df_exh.columns if "場" in c or "stadium" in c or "venue" in c), None)
-        exh_r_col = next((c for c in df_exh.columns if "レース回" in c or "race" in c), None)
-        
-        if venue_col and exh_r_col:
-            matched_exh = df_exh[
-                df_exh[venue_col].astype(str).str.contains(venue, na=False) & 
-                df_exh[exh_r_col].astype(str).str.contains(f"{r}R|{r}", na=False)
-            ]
-            if not matched_exh.empty:
-                row_exh = matched_exh.iloc[0]
 
     racer_evals = []
     racer_structs = []
@@ -296,28 +314,10 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
             except:
                 pass
 
-            try:
-                avg_st = float(row_race.get(f"艇{b_no}_全国平均ST", 0.15))
-            except:
-                avg_st = 0.15
-
             val1, val2, val3 = 0.0, 0.0, 0.0
-            if row_exh is not None:
-                try:
-                    val1 = float(row_exh.get(f"艇{b_no}_値1", 0.0))
-                except:
-                    pass
-                try:
-                    val2 = float(row_exh.get(f"艇{b_no}_値2", 0.0))
-                except:
-                    pass
-                try:
-                    val3 = float(row_exh.get(f"艇{b_no}_値3", 0.0))
-                except:
-                    pass
-
-            overall_rank, foot_type, deashi_eval, nobi_eval = evaluate_from_exhibition_times(
-                motor_2ren, val1, val2, val3
+            
+            overall_rank, foot_type, deashi_eval, nobi_eval = evaluate_relative_from_past_exhibition(
+                val1, val2, val3, df_past_exh, motor_2ren
             )
 
             racer_structs.append({
@@ -325,13 +325,13 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
                 "r_name": r_name,
                 "win_rate": win_rate,
                 "motor_2ren": motor_2ren,
-                "st": avg_st
+                "st": float(row_race.get(f"艇{b_no}_全国平均ST", 0.15))
             })
 
             eval_detail = (
-                f"• **#{b_no} {r_name}** ({r_class}): 機力{overall_rank} ({foot_type})\n"
+                f"• **#{b_no} {r_name}** ({r_class}): 機力評価 {overall_rank} ({foot_type})\n"
                 f"   └ 勝率:{win_rate:.2f} | 出足:{deashi_eval} / 伸び:{nobi_eval}\n"
-                f"   └ M#{motor_num} (2連:{motor_2ren:.1f}%) 展示[1周:{val1:.2f} / 回り足:{val2:.2f} / 直線:{val3:.2f}]"
+                f"   └ モーター M#{motor_num} (2連対率:{motor_2ren:.1f}%)"
             )
             racer_evals.append(eval_detail)
 
