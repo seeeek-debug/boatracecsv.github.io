@@ -146,8 +146,9 @@ def load_race_card(venue, venue_code, year, month, day_str):
         pass
     return None, path
 
-def load_original_exhibition(venue_code, year, month):
-    path = f"data/previews/original_exhibition/{year}/{month}/{venue_code}.csv"
+def load_original_exhibition(year, month, day_str):
+    # 修正: 会場別ではなく日別のCSVファイル（例: 02.csv）を取得する
+    path = f"data/previews/original_exhibition/{year}/{month}/{day_str}.csv"
     df = fetch_github_csv(path)
     return df
 
@@ -209,25 +210,20 @@ def generate_race_tactical_advice(racer_data_list, in_rate):
 
     strong_outs = [d for d in racer_data_list[1:] if d["win_rate"] >= 6.0 or d["motor_2ren"] >= 45.0]
 
-    # 1. 1号艇信頼度・ピンチ判定
     if b1_win <= 4.0 or b1_motor <= 30.0:
         target_boat = strong_outs[0]["boat_no"] if strong_outs else "2"
         return f"【⚠️ 1号艇ピンチ・波乱警戒】 1号艇の勝率・機力に不安あり。**{target_boat}号艇**の逆転・差し抜けに要警戒！"
     
-    # 2. 2号艇の差し抜け展開
     elif boat2["win_rate"] >= 5.8 and boat2["motor_2ren"] >= 38.0:
         return f"【🎯2号艇の差し鋭い】 2号艇({boat2['r_name']})の勝率・機力が高く、1号艇の懐を突く差し抜け・逆転展開に要注目！"
 
-    # 3. 4号艇のまくり展開
     elif boat4["win_rate"] >= 6.0 and boat4["motor_2ren"] >= 38.0:
         return f"【🚀4号艇のまくり一撃警戒】 4号艇({boat4['r_name']})の機力・実力が高く、カドからの自在なまくり・全速攻勢に注意！"
 
-    # 4. 5・6号艇の展開・大外強襲判定（選手の実力とモーター機力を加味）
     elif (boat5["win_rate"] >= 5.5 or boat6["win_rate"] >= 5.5) and (boat5["motor_2ren"] >= 40.0 or boat6["motor_2ren"] >= 40.0):
         best_out = boat5 if (boat5["win_rate"] + boat5["motor_2ren"]*0.1) >= (boat6["win_rate"] + boat6["motor_2ren"]*0.1) else boat6
         return f"【🌐外枠(5・6号艇)の展開突き警戒】 アウト勢ながら実力・機力上位の**{best_out['boat_no']}号艇({best_out['r_name']})**が展開を突いて浮上するシーンに注意！"
 
-    # 5. イン鉄壁
     elif in_rate >= 55.0 and b1_win >= 5.5:
         return "【🛡️固め・イン鉄壁】 1号艇のイン逃げ信頼度高。相手探し（2・3号艇）が主軸。"
     
@@ -243,7 +239,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
     in_rate = race_course_rate.get(1, 50.0)
 
     df_card, _ = load_race_card(venue, venue_code, year, month, day_str)
-    df_exh = load_original_exhibition(venue_code, year, month)
+    df_exh = load_original_exhibition(year, month, day_str)
 
     summary_text = f"🏟️ **【{venue}場 R{r}】 AIレース分析 ({date_str})**\n"
     summary_text += f"📝 水面特性: *{tendency}* (1コース勝率: {in_rate:.1f}%)\n\n"
@@ -262,11 +258,17 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
         if len(df_card) >= r:
             row_race = df_card.iloc[r-1]
 
+    # 日別展示データから「該当会場」と「該当レース」の行を絞り込む
     row_exh = None
     if df_exh is not None and not df_exh.empty:
+        venue_col = next((c for c in df_exh.columns if "場" in c or "stadium" in c or "venue" in c), None)
         exh_r_col = next((c for c in df_exh.columns if "レース回" in c or "race" in c), None)
-        if exh_r_col:
-            matched_exh = df_exh[df_exh[exh_r_col].astype(str).str.contains(f"{r}R|{r}")]
+        
+        if venue_col and exh_r_col:
+            matched_exh = df_exh[
+                df_exh[venue_col].astype(str).str.contains(venue, na=False) & 
+                df_exh[exh_r_col].astype(str).str.contains(f"{r}R|{r}", na=False)
+            ]
             if not matched_exh.empty:
                 row_exh = matched_exh.iloc[0]
 
