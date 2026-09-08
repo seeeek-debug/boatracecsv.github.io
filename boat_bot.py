@@ -112,39 +112,6 @@ def load_race_course_win_rates():
                 continue
     return venue_race_rates
 
-def load_historical_results_analysis(venue_code, year):
-    path = f"data/results/realtime/{year}/{venue_code}.csv"
-    df = fetch_github_csv(path)
-    if df is None or df.empty:
-        return None
-    total_races = len(df)
-    if total_races == 0:
-        return None
-    win_counts = {i: 0 for i in range(1, 7)}
-    kimarite_counts = {}
-    col_1st_b = next((c for c in df.columns if "1着" in c and ("艇番" in c or "号艇" in c)), None)
-    col_kimarite = next((c for c in df.columns if "決まり手" in c), None)
-    for _, row in df.iterrows():
-        if col_1st_b:
-            try:
-                b = int(row[col_1st_b])
-                if b in win_counts:
-                    win_counts[b] += 1
-            except:
-                pass
-        if col_kimarite:
-            km = str(row[col_kimarite]).strip()
-            if km and km != "nan":
-                kimarite_counts[km] = kimarite_counts.get(km, 0) + 1
-    win_rates = {k: (v / total_races) * 100 for k, v in win_counts.items()}
-    sorted_kimarite = sorted(kimarite_counts.items(), key=lambda x: x[1], reverse=True)
-    top_kimarite = ", ".join([f"{k}({v}回)" for k, v in sorted_kimarite[:3]]) if sorted_kimarite else "データなし"
-    return {
-        "total_races": total_races,
-        "win_rates": win_rates,
-        "top_kimarite": top_kimarite
-    }
-
 def load_race_card(venue, venue_code, year, month, day_str):
     path = f"data/programs/race_cards/{year}/{month}/{day_str}.csv"
     df = fetch_github_csv(path)
@@ -179,105 +146,19 @@ def load_race_card(venue, venue_code, year, month, day_str):
         pass
     return None, path
 
-def load_original_exhibition_stats(venue_code, year, month):
+def load_original_exhibition(venue_code, year, month):
     path = f"data/previews/original_exhibition/{year}/{month}/{venue_code}.csv"
     df = fetch_github_csv(path)
-    if df is None or df.empty:
-        path = f"data/programs/motor_stats/{year}/{month}/{venue_code}.csv"
-        df = fetch_github_csv(path)
-        
-    exhibition_dict = {}
-    if df is not None and not df.empty:
-        cols = df.columns
-        m_col = next((c for c in cols if any(k in c for k in ["モーター番号", "モーター", "motor", "ﾓｰﾀｰ"])), None)
-        rate_col = next((c for c in cols if any(k in c for k in ["2連対率", "2連率", "２連率"])), None)
-        win_col = next((c for c in cols if "勝率" in c), None)
-        
-        # タイム系カラムを柔軟に部分一致で検出（艇ごとのカラムや一般カラムに対応）
-        for _, row in df.iterrows():
-            try:
-                m_num = 0
-                if m_col and pd.notna(row[m_col]):
-                    val_str = ''.join(filter(str.isdigit, str(row[m_col])))
-                    if val_str:
-                        m_num = int(val_str)
-                if m_num == 0:
-                    continue
-                
-                rate = float(row[rate_col]) if rate_col and rate_col in df.columns and pd.notna(row[rate_col]) else 0.0
-                w_rate = float(row[win_col]) if win_col and win_col in df.columns and pd.notna(row[win_col]) else 0.0
-                
-                # 各種タイムの取得（列名にキーワードが含まれるものを探す）
-                avg_wari = 0.0
-                avg_choku = 0.0
-                avg_tenji = 0.0
-                avg_1shu = 0.0
-                
-                for c in cols:
-                    val = row[c]
-                    if pd.isna(val):
-                        continue
-                    try:
-                        f_val = float(val)
-                    except:
-                        continue
-                        
-                    if any(k in c for k in ["回り足", "まわり足", "回り", "まわり"]):
-                        if 1.0 <= f_val <= 3.0: avg_wari = f_val
-                    elif any(k in c for k in ["直線タイム", "直線"]):
-                        if 5.0 <= f_val <= 8.0: avg_choku = f_val
-                    elif any(k in c for k in ["展示タイム", "展示"]):
-                        if 6.0 <= f_val <= 8.0: avg_tenji = f_val
-                    elif any(k in c for k in ["1周", "一周", "１周", "一週"]):
-                        if 30.0 <= f_val <= 45.0: avg_1shu = f_val
+    return df
 
-                exhibition_dict[m_num] = {
-                    "2ren": rate,
-                    "win": w_rate,
-                    "avg_wari": avg_wari,
-                    "avg_choku": avg_choku,
-                    "avg_tenji": avg_tenji,
-                    "avg_1shu": avg_1shu
-                }
-            except Exception:
-                continue
-                
-    # もし上記でうまく取れない場合、艇番号ごとのカラム（例: 艇1_回り足 など）を直接走査するフォールバック
-    if not exhibition_dict and df is not None and not df.empty:
-        for _, row in df.iterrows():
-            try:
-                for b in range(1, 7):
-                    m_key = f"艇{b}_モーター番号"
-                    if m_key in df.columns and pd.notna(row[m_key]):
-                        m_num = int(''.join(filter(str.isdigit, str(row[m_key]))))
-                        if m_num > 0:
-                            rate = float(row.get(f"艇{b}_モーター2連対率", 0.0))
-                            avg_wari = float(row.get(f"艇{b}_回り足タイム", row.get(f"艇{b}_回り足", 0.0)))
-                            avg_choku = float(row.get(f"艇{b}_直線タイム", row.get(f"艇{b}_直線", 0.0)))
-                            avg_tenji = float(row.get(f"艇{b}_展示タイム", row.get(f"艇{b}_展示", 0.0)))
-                            avg_1shu = float(row.get(f"艇{b}_1周タイム", row.get(f"艇{b}_一周タイム", 0.0)))
-                            
-                            exhibition_dict[m_num] = {
-                                "2ren": rate,
-                                "win": 0.0,
-                                "avg_wari": avg_wari,
-                                "avg_choku": avg_choku,
-                                "avg_tenji": avg_tenji,
-                                "avg_1shu": avg_1shu
-                            }
-            except Exception:
-                continue
-
-    return exhibition_dict
-
-def evaluate_from_exhibition_times(motor_2ren, avg_wari, avg_choku, avg_tenji, avg_1shu):
+def evaluate_from_exhibition_times(motor_2ren, val1, val2, val3):
     deashi_score = 0
-    if avg_wari > 0:
-        if avg_wari <= 1.48: deashi_score += 2
-        elif avg_wari <= 1.52: deashi_score += 1
-    if avg_1shu > 0:
-        if avg_1shu <= 36.5: deashi_score += 2
-        elif avg_1shu <= 37.0: deashi_score += 1
+    if val2 > 0:
+        if val2 <= 5.45: deashi_score += 2
+        elif val2 <= 5.55: deashi_score += 1
+    if val1 > 0:
+        if val1 <= 36.8: deashi_score += 2
+        elif val1 <= 37.3: deashi_score += 1
 
     if deashi_score >= 3: deashi_eval = "🔥S"
     elif deashi_score >= 2: deashi_eval = "⭐A+"
@@ -285,17 +166,13 @@ def evaluate_from_exhibition_times(motor_2ren, avg_wari, avg_choku, avg_tenji, a
     else: deashi_eval = "⚖️B+"
 
     nobi_score = 0
-    if avg_choku > 0:
-        if avg_choku <= 6.18: nobi_score += 2
-        elif avg_choku <= 6.23: nobi_score += 1
-    if avg_tenji > 0:
-        if avg_tenji <= 6.68: nobi_score += 2
-        elif avg_tenji <= 6.72: nobi_score += 1
+    if val3 > 0:
+        if val3 <= 6.65: nobi_score += 2
+        elif val3 <= 6.78: nobi_score += 1
 
-    if nobi_score >= 3: nobi_eval = "🔥S"
-    elif nobi_score >= 2: nobi_eval = "⭐A+"
-    elif nobi_score >= 1: nobi_eval = "✨A"
-    else: nobi_eval = "⚖️B+"
+    if nobi_score >= 2: nobi_eval = "🔥S"
+    elif nobi_score >= 1: nobi_eval = "⭐A+"
+    else: nobi_eval = "✨A"
 
     time_score = deashi_score + nobi_score
     overall_score = 0
@@ -309,8 +186,7 @@ def evaluate_from_exhibition_times(motor_2ren, avg_wari, avg_choku, avg_tenji, a
     elif overall_score >= 4: overall_rank = "⭐A+"
     elif overall_score >= 3: overall_rank = "✨A"
     elif overall_score >= 2: overall_rank = "⚖️B+"
-    elif overall_score >= 1: overall_rank = "🔄B"
-    else: overall_rank = "⚠️C"
+    else: overall_rank = "🔄B"
 
     if nobi_score > deashi_score: foot_type = "🚀伸び足特化型"
     elif deashi_score > nobi_score: foot_type = "🌀出足・回り足型"
@@ -323,157 +199,196 @@ def generate_race_tactical_advice(racer_data_list, in_rate):
         return "【⚡展開混戦】データ不足のためフラットな評価"
 
     boat1 = racer_data_list[0]
+    boat2 = racer_data_list[1]
+    boat4 = racer_data_list[3]
+    boat5 = racer_data_list[4]
+    boat6 = racer_data_list[5]
+
     b1_win = boat1["win_rate"]
     b1_motor = boat1["motor_2ren"]
 
     strong_outs = [d for d in racer_data_list[1:] if d["win_rate"] >= 6.0 or d["motor_2ren"] >= 45.0]
 
+    # 1. 1号艇信頼度・ピンチ判定
     if b1_win <= 4.0 or b1_motor <= 30.0:
         target_boat = strong_outs[0]["boat_no"] if strong_outs else "2"
         return f"【⚠️ 1号艇ピンチ・波乱警戒】 1号艇の勝率・機力に不安あり。**{target_boat}号艇**の逆転・差し抜けに要警戒！"
     
-    elif racer_data_list[2]["win_rate"] >= 6.5 and racer_data_list[2]["st"] <= 0.14:
-        return "【🌀3号艇のセンター攻め警戒】 3号艇の勝率が高く、全速まくり・まくり差し炸裂の展開に注意！"
-    
-    elif racer_data_list[3]["win_rate"] >= 6.5:
-        return "【🌀4号艇のカド自在戦警戒】 4号艇の実力が高く、カドからのダッシュ攻勢に要注目。"
-    
+    # 2. 2号艇の差し抜け展開
+    elif boat2["win_rate"] >= 5.8 and boat2["motor_2ren"] >= 38.0:
+        return f"【🎯2号艇の差し鋭い】 2号艇({boat2['r_name']})の勝率・機力が高く、1号艇の懐を突く差し抜け・逆転展開に要注目！"
+
+    # 3. 4号艇のまくり展開
+    elif boat4["win_rate"] >= 6.0 and boat4["motor_2ren"] >= 38.0:
+        return f"【🚀4号艇のまくり一撃警戒】 4号艇({boat4['r_name']})の機力・実力が高く、カドからの自在なまくり・全速攻勢に注意！"
+
+    # 4. 5・6号艇の展開・大外強襲判定（選手の実力とモーター機力を加味）
+    elif (boat5["win_rate"] >= 5.5 or boat6["win_rate"] >= 5.5) and (boat5["motor_2ren"] >= 40.0 or boat6["motor_2ren"] >= 40.0):
+        best_out = boat5 if (boat5["win_rate"] + boat5["motor_2ren"]*0.1) >= (boat6["win_rate"] + boat6["motor_2ren"]*0.1) else boat6
+        return f"【🌐外枠(5・6号艇)の展開突き警戒】 アウト勢ながら実力・機力上位の**{best_out['boat_no']}号艇({best_out['r_name']})**が展開を突いて浮上するシーンに注意！"
+
+    # 5. イン鉄壁
     elif in_rate >= 55.0 and b1_win >= 5.5:
         return "【🛡️固め・イン鉄壁】 1号艇のイン逃げ信頼度高。相手探し（2・3号艇）が主軸。"
     
     else:
         return "【⚡差し・まくり交錯】 互角のメンバー構成。第1ターンマークの攻防に注目。"
 
-def heavy_calculation(venue, venue_code, year, month, day_str, date_str):
+def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date_str, r):
     all_race_rates = load_race_course_win_rates()
     venue_rates_by_race = all_race_rates.get(venue, {})
     tendency = VENUE_TENDENCIES.get(venue, "標準水面")
     
-    history_analysis = load_historical_results_analysis(venue_code, year)
-    df_card, _ = load_race_card(venue, venue_code, year, month, day_str)
-    exhibition_stats = load_original_exhibition_stats(venue_code, year, month)
+    race_course_rate = venue_rates_by_race.get(r, {1: 50.0})
+    in_rate = race_course_rate.get(1, 50.0)
 
-    summary_text = f"🏟️ **【{venue}場】 展示評価・AIレース分析 ({date_str})**\n"
-    summary_text += f"📝 水面特性: *{tendency}*\n"
-    
-    if history_analysis:
-        wr = history_analysis["win_rates"]
-        summary_text += f"📈 **直近実績データ** (集計:{history_analysis['total_races']}R) 1ｺｰｽ:{wr.get(1, 0):.1f}% | 2ｺｰｽ:{wr.get(2, 0):.1f}% | 決まり手: {history_analysis['top_kimarite']}\n"
-    
-    summary_text += "\n"
+    df_card, _ = load_race_card(venue, venue_code, year, month, day_str)
+    df_exh = load_original_exhibition(venue_code, year, month)
+
+    summary_text = f"🏟️ **【{venue}場 R{r}】 AIレース分析 ({date_str})**\n"
+    summary_text += f"📝 水面特性: *{tendency}* (1コース勝率: {in_rate:.1f}%)\n\n"
     
     if df_card is None or df_card.empty:
         return summary_text + f"⚠️ 出走表データが取得できませんでした。"
 
     col_r_num = "レース回" if "レース回" in df_card.columns else ("レース" if "レース" in df_card.columns else None)
     
-    for r in range(1, 13):
-        race_course_rate = venue_rates_by_race.get(r, {1: 50.0})
-        in_rate = race_course_rate.get(1, 50.0)
+    row_race = None
+    if col_r_num:
+        matched = df_card[df_card[col_r_num].astype(str).str.contains(f"{r}R|{r}")]
+        if not matched.empty:
+            row_race = matched.iloc[0]
+    else:
+        if len(df_card) >= r:
+            row_race = df_card.iloc[r-1]
 
-        racer_evals = []
-        racer_structs = []
-        
-        row_race = None
-        if col_r_num:
-            matched = df_card[df_card[col_r_num].astype(str).str.contains(f"{r}R|{r}")]
-            if not matched.empty:
-                row_race = matched.iloc[0]
-        else:
-            if len(df_card) >= r:
-                row_race = df_card.iloc[r-1]
+    row_exh = None
+    if df_exh is not None and not df_exh.empty:
+        exh_r_col = next((c for c in df_exh.columns if "レース回" in c or "race" in c), None)
+        if exh_r_col:
+            matched_exh = df_exh[df_exh[exh_r_col].astype(str).str.contains(f"{r}R|{r}")]
+            if not matched_exh.empty:
+                row_exh = matched_exh.iloc[0]
 
-        if row_race is not None:
-            for b_no in range(1, 7):
-                r_name = str(row_race.get(f"艇{b_no}_選手名", f"{b_no}号艇"))
-                r_class = str(row_race.get(f"艇{b_no}_級別", "B1"))
+    racer_evals = []
+    racer_structs = []
+    
+    if row_race is not None:
+        for b_no in range(1, 7):
+            r_name = str(row_race.get(f"艇{b_no}_選手名", f"{b_no}号艇"))
+            r_class = str(row_race.get(f"艇{b_no}_級別", "B1"))
+            
+            try:
+                win_rate = float(row_race.get(f"艇{b_no}_全国勝率", 0.0))
+            except:
+                win_rate = 0.0
                 
-                try:
-                    win_rate = float(row_race.get(f"艇{b_no}_全国勝率", 0.0))
-                except:
-                    win_rate = 0.0
-                    
-                try:
-                    motor_num = int(row_race.get(f"艇{b_no}_モーター番号", 0))
-                except:
-                    motor_num = 0
+            try:
+                motor_num = int(row_race.get(f"艇{b_no}_モーター番号", 0))
+            except:
+                motor_num = 0
 
-                motor_2ren = 0.0
+            motor_2ren = 0.0
+            try:
+                motor_2ren = float(row_race.get(f"艇{b_no}_モーター2連対率", 0.0))
+            except:
+                pass
+
+            try:
+                avg_st = float(row_race.get(f"艇{b_no}_全国平均ST", 0.15))
+            except:
+                avg_st = 0.15
+
+            val1, val2, val3 = 0.0, 0.0, 0.0
+            if row_exh is not None:
                 try:
-                    motor_2ren = float(row_race.get(f"艇{b_no}_モーター2連対率", 0.0))
+                    val1 = float(row_exh.get(f"艇{b_no}_値1", 0.0))
+                except:
+                    pass
+                try:
+                    val2 = float(row_exh.get(f"艇{b_no}_値2", 0.0))
+                except:
+                    pass
+                try:
+                    val3 = float(row_exh.get(f"艇{b_no}_値3", 0.0))
                 except:
                     pass
 
-                avg_wari, avg_choku, avg_tenji, avg_1shu = 0.0, 0.0, 0.0, 0.0
-                if motor_num in exhibition_stats:
-                    m_data = exhibition_stats[motor_num]
-                    if motor_2ren == 0.0:
-                        motor_2ren = m_data["2ren"]
-                    avg_wari = m_data["avg_wari"]
-                    avg_choku = m_data["avg_choku"]
-                    avg_tenji = m_data["avg_tenji"]
-                    avg_1shu = m_data["avg_1shu"]
+            overall_rank, foot_type, deashi_eval, nobi_eval = evaluate_from_exhibition_times(
+                motor_2ren, val1, val2, val3
+            )
 
-                try:
-                    avg_st = float(row_race.get(f"艇{b_no}_全国平均ST", 0.15))
-                except:
-                    avg_st = 0.15
+            racer_structs.append({
+                "boat_no": str(b_no),
+                "r_name": r_name,
+                "win_rate": win_rate,
+                "motor_2ren": motor_2ren,
+                "st": avg_st
+            })
 
-                overall_rank, foot_type, deashi_eval, nobi_eval = evaluate_from_exhibition_times(
-                    motor_2ren, avg_wari, avg_choku, avg_tenji, avg_1shu
-                )
+            eval_detail = (
+                f"• **#{b_no} {r_name}** ({r_class}): 機力{overall_rank} ({foot_type})\n"
+                f"   └ 勝率:{win_rate:.2f} | 出足:{deashi_eval} / 伸び:{nobi_eval}\n"
+                f"   └ M#{motor_num} (2連:{motor_2ren:.1f}%) 展示[1周:{val1:.2f} / 回り足:{val2:.2f} / 直線:{val3:.2f}]"
+            )
+            racer_evals.append(eval_detail)
 
-                racer_structs.append({
-                    "boat_no": str(b_no),
-                    "r_name": r_name,
-                    "win_rate": win_rate,
-                    "motor_2ren": motor_2ren,
-                    "st": avg_st
-                })
-
-                eval_detail = (
-                    f"#{b_no} {r_name} ({r_class}): 機力{overall_rank}({foot_type})\n"
-                    f"   └ └ 勝率:{win_rate:.2f} | 出足:{deashi_eval} / 伸び:{nobi_eval}\n"
-                    f"   └ └ M#{motor_num}(2連:{motor_2ren:.1f}%) 展示[回り:{avg_wari:.2f}/直線:{avg_choku:.2f}/展示:{avg_tenji:.2f}/1周:{avg_1shu:.2f}]"
-                )
-                racer_evals.append(f"• {eval_detail}")
-
-        tag = generate_race_tactical_advice(racer_structs, in_rate)
-            
-        if racer_evals:
-            evals_str = "\n   ".join(racer_evals)
-            summary_text += f"• **R{r:2d}** (1ｺｰｽ勝率:{in_rate:.1f}%) ➔ {tag}\n   {evals_str}\n\n"
-        else:
-            summary_text += f"• **R{r:2d}** (1ｺｰｽ勝率:{in_rate:.1f}%) ➔ {tag}\n\n"
-            
+    tag = generate_race_tactical_advice(racer_structs, in_rate)
+    summary_text += f"💡 **展開予想**: {tag}\n\n"
+    
+    if racer_evals:
+        summary_text += "\n\n".join(racer_evals) + "\n"
+        
     return summary_text
 
-class VenueSelect(discord.ui.Select):
-    def __init__(self):
-        options = [discord.SelectOption(label=v, description=f"{v}場の展示評価・AI分析") for v in VENUES]
-        super().__init__(placeholder="🏟️ 詳細を確認したい会場を選択してください...", min_values=1, max_values=1, options=options)
+# --- 2段階セレクトメニューの定義 ---
+
+class RaceSelect(discord.ui.Select):
+    def __init__(self, venue):
+        self.venue = venue
+        options = [discord.SelectOption(label=f"第 {i} レース (R{i})", value=str(i), description=f"{venue}場 第{i}Rの分析を見る") for i in range(1, 13)]
+        super().__init__(placeholder="🏁 分析するレースを選択してください...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
-            venue = self.values[0]
+            venue = self.venue
             venue_code = VENUE_MAPPING.get(venue, "01")
+            r_num = int(self.values[0])
             
             target_date = datetime.now(JST)
-            summary_text = await asyncio.to_thread(
-                heavy_calculation, venue, venue_code, 
+            result_text = await asyncio.to_thread(
+                calculate_single_race_analysis, venue, venue_code, 
                 target_date.strftime("%Y"), target_date.strftime("%m"), 
-                target_date.strftime("%d"), target_date.strftime("%Y-%m-%d")
+                target_date.strftime("%d"), target_date.strftime("%Y-%m-%d"), r_num
             )
 
-            if len(summary_text) <= 2000:
-                await interaction.followup.send(content=summary_text, ephemeral=True)
+            if len(result_text) <= 2000:
+                await interaction.followup.send(content=result_text, ephemeral=True)
             else:
-                for i in range(0, len(summary_text), 2000):
-                    await interaction.followup.send(content=summary_text[i:i+2000], ephemeral=True)
+                for i in range(0, len(result_text), 2000):
+                    await interaction.followup.send(content=result_text[i:i+2000], ephemeral=True)
         except Exception as e:
             print(f"Error: {e}")
             await interaction.followup.send(content=f"⚠️ エラーが発生しました: {e}", ephemeral=True)
+
+class RaceSelectView(discord.ui.View):
+    def __init__(self, venue):
+        super().__init__()
+        self.add_item(RaceSelect(venue))
+
+class VenueSelect(discord.ui.Select):
+    def __init__(self):
+        options = [discord.SelectOption(label=v, description=f"{v}場のレースを選択する") for v in VENUES]
+        super().__init__(placeholder="🏟️ 会場を選択してください...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        venue = self.values[0]
+        await interaction.response.send_message(
+            content=f"🏟️ **【{venue}場】** が選択されました。\n続いて、分析したいレースを選んでください👇",
+            view=RaceSelectView(venue),
+            ephemeral=True
+        )
 
 class VenueSelectView(discord.ui.View):
     def __init__(self):
@@ -484,7 +399,7 @@ class VenueSelectView(discord.ui.View):
 async def daily_morning_report():
     channel = bot.get_channel(NOTIFICATION_CHANNEL_ID)
     if channel is not None:
-        await channel.send("🏁 **【本日のAIレース分析（展示評価版）】**\n下のメニューから会場を選んでください👇", view=VenueSelectView())
+        await channel.send("🏁 **【本日のAIレース分析】**\n下のメニューから会場を選んでください👇", view=VenueSelectView())
 
 @daily_morning_report.before_loop
 async def before_daily_report():
@@ -498,7 +413,7 @@ async def on_ready():
 
 @bot.command(name="boat_report")
 async def boat_report(ctx):
-    await ctx.send("🏁 **【本日のAIレース分析（展示評価版）】**\n下のメニューから会場を選んでください👇", view=VenueSelectView())
+    await ctx.send("🏁 **【本日のAIレース分析】**\n下のメニューから会場を選んでください👇", view=VenueSelectView())
 
 if __name__ == "__main__":
     keep_alive()
