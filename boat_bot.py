@@ -1,11 +1,35 @@
 from datetime import datetime, time, timezone, timedelta
 import io
 import os
+import threading
+from flask import Flask
 import discord
 from discord.ext import commands, tasks
 import numpy as np
 import pandas as pd
 import requests
+
+# --- Renderをごまかすための簡易Webサーバー ---
+app = Flask("")
+
+
+@app.route("/")
+def home():
+  return "I am alive!"
+
+
+def run_web():
+  port = int(os.environ.get("PORT", 10000))
+  app.run(host="0.0.0.0", port=port)
+
+
+def keep_alive():
+  t = threading.Thread(target=run_web)
+  t.daemon = True
+  t.start()
+
+
+# --- ここから元のDiscordボットのコード ---
 
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/seeeek-debug/boatracecsv.github.io/main/"
 NOTIFICATION_CHANNEL_ID = 1546042629253496925
@@ -336,7 +360,7 @@ async def boat_report(ctx):
     await ctx.send(header, view=VenueSelectView())
 
 if __name__ == "__main__":
+    keep_alive()  # ← ここでRender用の簡易サーバーを裏で起動！
     token = os.environ.get("DISCORD_TOKEN")
     bot.run(token)
-
 
