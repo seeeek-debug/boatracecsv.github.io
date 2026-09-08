@@ -119,14 +119,14 @@ def load_race_course_win_rates():
                 continue
     return venue_race_rates
 
-def load_tokuten_hayami(venue_code, year, month, day):
+def load_tokuten_hayami(venue_code, year, month, day_str):
     path = f"data/previews/tokuten_hayami/{year}/{month}/{venue_code}.csv"
     df = fetch_github_csv(path)
     if df is not None and not df.empty:
         return df
     
     try:
-        dt = datetime(int(year), int(month), int(day)) - timedelta(days=1)
+        dt = datetime(int(year), int(month), int(day_str)) - timedelta(days=1)
         prev_path = f"data/previews/tokuten_hayami/{dt.strftime('%Y')}/{dt.strftime('%m')}/{venue_code}.csv"
         df_prev = fetch_github_csv(prev_path)
         if df_prev is not None and not df_prev.empty:
@@ -135,9 +135,9 @@ def load_tokuten_hayami(venue_code, year, month, day):
         pass
     return None
 
-def load_race_card(venue, venue_code, year, month, day):
-    """ 当日の日付ファイル（例: 2026/09/08.csv）から、場コードや場名に一致する行を抽出する """
-    path = f"data/programs/race_cards/{year}/{month}/{day}.csv"
+def load_race_card(venue, venue_code, year, month, day_str):
+    """ 当日の日付ファイル（例: data/programs/race_cards/2026/09/08.csv）から該当会場のデータを抽出 """
+    path = f"data/programs/race_cards/{year}/{month}/{day_str}.csv"
     df = fetch_github_csv(path)
     
     if df is not None and not df.empty:
@@ -159,7 +159,7 @@ def load_race_card(venue, venue_code, year, month, day):
     
     # 前日をフォールバック
     try:
-        dt = datetime(int(year), int(month), int(day)) - timedelta(days=1)
+        dt = datetime(int(year), int(month), int(day_str)) - timedelta(days=1)
         prev_year = dt.strftime("%Y")
         prev_month = dt.strftime("%m")
         prev_day = dt.strftime("%d")
@@ -338,17 +338,17 @@ def generate_race_tactical_advice(racer_data_list, in_rate):
     else:
         return f"【⚡差し・まくり交錯】 互角のメンバー構成。第1ターンマークの攻防に注目。"
 
-def heavy_calculation(venue, venue_code, year, month, day, date_str):
+def heavy_calculation(venue, venue_code, year, month, day_str, date_str):
     all_race_rates = load_race_course_win_rates()
     venue_rates_by_race = all_race_rates.get(venue, {})
     
     tendency = VENUE_TENDENCIES.get(venue, "標準水面")
     
-    # 日付ファイル（例: 2026/09/08.csv）から該当会場のデータを抽出
-    df_card, checked_path = load_race_card(venue, venue_code, year, month, day)
+    # 日付ファイルから該当会場の出走表データを取得
+    df_card, checked_path = load_race_card(venue, venue_code, year, month, day_str)
     
     exhibition_stats = load_original_exhibition_stats(venue_code, year, month)
-    df_tokuten = load_tokuten_hayami(venue_code, year, month, day)
+    df_tokuten = load_tokuten_hayami(venue_code, year, month, day_str)
     
     tokuten_dict = {}
     if df_tokuten is not None and not df_tokuten.empty:
@@ -484,11 +484,11 @@ class VenueSelect(discord.ui.Select):
         target_date = datetime.now(JST)
         year = target_date.strftime("%Y")
         month = target_date.strftime("%m")
-        day = target_date.strftime("%d")
+        day_str = target_date.strftime("%d")
         date_str = target_date.strftime("%Y-%m-%d")
         
         summary_text = await asyncio.to_thread(
-            heavy_calculation, venue, venue_code, year, month, day, date_str
+            heavy_calculation, venue, venue_code, year, month, day_str, date_str
         )
 
         await interaction.followup.send(content=summary_text, ephemeral=True)
@@ -517,4 +517,4 @@ async def on_ready():
 
 @bot.command(name="boat_report")
 async def boat_report(ctx):
-    header = "🏁 **【全場AIスクリーニング速報（勝負駆け条件完全対応版）】** 🏁\n下のメニューから会場を選んで詳細をチェック�
+    header = "🏁 **【全場AIスクリーニング速報（勝
