@@ -1,30 +1,11 @@
 from datetime import datetime, time, timezone, timedelta
 import io
 import os
-import threading
 import discord
 from discord.ext import commands, tasks
-from flask import Flask
 import numpy as np
 import pandas as pd
 import requests
-
-# Renderのスリープ対策用簡易Webサーバー
-app = Flask('')
-
-@app.route('/')
-def home():
-    return "Boat Race AI Bot is online and active!"
-
-def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    t = threading.Thread(target=run_flask)
-    t.start()
-
-# ----------------- Discord Bot 本体の設定 -----------------
 
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/seeeek-debug/boatracecsv.github.io/main/"
 NOTIFICATION_CHANNEL_ID = 1546042629253496925
@@ -156,26 +137,26 @@ def calculate_historical_motor_score(current_year, current_month, current_day, v
         past_date = current_date - timedelta(days=i)
         y = past_date.strftime("%Y")
         m = past_date.strftime("%m")
-        ds = past_date.strftime("%Y-%m-%d")
+        d_str = past_date.strftime("%d")
         
-        path = f"data/entries/{y}/{m}/{ds}.csv"
+        path = f"data/programs/race_cards/{y}/{m}/{d_str}.csv"
         df_past = fetch_github_csv(path)
         
         if df_past is not None and not df_past.empty:
-            col_venue = "場コード" if "場コード" in df_past.columns else "stadium_code"
-            col_motor = "モーター番号" if "モーター番号" in df_past.columns else "motor_no"
-            
-            if col_venue in df_past.columns and col_motor in df_past.columns:
-                matched = df_past[
-                    (df_past[col_venue].astype(str).str.zfill(2) == str(venue_code)) & 
-                    (df_past[col_motor].astype(str) == str(target_motor_no))
-                ]
-                if not matched.empty:
-                    quinella_col = "モーター2連対率" if "モーター2連対率" in matched.columns else "motor_quinella_rate"
-                    if quinella_col in matched.columns:
-                        rates = pd.to_numeric(matched[quinella_col], errors="coerce").dropna()
-                        if not rates.empty:
-                            past_scores.append(rates.mean())
+            col_venue = "レース場コード" if "レース場コード" in df_past.columns else "場コード"
+            if col_venue in df_past.columns:
+                matched_venue = df_past[df_past[col_venue].astype(str).str.zfill(2) == str(venue_code)]
+                for _, row in matched_venue.iterrows():
+                    for b in range(1, 7):
+                        m_col = f"艇{b}_モーター番号"
+                        if m_col in row and str(row[m_col]) == str(target_motor_no):
+                            q_col = f"艇{b}_モーター2連対率"
+                            if q_col in row:
+                                try:
+                                    r_val = float(row[q_col])
+                                    past_scores.append(r_val)
+                                except:
+                                    pass
 
     if not past_scores:
         return 3.0
@@ -210,20 +191,20 @@ def generate_race_tactical_advice(racer_data_list, in_rate):
 
     strong_outs = []
     for d in racer_data_list[1:]:
-        if d["class"] == "A1" or d["score"] >= 5.0 or (d["st"] <= 0.13 and d["st"] > 0):
+        if "A1" in d["class"] or d["score"] >= 5.0 or (d["st"] <= 0.13 and d["st"] > 0):
             strong_outs.append(d)
 
     if b1_f > 0 or b1_motor <= 2.0 or b1_st >= 0.17:
         target_boat = strong_outs[0]["boat_no"] if strong_outs else "2"
         return f"【⚠️ 1号艇ピンチ・波乱警戒】 1号艇の不安あり。**{target_boat}号艇**の差し・まくり抜けに要警戒！"
     
-    elif boat3["class"] in ["A1", "A2"] and boat3["st"] <= 0.14 and boat3["score"] >= 4.0:
+    elif "A" in boat3["class"] and boat3["st"] <= 0.14 and boat3["score"] >= 4.0:
         return f"【🌀3号艇のまくり差し警戒】 3号艇({boat3['class']})の鋭い全速まくり差しが炸裂する展開に注意！"
     
-    elif boat4["class"] in ["A1", "A2"] and boat4["st"] <= 0.14 and boat4["score"] >= 4.0:
+    elif "A" in boat4["class"] and boat4["st"] <= 0.14 and boat4["score"] >= 4.0:
         return f"【🌀4号艇のまくり差し・カド攻め警戒】 4号艇({boat4['class']})のカドからの自在戦（まくり差し）に要注目。"
     
-    elif in_rate >= 58.0 and b1_class in ["A1", "A2"] and b1_motor >= 4.0:
+    elif in_rate >= 58.0 and "A" in b1_class and b1_motor >= 4.0:
         return f"【🛡️固め・イン鉄壁】 1号艇({b1_class})の逃げ信頼度高。相手探し（2・3号艇の差し・粘り）が主軸。"
     
     elif len(strong_outs) >= 2 and in_rate < 50.0:
@@ -245,12 +226,12 @@ class VenueSelect(discord.ui.Select):
         venue_code = VENUE_MAPPING.get(venue, "01")
         
         target_date = datetime.now(JST)
-        date_str = target_date.strftime("%Y-%m-%d")
         year = target_date.strftime("%Y")
         month = target_date.strftime("%m")
         day = target_date.strftime("%d")
+        date_str = target_date.strftime("%Y-%m-%d")
         
-        entries_path = f"data/entries/{year}/{month}/{date_str}.csv"
+        entries_path = f"data/programs/race_cards/{year}/{month}/{day}.csv"
         df_entries = fetch_github_csv(entries_path)
         
         all_rates = load_all_course_win_rates()
@@ -266,8 +247,8 @@ class VenueSelect(discord.ui.Select):
         
         venue_entries = pd.DataFrame()
         if df_entries is not None and not df_entries.empty:
-            col_venue = "場コード" if "場コード" in df_entries.columns else ("stadium_code" if "stadium_code" in df_entries.columns else None)
-            if col_venue:
+            col_venue = "レース場コード" if "レース場コード" in df_entries.columns else "場コード"
+            if col_venue in df_entries.columns:
                 venue_entries = df_entries[df_entries[col_venue].astype(str).str.zfill(2) == str(venue_code)]
         
         summary_text += "📋 **【レース別展開予測 ＆ 注目コース解説】**\n"
@@ -276,42 +257,27 @@ class VenueSelect(discord.ui.Select):
             racer_structs = []
             
             if not venue_entries.empty:
-                col_race = "レース回" if "レース回" in df_entries.columns else ("race_no" if "race_no" in df_entries.columns else None)
-                if col_race:
-                    df_race = venue_entries[venue_entries[col_race] == r]
+                col_race = "レース回" if "レース回" in venue_entries.columns else "レース"
+                if col_race in venue_entries.columns:
+                    target_r_str = f"{r}R"
+                    df_race = venue_entries[venue_entries[col_race].astype(str).str.contains(target_r_str)]
+                    
                     if not df_race.empty:
-                        motor_col = "モーター番号" if "モーター番号" in df_race.columns else "motor_no"
-                        boat_col = "艇番" if "艇番" in df_race.columns else "boat_no"
-                        racer_col = "選手名" if "選手名" in df_race.columns else ("racer_name" if "racer_name" in df_race.columns else None)
-                        class_col = "級別" if "級別" in df_race.columns else ("racer_class" if "racer_class" in df_race.columns else None)
-                        local_rate_col = "当地勝率" if "当地勝率" in df_race.columns else ("local_win_rate" if "local_win_rate" in df_race.columns else None)
-                        st_col = "平均ST" if "平均ST" in df_race.columns else ("avg_st" if "avg_st" in df_race.columns else None)
-                        f_col = "F" if "F" in df_race.columns else ("f_count" if "f_count" in df_race.columns else None)
-                        
-                        df_race_sorted = df_race.sort_values(by=boat_col, key=lambda x: pd.to_numeric(x, errors="coerce"))
-                        
-                        for _, row in df_race_sorted.iterrows():
-                            b_no = row.get(boat_col, "?")
-                            r_name = row.get(racer_col, "選手") if racer_col else "選手"
-                            m_no = str(row.get(motor_col, "-"))
-                            r_class = str(row.get(class_col, "B1")) if class_col else "B1"
+                        row = df_race.iloc[0]
+                        for b_no in range(1, 7):
+                            r_name = str(row.get(f"艇{b_no}_選手名", "選手"))
+                            r_class = str(row.get(f"艇{b_no}_期別", "B1"))
+                            m_no = str(row.get(f"艇{b_no}_モーター番号", "-"))
                             
                             try:
-                                l_rate = float(row.get(local_rate_col, 0.0))
-                                l_rate_str = f"{l_rate:.2f}"
-                            except (ValueError, TypeError):
-                                l_rate_str = "-"
-                                
-                            try:
-                                st_val = float(row.get(st_col, 0.15))
+                                st_val = float(row.get(f"艇{b_no}_平均ST", 0.15))
                                 st_str = f"{st_val:.2f}"
-                            except (ValueError, TypeError):
+                            except:
                                 st_val = 0.15
                                 st_str = "0.15"
                                 
-                            f_val = row.get(f_col, 0)
                             try:
-                                f_int = int(f_val) if pd.notna(f_val) and str(f_val) != "nan" else 0
+                                f_int = int(row.get(f"艇{b_no}_F", 0))
                             except:
                                 f_int = 0
                             f_str = f" ⚠️F{f_int}" if f_int > 0 else ""
@@ -320,14 +286,14 @@ class VenueSelect(discord.ui.Select):
                             rank_str = get_short_rank(score)
                             
                             racer_structs.append({
-                                "boat_no": b_no,
+                                "boat_no": str(b_no),
                                 "class": r_class,
                                 "st": st_val,
                                 "f_count": f_int,
                                 "score": score
                             })
                             
-                            racer_evals.append(f"{b_no} {r_name}({r_class}) [当地:{l_rate_str}/ST:{st_str}{f_str}] M#{m_no}:{rank_str}")
+                            racer_evals.append(f"{b_no} {r_name}({r_class}) [ST:{st_str}{f_str}] M#{m_no}:{rank_str}")
             
             tag = generate_race_tactical_advice(racer_structs, in_rate)
                 
@@ -351,7 +317,7 @@ class VenueSelectView(discord.ui.View):
 async def daily_morning_report():
     channel = bot.get_channel(NOTIFICATION_CHANNEL_ID)
     if channel is not None:
-        header = "🏁 **【毎朝の自動AIスクリーニング速報（完全版・スリープ対策対応）】** 🏁\nGitHubのデータ更新完了！下のメニューから気になる会場を選んで詳細をチェックしてな👇"
+        header = "🏁 **【毎朝の自動AIスクリーニング速報（まくり差し対応・完全版）】** 🏁\nGitHubのデータ更新完了！下のメニューから気になる会場を選んで詳細をチェックしてな👇"
         await channel.send(header, view=VenueSelectView())
 
 @daily_morning_report.before_loop
@@ -366,12 +332,11 @@ async def on_ready():
 
 @bot.command(name="boat_report")
 async def boat_report(ctx):
-    header = "🏁 **【全場AIスクリーニング速報（完全版・スリープ対策対応）】** 🏁\n下のメニューから会場を選んで詳細をチェック👇"
+    header = "🏁 **【全場AIスクリーニング速報（まくり差し対応・完全版）】** 🏁\n下のメニューから会場を選んで詳細をチェック👇"
     await ctx.send(header, view=VenueSelectView())
 
 if __name__ == "__main__":
-    # Renderのスリープ対策用Webサーバーを別スレッドで起動
-    keep_alive()
-    # 環境変数からDiscordトークンを安全に取得してボットを起動
-    token = os.environ.get("DISCORD_BOT_TOKEN")
+    token = os.environ.get("DISCORD_TOKEN")
     bot.run(token)
+
+
