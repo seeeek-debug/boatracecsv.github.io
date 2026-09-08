@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, time, timezone, timedelta
 import io
 import os
@@ -65,7 +66,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ── CSVキャッシュ機能（一度取得したファイルはメモリに保持して高速化） ──
+# ── CSVキャッシュ機能 ──
 CSV_CACHE = {}
 
 def fetch_github_csv(file_path):
@@ -161,7 +162,6 @@ def calculate_historical_motor_score(current_year, current_month, current_day, v
     current_date = datetime(int(current_year), int(current_month), int(current_day), tzinfo=JST)
     past_scores = []
     
-    # 処理をスムーズにするため、ステップを2日おきから3日おきにするなどして効率化しつつ過去データを取得
     for i in range(1, days_back + 1, 3):
         past_date = current_date - timedelta(days=i)
         y = past_date.strftime("%Y")
@@ -243,6 +243,85 @@ def generate_race_tactical_advice(racer_data_list, in_rate):
     else:
         return "【⚡差し・まくり交錯】 互角のメンバー構成。第1ターンマークの攻防に注目。"
 
+# ── 重い集計処理を別スレッドで安全に実行する関数 ──
+def heavy_calculation(venue, venue_code, year, month, day, date_str):
+    all_rates = load_all_course_win_rates()
+    venue_rates = all_rates.get(venue, {c: 0.0 for c in range(1, 7)})
+    in_rate = venue_rates.get(1, 50.0)
+    tendency = VENUE_TENDENCIES.get(venue, "標準水面")
+    
+    summary_text = f"🏟️ **【{venue}場】 当日出走表AIスクリーニング ({date_str})**\n"
+    summary_text += f"📝 水面特性: *{tendency}* (1コース勝率: **{in_rate:.1f}%**)\n\n"
+    
+    summary_text += "🎯 **【直近のコース別被弾・敗北傾向】**\n"
+    summary_text += f"{analyze_vulnerability_trends(year, month, day)}\n\n"
+    
+    entries_path = f"data/programs/race_cards/{year}/{month}/{day}.csv"
+    df_entries = fetch_github_csv(entries_path)
+    
+    venue_entries = pd.DataFrame()
+    if df_entries is not None and not df_entries.empty:
+        col_venue = "レース場コード" if "レース場コード" in df_entries.columns else "場コード"
+        if col_venue in df_entries.columns:
+            venue_entries = df_entries[df_entries[col_venue].astype(str).str.zfill(2) == str(venue_code)]
+    
+    summary_text += "📋 **【レース別展開予測 ＆ 注目コース解説】**\n"
+    for r in range(1, 13):
+        racer_evals = []
+        racer_structs = []
+        
+        if not venue_entries.empty:
+            col_race = "レース回" if "レース回" in venue_entries.columns else "レース"
+            if col_race in venue_entries.columns:
+                target_r_str = f"{r}R"
+                df_race = venue_entries[venue_entries[col_race].astype(str).str.contains(target_r_str)]
+                
+                if not df_race.empty:
+                    row = df_race.iloc[0]
+                    for b_no in range(1, 7):
+                        r_name = str(row.get(f"艇{b_no}_選手名", "選手"))
+                        r_class = str(row.get(f"艇{b_no}_期別", "B1"))
+                        m_no = str(row.get(f"艇{b_no}_モーター番号", "-"))
+                        
+                        try:
+                            st_val = float(row.get(f"艇{b_no}_平均ST", 0.15))
+                            st_str = f"{st_val:.2f}"
+                        except:
+                            st_val = 0.15
+                            st_str = "0.15"
+                            
+                        try:
+                            f_int = int(row.get(f"艇{b_no}_F", 0))
+                        except:
+                            f_int = 0
+                        f_str = f" ⚠️F{f_int}" if f_int > 0 else ""
+                        
+                        score = calculate_historical_motor_score(year, month, day, venue_code, m_no, days_back=60)
+                        rank_str = get_short_rank(score)
+                        
+                        racer_structs.append({
+                            "boat_no": str(b_no),
+                            "class": r_class,
+                            "st": st_val,
+                            "f_count": f_int,
+                            "score": score
+                        })
+                        
+                        racer_evals.append(f"{b_no} {r_name}({r_class}) [ST:{st_str}{f_str}] M#{m_no}:{rank_str}")
+        
+        tag = generate_race_tactical_advice(racer_structs, in_rate)
+            
+        if racer_evals:
+            evals_str = "\n   ".join(racer_evals)
+            summary_text += f"・ **R{r:2d}** ➔ {tag}\n   {evals_str}\n"
+        else:
+            summary_text += f"・ **R{r:2d}** ➔ {tag}\n"
+            
+    if df_entries is None or df_entries.empty:
+        summary_text += f"\n⚠️ *注意: 当日の出走表ファイル ({entries_path}) がまだ取得できないため、統計ベースの予測を表示しています。*"
+
+    return summary_text
+
 class VenueSelect(discord.ui.Select):
     def __init__(self):
         options = [discord.SelectOption(label=v, description=f"{v}場の出走表・選手データ・展開予測を表示") for v in VENUES]
@@ -260,81 +339,10 @@ class VenueSelect(discord.ui.Select):
         day = target_date.strftime("%d")
         date_str = target_date.strftime("%Y-%m-%d")
         
-        entries_path = f"data/programs/race_cards/{year}/{month}/{day}.csv"
-        df_entries = fetch_github_csv(entries_path)
-        
-        all_rates = load_all_course_win_rates()
-        venue_rates = all_rates.get(venue, {c: 0.0 for c in range(1, 7)})
-        in_rate = venue_rates.get(1, 50.0)
-        tendency = VENUE_TENDENCIES.get(venue, "標準水面")
-        
-        summary_text = f"🏟️ **【{venue}場】 当日出走表AIスクリーニング ({date_str})**\n"
-        summary_text += f"📝 水面特性: *{tendency}* (1コース勝率: **{in_rate:.1f}%**)\n\n"
-        
-        summary_text += "🎯 **【直近のコース別被弾・敗北傾向】**\n"
-        summary_text += f"{analyze_vulnerability_trends(year, month, day)}\n\n"
-        
-        venue_entries = pd.DataFrame()
-        if df_entries is not None and not df_entries.empty:
-            col_venue = "レース場コード" if "レース場コード" in df_entries.columns else "場コード"
-            if col_venue in df_entries.columns:
-                venue_entries = df_entries[df_entries[col_venue].astype(str).str.zfill(2) == str(venue_code)]
-        
-        summary_text += "📋 **【レース別展開予測 ＆ 注目コース解説】**\n"
-        for r in range(1, 13):
-            racer_evals = []
-            racer_structs = []
-            
-            if not venue_entries.empty:
-                col_race = "レース回" if "レース回" in venue_entries.columns else "レース"
-                if col_race in venue_entries.columns:
-                    target_r_str = f"{r}R"
-                    df_race = venue_entries[venue_entries[col_race].astype(str).str.contains(target_r_str)]
-                    
-                    if not df_race.empty:
-                        row = df_race.iloc[0]
-                        for b_no in range(1, 7):
-                            r_name = str(row.get(f"艇{b_no}_選手名", "選手"))
-                            r_class = str(row.get(f"艇{b_no}_期別", "B1"))
-                            m_no = str(row.get(f"艇{b_no}_モーター番号", "-"))
-                            
-                            try:
-                                st_val = float(row.get(f"艇{b_no}_平均ST", 0.15))
-                                st_str = f"{st_val:.2f}"
-                            except:
-                                st_val = 0.15
-                                st_str = "0.15"
-                                
-                            try:
-                                f_int = int(row.get(f"艇{b_no}_F", 0))
-                            except:
-                                f_int = 0
-                            f_str = f" ⚠️F{f_int}" if f_int > 0 else ""
-                            
-                            # 過去データの平均値に基づいた本格的な機力評価スコアを算出（キャッシュ機能で高速化）
-                            score = calculate_historical_motor_score(year, month, day, venue_code, m_no, days_back=60)
-                            rank_str = get_short_rank(score)
-                            
-                            racer_structs.append({
-                                "boat_no": str(b_no),
-                                "class": r_class,
-                                "st": st_val,
-                                "f_count": f_int,
-                                "score": score
-                            })
-                            
-                            racer_evals.append(f"{b_no} {r_name}({r_class}) [ST:{st_str}{f_str}] M#{m_no}:{rank_str}")
-            
-            tag = generate_race_tactical_advice(racer_structs, in_rate)
-                
-            if racer_evals:
-                evals_str = "\n   ".join(racer_evals)
-                summary_text += f"・ **R{r:2d}** ➔ {tag}\n   {evals_str}\n"
-            else:
-                summary_text += f"・ **R{r:2d}** ➔ {tag}\n"
-            
-        if df_entries is None or df_entries.empty:
-            summary_text += f"\n⚠️ *注意: 当日の出走表ファイル ({entries_path}) がまだ取得できないため、統計ベースの予測を表示しています。*"
+        # 重い処理を別スレッドで実行してタイムアウトを防ぐ
+        summary_text = await asyncio.to_thread(
+            heavy_calculation, venue, venue_code, year, month, day, date_str
+        )
 
         await interaction.followup.send(content=summary_text, ephemeral=True)
 
