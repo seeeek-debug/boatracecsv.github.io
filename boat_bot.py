@@ -177,7 +177,6 @@ def load_original_exhibition_stats(venue_code, year, month):
     return exhibition_dict
 
 def get_shobugake_condition(info):
-    """ 得点早見データの各着時得点率から、何着条件かを判定する """
     try:
         junni = int(info.get("junni", 99))
     except:
@@ -192,7 +191,6 @@ def get_shobugake_condition(info):
         t3 = float(info.get("t3", 0) or 0)
         t4 = float(info.get("t4", 0) or 0)
         
-        # 一般的な準優ボーダー（6.00）を基準に判定
         if t4 >= 6.0:
             return "🎯4着条件（比較的クリア容易）"
         elif t3 >= 6.0:
@@ -297,6 +295,19 @@ def heavy_calculation(venue, venue_code, year, month, day, date_str):
     
     race_card_path = f"data/programs/race_cards/{year}/{month}/{venue_code}.csv"
     df_card = fetch_github_csv(race_card_path)
+    
+    # 出走表データがない場合のフォールバック（前日データを試す）
+    if df_card is None or df_card.empty:
+        try:
+            dt = datetime(int(year), int(month), int(day)) - timedelta(days=1)
+            prev_year = dt.strftime("%Y")
+            prev_month = dt.strftime("%m")
+            prev_day = dt.strftime("%d")
+            prev_race_card_path = f"data/programs/race_cards/{prev_year}/{prev_month}/{venue_code}.csv"
+            df_card = fetch_github_csv(prev_race_card_path)
+        except Exception:
+            pass
+
     exhibition_stats = load_original_exhibition_stats(venue_code, year, month)
     df_tokuten = load_tokuten_hayami(venue_code, year, month, day)
     
@@ -323,7 +334,7 @@ def heavy_calculation(venue, venue_code, year, month, day, date_str):
     summary_text += f"📝 水面特性: *{tendency}* | 📊 得点早見: *{'連携完了 ✅' if tokuten_dict else 'データなし ℹ️'}*\n\n"
     
     if df_card is None or df_card.empty:
-        return summary_text + f"⚠️ 指定日の出走表データ（{race_card_path}）が取得できませんでした。"
+        return summary_text + f"⚠️ 指定日の出走表データ（{race_card_path}）が取得できませんでした。開催日程やデータ更新状況をご確認ください。"
 
     summary_text += "📋 **【レース別展開予測 ＆ 勝負駆け・機力詳細】**\n"
     
