@@ -158,9 +158,15 @@ def get_short_rank(score):
     else:
         return "⚠️C"
 
-def calculate_historical_motor_score(current_year, current_month, current_day, venue_code, target_motor_no, days_back=60):
+# ── 過去のモーター2連対率・展示・1周・回り足・直線タイムを総合解析する関数 ──
+def calculate_historical_motor_deep_stats(current_year, current_month, current_day, venue_code, target_motor_no, days_back=60):
     current_date = datetime(int(current_year), int(current_month), int(current_day), tzinfo=JST)
-    past_scores = []
+    past_quinella_scores = []
+    past_ex_times = []
+    past_lap_times = []
+    past_turn_times = []
+    past_straight_times = []
+    past_ex_sts = []
     
     for i in range(1, days_back + 1, 3):
         past_date = current_date - timedelta(days=i)
@@ -179,31 +185,120 @@ def calculate_historical_motor_score(current_year, current_month, current_day, v
                     for b in range(1, 7):
                         m_col = f"艇{b}_モーター番号"
                         if m_col in row and str(row[m_col]) == str(target_motor_no):
+                            # モーター2連対率
                             q_col = f"艇{b}_モーター2連対率"
                             if q_col in row:
                                 try:
-                                    r_val = float(row[q_col])
-                                    past_scores.append(r_val)
+                                    past_quinella_scores.append(float(row[q_col]))
                                 except:
                                     pass
+                            
+                            # 展示タイム
+                            for c_name in [f"艇{b}_展示タイム", f"艇{b}_展タイム"]:
+                                if c_name in row:
+                                    try:
+                                        past_ex_times.append(float(row[c_name]))
+                                        break
+                                    except:
+                                        pass
+                                        
+                            # 1周タイム
+                            for c_name in [f"艇{b}_1周タイム", f"艇{b}_一周タイム"]:
+                                if c_name in row:
+                                    try:
+                                        past_lap_times.append(float(row[c_name]))
+                                        break
+                                    except:
+                                        pass
+                                        
+                            # 回り足タイム
+                            for c_name in [f"艇{b}_回り足タイム", f"艇{b}_回り足"]:
+                                if c_name in row:
+                                    try:
+                                        past_turn_times.append(float(row[c_name]))
+                                        break
+                                    except:
+                                        pass
+                                        
+                            # 直線タイム
+                            for c_name in [f"艇{b}_直線タイム", f"艇{b}_直線"]:
+                                if c_name in row:
+                                    try:
+                                        past_straight_times.append(float(row[c_name]))
+                                        break
+                                    except:
+                                        pass
+                                        
+                            # 展示ST
+                            for c_name in [f"艇{b}_展示ST", f"艇{b}_ST"]:
+                                if c_name in row:
+                                    try:
+                                        past_ex_sts.append(float(row[c_name]))
+                                        break
+                                    except:
+                                        pass
 
-    if not past_scores:
-        return 3.0
-
-    avg_metric = np.mean(past_scores)
-    
-    if avg_metric >= 45.0:
-        return 6.0
-    elif avg_metric >= 40.0:
-        return 5.0
-    elif avg_metric >= 35.0:
-        return 4.0
-    elif avg_metric >= 30.0:
-        return 3.0
-    elif avg_metric >= 25.0:
-        return 2.0
+    # 1. 総合機力評価スコア算出
+    if not past_quinella_scores:
+        base_score = 3.0
     else:
-        return 1.0
+        avg_q = np.mean(past_quinella_scores)
+        if avg_q >= 45.0: base_score = 6.0
+        elif avg_q >= 40.0: base_score = 5.0
+        elif avg_q >= 35.0: base_score = 4.0
+        elif avg_q >= 30.0: base_score = 3.0
+        elif avg_q >= 25.0: base_score = 2.0
+        else: base_score = 1.0
+
+    # 各種平均タイムの算出
+    avg_ex_time = np.mean(past_ex_times) if past_ex_times else 6.80
+    avg_lap_time = np.mean(past_lap_times) if past_lap_times else 37.50
+    avg_turn_time = np.mean(past_turn_times) if past_turn_times else 6.50
+    avg_straight_time = np.mean(past_straight_times) if past_straight_times else 6.50
+    avg_ex_st = np.mean(past_ex_sts) if past_ex_sts else 0.15
+
+    # 2. 出足・伸び足の個別評価とタイプ判定
+    # 直線タイムと回り足タイムのバランスから足質を判定
+    if past_straight_times and past_turn_times:
+        if avg_straight_time < avg_turn_time - 0.05:
+            ex_type = "🚀伸び足特化型"
+            deashi = "⚖️B+"
+            nobibi = "🔥S"
+        elif avg_turn_time < avg_straight_time - 0.05:
+            ex_type = "⚙️出足・回り足型"
+            deashi = "🔥S"
+            nobibi = "🔄B"
+        else:
+            ex_type = "⚖️正統派バランス型"
+            deashi = "✨A"
+            nobibi = "✨A"
+    else:
+        # フォールバック（展示タイム基準）
+        if avg_ex_time < 6.75:
+            ex_type = "🚀伸び足特化型"
+            deashi = "⚖️B+"
+            nobibi = "🔥S"
+        elif avg_ex_time > 6.85:
+            ex_type = "⚙️出足・回り足型"
+            deashi = "🔥S"
+            nobibi = "🔄B"
+        else:
+            ex_type = "⚖️正統派バランス型"
+            deashi = "✨A"
+            nobibi = "✨A"
+
+    return {
+        "score": base_score,
+        "rank": get_short_rank(base_score),
+        "avg_ex_time": avg_ex_time,
+        "avg_lap_time": avg_lap_time,
+        "avg_turn_time": avg_turn_time,
+        "avg_straight_time": avg_straight_time,
+        "avg_ex_st": avg_ex_st,
+        "ex_type": ex_type,
+        "deashi": deashi,
+        "nobibi": nobibi
+    }
 
 def generate_race_tactical_advice(racer_data_list, in_rate):
     if not racer_data_list or len(racer_data_list) < 6:
@@ -220,17 +315,17 @@ def generate_race_tactical_advice(racer_data_list, in_rate):
 
     strong_outs = []
     for d in racer_data_list[1:]:
-        if "A1" in d["class"] or d["score"] >= 5.0 or (d["st"] <= 0.13 and d["st"] > 0):
+        if "A1" in d["class"] or d["score"] >= 5.0 or (d["st"] <= 0.13 and d["st"] > 0) or d["ex_time_val"] < 6.75:
             strong_outs.append(d)
 
     if b1_f > 0 or b1_motor <= 2.0 or b1_st >= 0.17:
         target_boat = strong_outs[0]["boat_no"] if strong_outs else "2"
         return f"【⚠️ 1号艇ピンチ・波乱警戒】 1号艇の不安あり。**{target_boat}号艇**の差し・まくり抜けに要警戒！"
     
-    elif "A" in boat3["class"] and boat3["st"] <= 0.14 and boat3["score"] >= 4.0:
+    elif "A" in boat3["class"] and (boat3["st"] <= 0.14 or boat3["ex_time_val"] < 6.75) and boat3["score"] >= 4.0:
         return f"【🌀3号艇のまくり差し警戒】 3号艇({boat3['class']})の鋭い全速まくり差しが炸裂する展開に注意！"
     
-    elif "A" in boat4["class"] and boat4["st"] <= 0.14 and boat4["score"] >= 4.0:
+    elif "A" in boat4["class"] and (boat4["st"] <= 0.14 or boat4["ex_time_val"] < 6.75) and boat4["score"] >= 4.0:
         return f"【🌀4号艇のまくり差し・カド攻め警戒】 4号艇({boat4['class']})のカドからの自在戦（まくり差し）に要注目。"
     
     elif in_rate >= 58.0 and "A" in b1_class and b1_motor >= 4.0:
@@ -265,7 +360,7 @@ def heavy_calculation(venue, venue_code, year, month, day, date_str):
         if col_venue in df_entries.columns:
             venue_entries = df_entries[df_entries[col_venue].astype(str).str.zfill(2) == str(venue_code)]
     
-    summary_text += "📋 **【レース別展開予測 ＆ 注目コース解説】**\n"
+    summary_text += "📋 **【レース別展開予測 ＆ 全タイム詳細機力評価】**\n"
     for r in range(1, 13):
         racer_evals = []
         racer_structs = []
@@ -283,6 +378,7 @@ def heavy_calculation(venue, venue_code, year, month, day, date_str):
                         r_class = str(row.get(f"艇{b_no}_期別", "B1"))
                         m_no = str(row.get(f"艇{b_no}_モーター番号", "-"))
                         
+                        # 平均ST
                         try:
                             st_val = float(row.get(f"艇{b_no}_平均ST", 0.15))
                             st_str = f"{st_val:.2f}"
@@ -290,24 +386,39 @@ def heavy_calculation(venue, venue_code, year, month, day, date_str):
                             st_val = 0.15
                             st_str = "0.15"
                             
+                        # F回数
                         try:
                             f_int = int(row.get(f"艇{b_no}_F", 0))
                         except:
                             f_int = 0
                         f_str = f" ⚠️F{f_int}" if f_int > 0 else ""
                         
-                        score = calculate_historical_motor_score(year, month, day, venue_code, m_no, days_back=60)
-                        rank_str = get_short_rank(score)
+                        # 当日の展示タイム等の取得
+                        ex_time_str = str(row.get(f"艇{b_no}_展示タイム", row.get(f"艇{b_no}_展タイム", "-")))
+                        try:
+                            ex_time_val = float(ex_time_str)
+                        except:
+                            ex_time_val = 6.80
+                            
+                        # 過去データから機力・全タイム平均・足質を完全解析
+                        deep_stats = calculate_historical_motor_deep_stats(year, month, day, venue_code, m_no, days_back=60)
                         
                         racer_structs.append({
                             "boat_no": str(b_no),
                             "class": r_class,
                             "st": st_val,
                             "f_count": f_int,
-                            "score": score
+                            "score": deep_stats["score"],
+                            "ex_time_val": ex_time_val
                         })
                         
-                        racer_evals.append(f"{b_no} {r_name}({r_class}) [ST:{st_str}{f_str}] M#{m_no}:{rank_str}")
+                        # 詳細評価フォーマット（展示、1周、回り足、直線すべての過去平均を含む）
+                        eval_detail = (
+                            f"M#{m_no}:{deep_stats['rank']} [{deep_stats['ex_type']}] "
+                            f"(出足:{deep_stats['deashi']} / 伸び:{deep_stats['nobibi']})\n"
+                            f"   └ 過去平均[展:{deep_stats['avg_ex_time']:.2f} | 1周:{deep_stats['avg_lap_time']:.2f} | 回:{deep_stats['avg_turn_time']:.2f} | 直:{deep_stats['avg_straight_time']:.2f}]"
+                        )
+                        racer_evals.append(f"• {b_no} {r_name}({r_class}) [ST:{st_str}{f_str}] ➔ {eval_detail}")
         
         tag = generate_race_tactical_advice(racer_structs, in_rate)
             
@@ -324,7 +435,7 @@ def heavy_calculation(venue, venue_code, year, month, day, date_str):
 
 class VenueSelect(discord.ui.Select):
     def __init__(self):
-        options = [discord.SelectOption(label=v, description=f"{v}場の出走表・選手データ・展開予測を表示") for v in VENUES]
+        options = [discord.SelectOption(label=v, description=f"{v}場の全タイム平均・出足・伸び評価を表示") for v in VENUES]
         super().__init__(placeholder="🏟️ 詳細を確認したい会場を選択してください...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
@@ -339,7 +450,6 @@ class VenueSelect(discord.ui.Select):
         day = target_date.strftime("%d")
         date_str = target_date.strftime("%Y-%m-%d")
         
-        # 重い処理を別スレッドで実行してタイムアウトを防ぐ
         summary_text = await asyncio.to_thread(
             heavy_calculation, venue, venue_code, year, month, day, date_str
         )
@@ -355,7 +465,7 @@ class VenueSelectView(discord.ui.View):
 async def daily_morning_report():
     channel = bot.get_channel(NOTIFICATION_CHANNEL_ID)
     if channel is not None:
-        header = "🏁 **【毎朝の自動AIスクリーニング速報（まくり差し対応・完全版）】** 🏁\nGitHubのデータ更新完了！下のメニューから気になる会場を選んで詳細をチェックしてな👇"
+        header = "🏁 **【毎朝の自動AIスクリーニング速報（全タイム・足質完全対応版）】** 🏁\nGitHubのデータ更新完了！下のメニューから気になる会場を選んで詳細をチェックしてな👇"
         await channel.send(header, view=VenueSelectView())
 
 @daily_morning_report.before_loop
@@ -370,7 +480,7 @@ async def on_ready():
 
 @bot.command(name="boat_report")
 async def boat_report(ctx):
-    header = "🏁 **【全場AIスクリーニング速報（まくり差し対応・完全版）】** 🏁\n下のメニューから会場を選んで詳細をチェック👇"
+    header = "🏁 **【全場AIスクリーニング速報（全タイム・足質完全対応版）】** 🏁\n下のメニューから会場を選んで詳細をチェック👇"
     await ctx.send(header, view=VenueSelectView())
 
 if __name__ == "__main__":
