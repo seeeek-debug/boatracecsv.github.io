@@ -188,66 +188,87 @@ def load_original_exhibition_stats(venue_code, year, month):
         
     exhibition_dict = {}
     if df is not None and not df.empty:
-        m_col = next((c for c in ["モーター番号", "モーター", "motor"] if c in df.columns), None)
-        rate_col = next((c for c in ["2連対率", "2連率"] if c in df.columns), None)
-        win_col = "勝率" if "勝率" in df.columns else None
+        cols = df.columns
+        m_col = next((c for c in cols if any(k in c for k in ["モーター番号", "モーター", "motor", "ﾓｰﾀｰ"])), None)
+        rate_col = next((c for c in cols if any(k in c for k in ["2連対率", "2連率", "２連率"])), None)
+        win_col = next((c for c in cols if "勝率" in c), None)
         
-        c_wari = next((c for c in ["回り足タイム", "まわり足タイム", "回り足", "まわり足"] if c in df.columns), None)
-        c_choku = next((c for c in ["直線タイム", "直線"] if c in df.columns), None)
-        c_tenji = next((c for c in ["展示タイム", "展示"] if c in df.columns), None)
-        c_1shu = next((c for c in ["1สดタイム", "1周タイム", "一周タイム", "1周", "一周"] if c in df.columns), None)
-
-        if m_col:
-            for _, row in df.iterrows():
-                try:
-                    m_num = int(row[m_col])
-                    rate = float(row[rate_col]) if rate_col and pd.notna(row[rate_col]) else 0.0
-                    w_rate = float(row[win_col]) if win_col and pd.notna(row[win_col]) else 0.0
-                    
-                    avg_wari = float(row[c_wari]) if c_wari and pd.notna(row[c_wari]) else 0.0
-                    avg_choku = float(row[c_choku]) if c_choku and pd.notna(row[c_choku]) else 0.0
-                    avg_tenji = float(row[c_tenji]) if c_tenji and pd.notna(row[c_tenji]) else 6.75
-                    avg_1shu = float(row[c_1shu]) if c_1shu and pd.notna(row[c_1shu]) else 37.0
-                    
-                    exhibition_dict[m_num] = {
-                        "2ren": rate,
-                        "win": w_rate,
-                        "avg_wari": avg_wari,
-                        "avg_choku": avg_choku,
-                        "avg_tenji": avg_tenji,
-                        "avg_1shu": avg_1shu
-                    }
-                except:
+        # タイム系カラムを柔軟に部分一致で検出（艇ごとのカラムや一般カラムに対応）
+        for _, row in df.iterrows():
+            try:
+                m_num = 0
+                if m_col and pd.notna(row[m_col]):
+                    val_str = ''.join(filter(str.isdigit, str(row[m_col])))
+                    if val_str:
+                        m_num = int(val_str)
+                if m_num == 0:
                     continue
-    return exhibition_dict
+                
+                rate = float(row[rate_col]) if rate_col and rate_col in df.columns and pd.notna(row[rate_col]) else 0.0
+                w_rate = float(row[win_col]) if win_col and win_col in df.columns and pd.notna(row[win_col]) else 0.0
+                
+                # 各種タイムの取得（列名にキーワードが含まれるものを探す）
+                avg_wari = 0.0
+                avg_choku = 0.0
+                avg_tenji = 0.0
+                avg_1shu = 0.0
+                
+                for c in cols:
+                    val = row[c]
+                    if pd.isna(val):
+                        continue
+                    try:
+                        f_val = float(val)
+                    except:
+                        continue
+                        
+                    if any(k in c for k in ["回り足", "まわり足", "回り", "まわり"]):
+                        if 1.0 <= f_val <= 3.0: avg_wari = f_val
+                    elif any(k in c for k in ["直線タイム", "直線"]):
+                        if 5.0 <= f_val <= 8.0: avg_choku = f_val
+                    elif any(k in c for k in ["展示タイム", "展示"]):
+                        if 6.0 <= f_val <= 8.0: avg_tenji = f_val
+                    elif any(k in c for k in ["1周", "一周", "１周", "一週"]):
+                        if 30.0 <= f_val <= 45.0: avg_1shu = f_val
 
-def get_shobugake_condition(info):
-    try:
-        junni = int(info.get("junni", 99))
-    except:
-        junni = 99
-        
-    if junni <= 12:
-        return "✨安全圏（優出・勝負余裕）"
-        
-    try:
-        t1 = float(info.get("t1", 0) or 0)
-        t2 = float(info.get("t2", 0) or 0)
-        t3 = float(info.get("t3", 0) or 0)
-        t4 = float(info.get("t4", 0) or 0)
-        
-        if t4 >= 6.0:
-            return "🎯4着条件（比較的クリア容易）"
-        elif t3 >= 6.0:
-            return "🔥3着条件（勝負駆け・要着順）"
-        elif t2 >= 6.0:
-            return "⚡2着条件（勝負駆け・上位必須）"
-        elif t1 >= 6.0:
-            return "⚠️1着勝負（絶体絶命の勝負駆け）"
-        else:
-            return "⚠️厳しい条件（他力・完走目標）"
-    except:
-        return "🔥勝負駆け"
+                exhibition_dict[m_num] = {
+                    "2ren": rate,
+                    "win": w_rate,
+                    "avg_wari": avg_wari,
+                    "avg_choku": avg_choku,
+                    "avg_tenji": avg_tenji,
+                    "avg_1shu": avg_1shu
+                }
+            except Exception:
+                continue
+                
+    # もし上記でうまく取れない場合、艇番号ごとのカラム（例: 艇1_回り足 など）を直接走査するフォールバック
+    if not exhibition_dict and df is not None and not df.empty:
+        for _, row in df.iterrows():
+            try:
+                for b in range(1, 7):
+                    m_key = f"艇{b}_モーター番号"
+                    if m_key in df.columns and pd.notna(row[m_key]):
+                        m_num = int(''.join(filter(str.isdigit, str(row[m_key]))))
+                        if m_num > 0:
+                            rate = float(row.get(f"艇{b}_モーター2連対率", 0.0))
+                            avg_wari = float(row.get(f"艇{b}_回り足タイム", row.get(f"艇{b}_回り足", 0.0)))
+                            avg_choku = float(row.get(f"艇{b}_直線タイム", row.get(f"艇{b}_直線", 0.0)))
+                            avg_tenji = float(row.get(f"艇{b}_展示タイム", row.get(f"艇{b}_展示", 0.0)))
+                            avg_1shu = float(row.get(f"艇{b}_1周タイム", row.get(f"艇{b}_一周タイム", 0.0)))
+                            
+                            exhibition_dict[m_num] = {
+                                "2ren": rate,
+                                "win": 0.0,
+                                "avg_wari": avg_wari,
+                                "avg_choku": avg_choku,
+                                "avg_tenji": avg_tenji,
+                                "avg_1shu": avg_1shu
+                            }
+            except Exception:
+                continue
+
+    return exhibition_dict
 
 def evaluate_from_exhibition_times(motor_2ren, avg_wari, avg_choku, avg_tenji, avg_1shu):
     deashi_score = 0
@@ -304,17 +325,8 @@ def generate_race_tactical_advice(racer_data_list, in_rate):
     boat1 = racer_data_list[0]
     b1_win = boat1["win_rate"]
     b1_motor = boat1["motor_2ren"]
-    b1_shobu = boat1.get("shobu", "")
 
     strong_outs = [d for d in racer_data_list[1:] if d["win_rate"] >= 6.0 or d["motor_2ren"] >= 45.0]
-    shobugake_boats = [d for d in racer_data_list if "勝負駆け" in d.get("shobu", "") or "1着勝負" in d.get("shobu", "")]
-
-    if "1着勝負" in b1_shobu or "2着条件" in b1_shobu:
-        return "🔥【1号艇が勝負駆け・気迫の逃げ】 1号艇が崖っぷちの勝負駆け条件。是が非でもスタートを決めて逃げ切る構えに注目！"
-
-    if shobugake_boats:
-        sb_str = "・".join([f"{d['boat_no']}号艇({d['r_name']})" for d in shobugake_boats])
-        return f"🔥【勝負駆け参戦レース】 {sb_str}が勝負駆け条件を抱えており、着順アップを狙う強気の攻め・思い切ったターンに警戒！"
 
     if b1_win <= 4.0 or b1_motor <= 30.0:
         target_boat = strong_outs[0]["boat_no"] if strong_outs else "2"
@@ -341,7 +353,7 @@ def heavy_calculation(venue, venue_code, year, month, day_str, date_str):
     df_card, _ = load_race_card(venue, venue_code, year, month, day_str)
     exhibition_stats = load_original_exhibition_stats(venue_code, year, month)
 
-    summary_text = f"🏟️ **【{venue}場】 勝負駆け・展示評価 AI分析 ({date_str})**\n"
+    summary_text = f"🏟️ **【{venue}場】 展示評価・AIレース分析 ({date_str})**\n"
     summary_text += f"📝 水面特性: *{tendency}*\n"
     
     if history_analysis:
@@ -392,41 +404,37 @@ def heavy_calculation(venue, venue_code, year, month, day_str, date_str):
                 except:
                     pass
 
-                avg_wari, avg_choku, avg_tenji, avg_1shu = 0.0, 0.0, 6.75, 37.0
+                avg_wari, avg_choku, avg_tenji, avg_1shu = 0.0, 0.0, 0.0, 0.0
                 if motor_num in exhibition_stats:
+                    m_data = exhibition_stats[motor_num]
                     if motor_2ren == 0.0:
-                        motor_2ren = exhibition_stats[motor_num]["2ren"]
-                    avg_wari = exhibition_stats[motor_num]["avg_wari"]
-                    avg_choku = exhibition_stats[motor_num]["avg_choku"]
-                    avg_tenji = exhibition_stats[motor_num]["avg_tenji"]
-                    avg_1shu = exhibition_stats[motor_num]["avg_1shu"]
+                        motor_2ren = m_data["2ren"]
+                    avg_wari = m_data["avg_wari"]
+                    avg_choku = m_data["avg_choku"]
+                    avg_tenji = m_data["avg_tenji"]
+                    avg_1shu = m_data["avg_1shu"]
 
                 try:
                     avg_st = float(row_race.get(f"艇{b_no}_全国平均ST", 0.15))
                 except:
                     avg_st = 0.15
 
-                # 機力ランク付け（🔥S, ⭐A+ など）を完全復活
                 overall_rank, foot_type, deashi_eval, nobi_eval = evaluate_from_exhibition_times(
                     motor_2ren, avg_wari, avg_choku, avg_tenji, avg_1shu
                 )
-
-                # 勝負駆け判定のモック／シミュレーション
-                shobu_cond = "✨安全圏（勝負余裕）"
 
                 racer_structs.append({
                     "boat_no": str(b_no),
                     "r_name": r_name,
                     "win_rate": win_rate,
                     "motor_2ren": motor_2ren,
-                    "st": avg_st,
-                    "shobu": shobu_cond
+                    "st": avg_st
                 })
 
                 eval_detail = (
-                    f"#{b_no} {r_name} ({r_class}): 機力{overall_rank}({foot_type}) | **{shobu_cond}**\n"
+                    f"#{b_no} {r_name} ({r_class}): 機力{overall_rank}({foot_type})\n"
                     f"   └ └ 勝率:{win_rate:.2f} | 出足:{deashi_eval} / 伸び:{nobi_eval}\n"
-                    f"   └ └ M#{motor_num}(2連:{motor_2ren:.1f}%) 展示平均[回り:{avg_wari:.2f}/直線:{avg_choku:.2f}/展示:{avg_tenji:.2f}/1周:{avg_1shu:.2f}]"
+                    f"   └ └ M#{motor_num}(2連:{motor_2ren:.1f}%) 展示[回り:{avg_wari:.2f}/直線:{avg_choku:.2f}/展示:{avg_tenji:.2f}/1周:{avg_1shu:.2f}]"
                 )
                 racer_evals.append(f"• {eval_detail}")
 
@@ -434,15 +442,15 @@ def heavy_calculation(venue, venue_code, year, month, day_str, date_str):
             
         if racer_evals:
             evals_str = "\n   ".join(racer_evals)
-            summary_text += f"・ **R{r:2d}** (1ｺｰｽ勝率:{in_rate:.1f}%) ➔ {tag}\n   {evals_str}\n\n"
+            summary_text += f"• **R{r:2d}** (1ｺｰｽ勝率:{in_rate:.1f}%) ➔ {tag}\n   {evals_str}\n\n"
         else:
-            summary_text += f"・ **R{r:2d}** (1ｺｰｽ勝率:{in_rate:.1f}%) ➔ {tag}\n\n"
+            summary_text += f"• **R{r:2d}** (1ｺｰｽ勝率:{in_rate:.1f}%) ➔ {tag}\n\n"
             
     return summary_text
 
 class VenueSelect(discord.ui.Select):
     def __init__(self):
-        options = [discord.SelectOption(label=v, description=f"{v}場の勝負駆け・機力評価をAI分析") for v in VENUES]
+        options = [discord.SelectOption(label=v, description=f"{v}場の展示評価・AI分析") for v in VENUES]
         super().__init__(placeholder="🏟️ 詳細を確認したい会場を選択してください...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
@@ -476,7 +484,7 @@ class VenueSelectView(discord.ui.View):
 async def daily_morning_report():
     channel = bot.get_channel(NOTIFICATION_CHANNEL_ID)
     if channel is not None:
-        await channel.send("🏁 **【本日のAIレース分析（勝負駆け・機力評価版）】**\n下のメニューから会場を選んでください👇", view=VenueSelectView())
+        await channel.send("🏁 **【本日のAIレース分析（展示評価版）】**\n下のメニューから会場を選んでください👇", view=VenueSelectView())
 
 @daily_morning_report.before_loop
 async def before_daily_report():
@@ -490,7 +498,7 @@ async def on_ready():
 
 @bot.command(name="boat_report")
 async def boat_report(ctx):
-    await ctx.send("🏁 **【本日のAIレース分析（勝負駆け・機力評価版）】**\n下のメニューから会場を選んでください👇", view=VenueSelectView())
+    await ctx.send("🏁 **【本日のAIレース分析（展示評価版）】**\n下のメニューから会場を選んでください👇", view=VenueSelectView())
 
 if __name__ == "__main__":
     keep_alive()
