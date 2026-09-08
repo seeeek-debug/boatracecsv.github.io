@@ -41,7 +41,6 @@ VENUES = [
     "下関", "若松", "芦屋", "福岡", "唐津", "大村"
 ]
 
-# 画像の公式場コードに完全一致させたマッピング
 VENUE_MAPPING = {
     "桐生": "01", "戸田": "02", "江戸川": "03", "平和島": "04", 
     "多摩川": "05", "浜名湖": "06", "蒲郡": "07", "常滑": "08", 
@@ -136,20 +135,50 @@ def load_tokuten_hayami(venue_code, year, month, day):
         pass
     return None
 
-def load_race_card(venue_code, year, month, day):
-    path = f"data/programs/race_cards/{year}/{month}/{venue_code}.csv"
+def load_race_card(venue, venue_code, year, month, day):
+    """ 当日の日付ファイル（例: 2026/09/08.csv）から、場コードや場名に一致する行を抽出する """
+    path = f"data/programs/race_cards/{year}/{month}/{day}.csv"
     df = fetch_github_csv(path)
+    
     if df is not None and not df.empty:
+        target_col = None
+        for col in df.columns:
+            if any(k in col for k in ["場コード", "stadium_code", "場", "stadium", "venue"]):
+                target_col = col
+                break
+        
+        if target_col:
+            df_filtered = df[
+                df[target_col].astype(str).str.contains(venue_code, na=False) | 
+                df[target_col].astype(str).str.contains(venue_code.lstrip('0'), na=False) |
+                df[target_col].astype(str).str.contains(venue, na=False)
+            ]
+            if not df_filtered.empty:
+                return df_filtered, path
         return df, path
     
+    # 前日をフォールバック
     try:
         dt = datetime(int(year), int(month), int(day)) - timedelta(days=1)
         prev_year = dt.strftime("%Y")
         prev_month = dt.strftime("%m")
         prev_day = dt.strftime("%d")
-        prev_path = f"data/programs/race_cards/{prev_year}/{prev_month}/{venue_code}.csv"
+        prev_path = f"data/programs/race_cards/{prev_year}/{prev_month}/{prev_day}.csv"
         df_prev = fetch_github_csv(prev_path)
         if df_prev is not None and not df_prev.empty:
+            target_col = None
+            for col in df_prev.columns:
+                if any(k in col for k in ["場コード", "stadium_code", "場", "stadium", "venue"]):
+                    target_col = col
+                    break
+            if target_col:
+                df_filtered = df_prev[
+                    df_prev[target_col].astype(str).str.contains(venue_code, na=False) | 
+                    df_prev[target_col].astype(str).str.contains(venue_code.lstrip('0'), na=False) |
+                    df_prev[target_col].astype(str).str.contains(venue, na=False)
+                ]
+                if not df_filtered.empty:
+                    return df_filtered, prev_path
             return df_prev, prev_path
     except Exception:
         pass
@@ -315,7 +344,9 @@ def heavy_calculation(venue, venue_code, year, month, day, date_str):
     
     tendency = VENUE_TENDENCIES.get(venue, "標準水面")
     
-    df_card, checked_path = load_race_card(venue_code, year, month, day)
+    # 日付ファイル（例: 2026/09/08.csv）から該当会場のデータを抽出
+    df_card, checked_path = load_race_card(venue, venue_code, year, month, day)
+    
     exhibition_stats = load_original_exhibition_stats(venue_code, year, month)
     df_tokuten = load_tokuten_hayami(venue_code, year, month, day)
     
@@ -486,11 +517,4 @@ async def on_ready():
 
 @bot.command(name="boat_report")
 async def boat_report(ctx):
-    header = "🏁 **【全場AIスクリーニング速報（勝負駆け条件完全対応版）】** 🏁\n下のメニューから会場を選んで詳細をチェック👇"
-    await ctx.send(header, view=VenueSelectView())
-
-if __name__ == "__main__":
-    keep_alive()
-    token = os.environ.get("DISCORD_TOKEN")
-    bot.run(token)
-
+    header = "🏁 **【全場AIスクリーニング速報（勝負駆け条件完全対応版）】** 🏁\n下のメニューから会場を選んで詳細をチェック�
