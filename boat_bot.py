@@ -10,26 +10,22 @@ import pandas as pd
 import requests
 
 # --- Renderをごまかすための簡易Webサーバー ---
-app = Flask(__name__)  # ← ここを修正しました！
-
+app = Flask(__name__)
 
 @app.route("/")
 def home():
-  return "I am alive!"
-
+    return "I am alive!"
 
 def run_web():
-  port = int(os.environ.get("PORT", 10000))
-  app.run(host="0.0.0.0", port=port, use_reloader=False)
-
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, use_reloader=False)
 
 def keep_alive():
-  t = threading.Thread(target=run_web)
-  t.daemon = True
-  t.start()
+    t = threading.Thread(target=run_web)
+    t.daemon = True
+    t.start()
 
-
-# --- ここから元のDiscordボットのコード ---
+# --- ここからDiscordボットのコード ---
 
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/seeeek-debug/boatracecsv.github.io/main/"
 NOTIFICATION_CHANNEL_ID = 1546042629253496925
@@ -69,12 +65,20 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# ── CSVキャッシュ機能（一度取得したファイルはメモリに保持して高速化） ──
+CSV_CACHE = {}
+
 def fetch_github_csv(file_path):
+    if file_path in CSV_CACHE:
+        return CSV_CACHE[file_path]
+    
     url = f"{GITHUB_RAW_BASE}{file_path}"
     try:
         res = requests.get(url)
         if res.status_code == 200:
-            return pd.read_csv(io.StringIO(res.text))
+            df = pd.read_csv(io.StringIO(res.text))
+            CSV_CACHE[file_path] = df
+            return df
     except Exception as e:
         print(f"CSV Fetch Error ({file_path}): {e}")
     return None
@@ -157,7 +161,8 @@ def calculate_historical_motor_score(current_year, current_month, current_day, v
     current_date = datetime(int(current_year), int(current_month), int(current_day), tzinfo=JST)
     past_scores = []
     
-    for i in range(1, days_back + 1, 2):
+    # 処理をスムーズにするため、ステップを2日おきから3日おきにするなどして効率化しつつ過去データを取得
+    for i in range(1, days_back + 1, 3):
         past_date = current_date - timedelta(days=i)
         y = past_date.strftime("%Y")
         m = past_date.strftime("%m")
@@ -306,6 +311,7 @@ class VenueSelect(discord.ui.Select):
                                 f_int = 0
                             f_str = f" ⚠️F{f_int}" if f_int > 0 else ""
                             
+                            # 過去データの平均値に基づいた本格的な機力評価スコアを算出（キャッシュ機能で高速化）
                             score = calculate_historical_motor_score(year, month, day, venue_code, m_no, days_back=60)
                             rank_str = get_short_rank(score)
                             
@@ -360,7 +366,7 @@ async def boat_report(ctx):
     await ctx.send(header, view=VenueSelectView())
 
 if __name__ == "__main__":
-    keep_alive()  # ← Render用の簡易サーバーを起動
+    keep_alive()
     token = os.environ.get("DISCORD_TOKEN")
     bot.run(token)
 
