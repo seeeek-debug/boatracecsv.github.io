@@ -136,7 +136,6 @@ def load_tokuten_hayami(venue_code, year, month, day_str):
     return None
 
 def load_race_card(venue, venue_code, year, month, day_str):
-    """ 当日の日付ファイル（例: data/programs/race_cards/2026/09/08.csv）から該当会場のデータを抽出 """
     path = f"data/programs/race_cards/{year}/{month}/{day_str}.csv"
     df = fetch_github_csv(path)
     
@@ -157,7 +156,6 @@ def load_race_card(venue, venue_code, year, month, day_str):
                 return df_filtered, path
         return df, path
     
-    # 前日をフォールバック
     try:
         dt = datetime(int(year), int(month), int(day_str)) - timedelta(days=1)
         prev_year = dt.strftime("%Y")
@@ -344,9 +342,7 @@ def heavy_calculation(venue, venue_code, year, month, day_str, date_str):
     
     tendency = VENUE_TENDENCIES.get(venue, "標準水面")
     
-    # 日付ファイルから該当会場の出走表データを取得
     df_card, checked_path = load_race_card(venue, venue_code, year, month, day_str)
-    
     exhibition_stats = load_original_exhibition_stats(venue_code, year, month)
     df_tokuten = load_tokuten_hayami(venue_code, year, month, day_str)
     
@@ -478,20 +474,31 @@ class VenueSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
-        venue = self.values[0]
-        venue_code = VENUE_MAPPING.get(venue, "01")
-        
-        target_date = datetime.now(JST)
-        year = target_date.strftime("%Y")
-        month = target_date.strftime("%m")
-        day_str = target_date.strftime("%d")
-        date_str = target_date.strftime("%Y-%m-%d")
-        
-        summary_text = await asyncio.to_thread(
-            heavy_calculation, venue, venue_code, year, month, day_str, date_str
-        )
+        try:
+            venue = self.values[0]
+            venue_code = VENUE_MAPPING.get(venue, "01")
+            
+            target_date = datetime.now(JST)
+            year = target_date.strftime("%Y")
+            month = target_date.strftime("%m")
+            day_str = target_date.strftime("%d")
+            date_str = target_date.strftime("%Y-%m-%d")
+            
+            summary_text = await asyncio.to_thread(
+                heavy_calculation, venue, venue_code, year, month, day_str, date_str
+            )
 
-        await interaction.followup.send(content=summary_text, ephemeral=True)
+            # 2000文字制限対策：分割して送信
+            if len(summary_text) <= 2000:
+                await interaction.followup.send(content=summary_text, ephemeral=True)
+            else:
+                for i in range(0, len(summary_text), 2000):
+                    chunk = summary_text[i:i+2000]
+                    await interaction.followup.send(content=chunk, ephemeral=True)
+                    
+        except Exception as e:
+            print(f"Callback Error: {e}")
+            await interaction.followup.send(content=f"⚠️ 分析中にエラーが発生しました: {e}", ephemeral=True)
 
 class VenueSelectView(discord.ui.View):
     def __init__(self):
