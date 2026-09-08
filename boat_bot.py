@@ -20,7 +20,7 @@ def home():
 
 def run_web():
   port = int(os.environ.get("PORT", 10000))
-  app.run(host="0.0.0.0", port=port)
+  app.run(host="0.0.0.0", port=port, use_reloader=False)
 
 
 def keep_alive():
@@ -360,7 +360,7 @@ async def boat_report(ctx):
     await ctx.send(header, view=VenueSelectView())
 
 if __name__ == "__main__":
-    keep_alive()  # ← ここでRender用の簡易サーバーを裏で起動！
+    keep_alive()  # ← Render用の簡易サーバーを起動
     token = os.environ.get("DISCORD_TOKEN")
     bot.run(token)
 
