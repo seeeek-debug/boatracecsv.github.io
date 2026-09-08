@@ -33,20 +33,22 @@ NOTIFICATION_CHANNEL_ID = 1546042629253496925
 
 JST = timezone(timedelta(hours=9))
 
+# 公式全24場のリスト
 VENUES = [
     "桐生", "戸田", "江戸川", "平和島", "多摩川", "浜名湖", 
-    "蒲郡", "常滑", "津", "三国", "琵琶湖", "住之江", 
-    "尼崎", "児島", "丸亀", "徳山", "下関", "若松", 
-    "芦屋", "福岡", "唐津", "大村"
+    "蒲郡", "常滑", "津", "三国", "びわこ", "住之江", 
+    "尼崎", "鳴門", "丸亀", "児島", "宮島", "徳山", 
+    "下関", "若松", "芦屋", "福岡", "唐津", "大村"
 ]
 
+# 画像の公式場コードに完全一致させたマッピング
 VENUE_MAPPING = {
     "桐生": "01", "戸田": "02", "江戸川": "03", "平和島": "04", 
     "多摩川": "05", "浜名湖": "06", "蒲郡": "07", "常滑": "08", 
-    "津": "09", "三国": "10", "琵琶湖": "11", "住之江": "12", 
-    "尼崎": "13", "児島": "14", "丸亀": "15", "徳山": "16", 
-    "下関": "17", "若松": "18", "芦屋": "19", "福岡": "20", 
-    "唐津": "21", "大村": "22"
+    "津": "09", "三国": "10", "びわこ": "11", "住之江": "12", 
+    "尼崎": "13", "鳴門": "14", "丸亀": "15", "児島": "16", 
+    "宮島": "17", "徳山": "18", "下関": "19", "若松": "20", 
+    "芦屋": "21", "福岡": "22", "唐津": "23", "大村": "24"
 }
 
 VENUE_TENDENCIES = {
@@ -55,9 +57,10 @@ VENUE_TENDENCIES = {
     "江戸川": "日本一の難水面・大荒れ警戒", "平和島": "まくり・差し交錯・イン苦戦",
     "多摩川": "静穏だが水面は軽め", "浜名湖": "広大な水面・スピード戦",
     "蒲郡": "ナイター・直線足重視", "常滑": "伊勢湾の風に注意", "津": "クセのない標準水面",
-    "三国": "冬場は荒れやすい", "琵琶湖": "淡水特有のうねりと難解さ",
+    "三国": "冬場は荒れやすい", "びわこ": "淡水特有のうねりと難解さ",
     "住之江": "ナイトプール・インと差しの攻防", "尼崎": "高速水面・イン信頼度高",
-    "児島": "潮の満ち引きで変化", "丸亀": "ナイター・風の影響少",
+    "鳴門": "インが弱く激しい潮流", "丸亀": "ナイター・風の影響少",
+    "児島": "潮の満ち引きで変化", "宮島": "瀬戸内の潮汐と難水面",
     "下関": "安定した水面コンディション", "若松": "海水面・うねり考慮",
     "福岡": "難水面・外マイ警戒", "唐津": "比較的フラットな水面"
 }
@@ -132,6 +135,25 @@ def load_tokuten_hayami(venue_code, year, month, day):
     except Exception:
         pass
     return None
+
+def load_race_card(venue_code, year, month, day):
+    path = f"data/programs/race_cards/{year}/{month}/{venue_code}.csv"
+    df = fetch_github_csv(path)
+    if df is not None and not df.empty:
+        return df, path
+    
+    try:
+        dt = datetime(int(year), int(month), int(day)) - timedelta(days=1)
+        prev_year = dt.strftime("%Y")
+        prev_month = dt.strftime("%m")
+        prev_day = dt.strftime("%d")
+        prev_path = f"data/programs/race_cards/{prev_year}/{prev_month}/{venue_code}.csv"
+        df_prev = fetch_github_csv(prev_path)
+        if df_prev is not None and not df_prev.empty:
+            return df_prev, prev_path
+    except Exception:
+        pass
+    return None, path
 
 def load_original_exhibition_stats(venue_code, year, month):
     path = f"data/previews/original_exhibition/{year}/{month}/{venue_code}.csv"
@@ -293,21 +315,7 @@ def heavy_calculation(venue, venue_code, year, month, day, date_str):
     
     tendency = VENUE_TENDENCIES.get(venue, "標準水面")
     
-    race_card_path = f"data/programs/race_cards/{year}/{month}/{venue_code}.csv"
-    df_card = fetch_github_csv(race_card_path)
-    
-    # 出走表データがない場合のフォールバック（前日データを試す）
-    if df_card is None or df_card.empty:
-        try:
-            dt = datetime(int(year), int(month), int(day)) - timedelta(days=1)
-            prev_year = dt.strftime("%Y")
-            prev_month = dt.strftime("%m")
-            prev_day = dt.strftime("%d")
-            prev_race_card_path = f"data/programs/race_cards/{prev_year}/{prev_month}/{venue_code}.csv"
-            df_card = fetch_github_csv(prev_race_card_path)
-        except Exception:
-            pass
-
+    df_card, checked_path = load_race_card(venue_code, year, month, day)
     exhibition_stats = load_original_exhibition_stats(venue_code, year, month)
     df_tokuten = load_tokuten_hayami(venue_code, year, month, day)
     
@@ -334,7 +342,7 @@ def heavy_calculation(venue, venue_code, year, month, day, date_str):
     summary_text += f"📝 水面特性: *{tendency}* | 📊 得点早見: *{'連携完了 ✅' if tokuten_dict else 'データなし ℹ️'}*\n\n"
     
     if df_card is None or df_card.empty:
-        return summary_text + f"⚠️ 指定日の出走表データ（{race_card_path}）が取得できませんでした。開催日程やデータ更新状況をご確認ください。"
+        return summary_text + f"⚠️ 指定日の出走表データ（{checked_path}）が取得できませんでした。本日の開催日程やデータ更新状況をご確認ください。"
 
     summary_text += "📋 **【レース別展開予測 ＆ 勝負駆け・機力詳細】**\n"
     
