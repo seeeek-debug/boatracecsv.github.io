@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import requests
 
-# --- Renderをごまかすための簡易Webサーバー ---
+# --- Render用Webサーバー ---
 app = Flask(__name__)
 
 @app.route("/")
@@ -26,7 +26,7 @@ def keep_alive():
     t.daemon = True
     t.start()
 
-# --- ここからDiscordボットのコード ---
+# --- Discordボット設定 ---
 
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/seeeek-debug/boatracecsv.github.io/main/"
 NOTIFICATION_CHANNEL_ID = 1546042629253496925
@@ -66,7 +66,6 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ── CSVキャッシュ機能 ──
 CSV_CACHE = {}
 
 def fetch_github_csv(file_path):
@@ -84,358 +83,346 @@ def fetch_github_csv(file_path):
         print(f"CSV Fetch Error ({file_path}): {e}")
     return None
 
-def load_all_course_win_rates():
+def load_race_course_win_rates():
     df = fetch_github_csv("data/estimate/stadium/course_win_rate.csv")
-    venue_course_rates = {}
+    venue_race_rates = {}
     
     if df is not None and not df.empty:
-        course_col = "コース" if "コース" in df.columns else "course"
         venue_col = "場コード" if "場コード" in df.columns else "stadium_code"
-        win_col = "1着率" if "1着率" in df.columns else ("勝率" if "勝率" in df.columns else "win_rate")
+        race_col = "レース回" if "レース回" in df.columns else "race"
         
-        if course_col in df.columns and venue_col in df.columns and win_col in df.columns:
-            inv_mapping = {int(v): k for k, v in VENUE_MAPPING.items()}
-            for venue_code_val, group in df.groupby(venue_col):
-                try:
-                    code_int = int(venue_code_val)
-                    if code_int in inv_mapping:
-                        venue_name = inv_mapping[code_int]
-                        course_rates = {}
-                        for _, row in group.iterrows():
-                            c = int(row[course_col])
-                            r_val = float(row[win_col])
-                            course_rates[c] = r_val * 100 if r_val <= 1.0 else r_val
-                        venue_course_rates[venue_name] = course_rates
-                except Exception:
+        inv_mapping = {int(v): k for k, v in VENUE_MAPPING.items()}
+        for _, row in df.iterrows():
+            try:
+                v_code = int(row[venue_col])
+                if v_code not in inv_mapping:
                     continue
-    return venue_course_rates
-
-def analyze_vulnerability_trends(year, month, day):
-    payout_path = f"data/results/payouts/{year}/{month}/{day}.csv"
-    df_payout = fetch_github_csv(payout_path)
-    
-    if df_payout is None or df_payout.empty:
-        return "⚠️ 本日の払戻・結果データがまだ公開されていません。"
-    
-    defeat_counts = {}
-    col_name = "2連単_組番"
-    
-    if col_name in df_payout.columns:
-        for val in df_payout[col_name].dropna():
-            parts = str(val).replace("=", "-").split("-")
-            if len(parts) >= 2:
-                winner = parts[0]
-                loser_side = parts[1]
+                venue_name = inv_mapping[v_code]
                 
-                if winner != "1":
-                    key = f"1コース敗北（{winner}コース被弾）"
-                    defeat_counts[key] = defeat_counts.get(key, 0) + 1
-                else:
-                    key = f"1コース勝利時、2着粘り（{loser_side}号艇）"
-                    defeat_counts[key] = defeat_counts.get(key, 0) + 1
+                r_num = int(str(row[race_col]).replace("R", ""))
+                
+                course_rates = {}
+                for c in range(1, 7):
+                    col_name = f"{c}コース勝率"
+                    if col_name in df.columns:
+                        val = float(row[col_name])
+                        course_rates[c] = val * 100 if val <= 1.0 else val
+                    else:
+                        course_rates[c] = 0.0
+                
+                if venue_name not in venue_race_rates:
+                    venue_race_rates[venue_name] = {}
+                venue_race_rates[venue_name][r_num] = course_rates
+            except Exception:
+                continue
+    return venue_race_rates
 
-    if not defeat_counts:
-        return "・有効な組番データから敗因傾向を抽出できませんでした。"
-        
-    sorted_trends = sorted(defeat_counts.items(), key=lambda x: x[1], reverse=True)
-    report_lines = []
-    for trend, count in sorted_trends[:3]:
-        report_lines.append(f"・ {trend}: **{count}件**")
-        
-    return "\n".join(report_lines)
-
-def get_short_rank(score):
-    if score >= 5.5:
-        return "🔥S"
-    elif score >= 4.5:
-        return "⭐A+"
-    elif score >= 3.5:
-        return "✨A"
-    elif score >= 2.5:
-        return "⚖️B+"
-    elif score >= 1.5:
-        return "🔄B"
-    else:
-        return "⚠️C"
-
-# ── 過去のモーター2連対率・展示・1周・回り足・直線タイムを総合解析する関数 ──
-def calculate_historical_motor_deep_stats(current_year, current_month, current_day, venue_code, target_motor_no, days_back=60):
-    current_date = datetime(int(current_year), int(current_month), int(current_day), tzinfo=JST)
-    past_quinella_scores = []
-    past_ex_times = []
-    past_lap_times = []
-    past_turn_times = []
-    past_straight_times = []
-    past_ex_sts = []
+def load_tokuten_hayami(venue_code, year, month, day):
+    path = f"data/previews/tokuten_hayami/{year}/{month}/{venue_code}.csv"
+    df = fetch_github_csv(path)
+    if df is not None and not df.empty:
+        return df
     
-    for i in range(1, days_back + 1, 3):
-        past_date = current_date - timedelta(days=i)
-        y = past_date.strftime("%Y")
-        m = past_date.strftime("%m")
-        d_str = past_date.strftime("%d")
+    try:
+        dt = datetime(int(year), int(month), int(day)) - timedelta(days=1)
+        prev_path = f"data/previews/tokuten_hayami/{dt.strftime('%Y')}/{dt.strftime('%m')}/{venue_code}.csv"
+        df_prev = fetch_github_csv(prev_path)
+        if df_prev is not None and not df_prev.empty:
+            return df_prev
+    except Exception:
+        pass
+    return None
+
+def load_original_exhibition_stats(venue_code, year, month):
+    path = f"data/previews/original_exhibition/{year}/{month}/{venue_code}.csv"
+    df = fetch_github_csv(path)
+    
+    if df is None or df.empty:
+        path = f"data/programs/motor_stats/{year}/{month}/{venue_code}.csv"
+        df = fetch_github_csv(path)
         
-        path = f"data/programs/race_cards/{y}/{m}/{d_str}.csv"
-        df_past = fetch_github_csv(path)
+    exhibition_dict = {}
+    if df is not None and not df.empty:
+        m_col = next((c for c in ["モーター番号", "モーター", "motor"] if c in df.columns), None)
+        rate_col = next((c for c in ["2連対率", "2連率"] if c in df.columns), None)
+        win_col = "勝率" if "勝率" in df.columns else None
         
-        if df_past is not None and not df_past.empty:
-            col_venue = "レース場コード" if "レース場コード" in df_past.columns else "場コード"
-            if col_venue in df_past.columns:
-                matched_venue = df_past[df_past[col_venue].astype(str).str.zfill(2) == str(venue_code)]
-                for _, row in matched_venue.iterrows():
-                    for b in range(1, 7):
-                        m_col = f"艇{b}_モーター番号"
-                        if m_col in row and str(row[m_col]) == str(target_motor_no):
-                            # モーター2連対率
-                            q_col = f"艇{b}_モーター2連対率"
-                            if q_col in row:
-                                try:
-                                    past_quinella_scores.append(float(row[q_col]))
-                                except:
-                                    pass
-                            
-                            # 展示タイム
-                            for c_name in [f"艇{b}_展示タイム", f"艇{b}_展タイム"]:
-                                if c_name in row:
-                                    try:
-                                        past_ex_times.append(float(row[c_name]))
-                                        break
-                                    except:
-                                        pass
-                                        
-                            # 1周タイム
-                            for c_name in [f"艇{b}_1周タイム", f"艇{b}_一周タイム"]:
-                                if c_name in row:
-                                    try:
-                                        past_lap_times.append(float(row[c_name]))
-                                        break
-                                    except:
-                                        pass
-                                        
-                            # 回り足タイム
-                            for c_name in [f"艇{b}_回り足タイム", f"艇{b}_回り足"]:
-                                if c_name in row:
-                                    try:
-                                        past_turn_times.append(float(row[c_name]))
-                                        break
-                                    except:
-                                        pass
-                                        
-                            # 直線タイム
-                            for c_name in [f"艇{b}_直線タイム", f"艇{b}_直線"]:
-                                if c_name in row:
-                                    try:
-                                        past_straight_times.append(float(row[c_name]))
-                                        break
-                                    except:
-                                        pass
-                                        
-                            # 展示ST
-                            for c_name in [f"艇{b}_展示ST", f"艇{b}_ST"]:
-                                if c_name in row:
-                                    try:
-                                        past_ex_sts.append(float(row[c_name]))
-                                        break
-                                    except:
-                                        pass
+        c_wari = next((c for c in ["回り足タイム", "まわり足タイム", "回り足", "まわり足"] if c in df.columns), None)
+        c_choku = next((c for c in ["直線タイム", "直線"] if c in df.columns), None)
+        c_tenji = next((c for c in ["展示タイム", "展示"] if c in df.columns), None)
+        c_1shu = next((c for c in ["1周タイム", "一周タイム", "1周", "一周"] if c in df.columns), None)
 
-    # 1. 総合機力評価スコア算出
-    if not past_quinella_scores:
-        base_score = 3.0
-    else:
-        avg_q = np.mean(past_quinella_scores)
-        if avg_q >= 45.0: base_score = 6.0
-        elif avg_q >= 40.0: base_score = 5.0
-        elif avg_q >= 35.0: base_score = 4.0
-        elif avg_q >= 30.0: base_score = 3.0
-        elif avg_q >= 25.0: base_score = 2.0
-        else: base_score = 1.0
+        if m_col:
+            for _, row in df.iterrows():
+                try:
+                    m_num = int(row[m_col])
+                    rate = float(row[rate_col]) if rate_col and pd.notna(row[rate_col]) else 0.0
+                    w_rate = float(row[win_col]) if win_col and pd.notna(row[win_col]) else 0.0
+                    
+                    avg_wari = float(row[c_wari]) if c_wari and pd.notna(row[c_wari]) else 0.0
+                    avg_choku = float(row[c_choku]) if c_choku and pd.notna(row[c_choku]) else 0.0
+                    avg_tenji = float(row[c_tenji]) if c_tenji and pd.notna(row[c_tenji]) else 6.75
+                    avg_1shu = float(row[c_1shu]) if c_1shu and pd.notna(row[c_1shu]) else 37.0
+                    
+                    exhibition_dict[m_num] = {
+                        "2ren": rate,
+                        "win": w_rate,
+                        "avg_wari": avg_wari,
+                        "avg_choku": avg_choku,
+                        "avg_tenji": avg_tenji,
+                        "avg_1shu": avg_1shu
+                    }
+                except:
+                    continue
+    return exhibition_dict
 
-    # 各種平均タイムの算出
-    avg_ex_time = np.mean(past_ex_times) if past_ex_times else 6.80
-    avg_lap_time = np.mean(past_lap_times) if past_lap_times else 37.50
-    avg_turn_time = np.mean(past_turn_times) if past_turn_times else 6.50
-    avg_straight_time = np.mean(past_straight_times) if past_straight_times else 6.50
-    avg_ex_st = np.mean(past_ex_sts) if past_ex_sts else 0.15
-
-    # 2. 出足・伸び足の個別評価とタイプ判定
-    # 直線タイムと回り足タイムのバランスから足質を判定
-    if past_straight_times and past_turn_times:
-        if avg_straight_time < avg_turn_time - 0.05:
-            ex_type = "🚀伸び足特化型"
-            deashi = "⚖️B+"
-            nobibi = "🔥S"
-        elif avg_turn_time < avg_straight_time - 0.05:
-            ex_type = "⚙️出足・回り足型"
-            deashi = "🔥S"
-            nobibi = "🔄B"
+def get_shobugake_condition(info):
+    """ 得点早見データの各着時得点率から、何着条件かを判定する """
+    try:
+        junni = int(info.get("junni", 99))
+    except:
+        junni = 99
+        
+    if junni <= 12:
+        return "✨安全圏（優出・勝負余裕）"
+        
+    try:
+        t1 = float(info.get("t1", 0) or 0)
+        t2 = float(info.get("t2", 0) or 0)
+        t3 = float(info.get("t3", 0) or 0)
+        t4 = float(info.get("t4", 0) or 0)
+        
+        # 一般的な準優ボーダー（6.00）を基準に判定
+        if t4 >= 6.0:
+            return "🎯4着条件（比較的クリア容易）"
+        elif t3 >= 6.0:
+            return "🔥3着条件（勝負駆け・要着順）"
+        elif t2 >= 6.0:
+            return "⚡2着条件（勝負駆け・上位必須）"
+        elif t1 >= 6.0:
+            return "⚠️1着勝負（絶体絶命の勝負駆け）"
         else:
-            ex_type = "⚖️正統派バランス型"
-            deashi = "✨A"
-            nobibi = "✨A"
-    else:
-        # フォールバック（展示タイム基準）
-        if avg_ex_time < 6.75:
-            ex_type = "🚀伸び足特化型"
-            deashi = "⚖️B+"
-            nobibi = "🔥S"
-        elif avg_ex_time > 6.85:
-            ex_type = "⚙️出足・回り足型"
-            deashi = "🔥S"
-            nobibi = "🔄B"
-        else:
-            ex_type = "⚖️正統派バランス型"
-            deashi = "✨A"
-            nobibi = "✨A"
+            return "⚠️厳しい条件（他力・完走目標）"
+    except:
+        return "🔥勝負駆け"
 
-    return {
-        "score": base_score,
-        "rank": get_short_rank(base_score),
-        "avg_ex_time": avg_ex_time,
-        "avg_lap_time": avg_lap_time,
-        "avg_turn_time": avg_turn_time,
-        "avg_straight_time": avg_straight_time,
-        "avg_ex_st": avg_ex_st,
-        "ex_type": ex_type,
-        "deashi": deashi,
-        "nobibi": nobibi
-    }
+def evaluate_from_exhibition_times(motor_2ren, avg_wari, avg_choku, avg_tenji, avg_1shu):
+    deashi_score = 0
+    if avg_wari > 0:
+        if avg_wari <= 1.48: deashi_score += 2
+        elif avg_wari <= 1.52: deashi_score += 1
+    if avg_1shu > 0:
+        if avg_1shu <= 36.5: deashi_score += 2
+        elif avg_1shu <= 37.0: deashi_score += 1
+
+    if deashi_score >= 3: deashi_eval = "🔥S"
+    elif deashi_score >= 2: deashi_eval = "⭐A+"
+    elif deashi_score >= 1: deashi_eval = "✨A"
+    else: deashi_eval = "⚖️B+"
+
+    nobi_score = 0
+    if avg_choku > 0:
+        if avg_choku <= 6.18: nobi_score += 2
+        elif avg_choku <= 6.23: nobi_score += 1
+    if avg_tenji > 0:
+        if avg_tenji <= 6.68: nobi_score += 2
+        elif avg_tenji <= 6.72: nobi_score += 1
+
+    if nobi_score >= 3: nobi_eval = "🔥S"
+    elif nobi_score >= 2: nobi_eval = "⭐A+"
+    elif nobi_score >= 1: nobi_eval = "✨A"
+    else: nobi_eval = "⚖️B+"
+
+    time_score = deashi_score + nobi_score
+    overall_score = 0
+    if motor_2ren >= 45.0: overall_score += 3
+    elif motor_2ren >= 38.0: overall_score += 2
+    elif motor_2ren >= 32.0: overall_score += 1
+
+    overall_score += time_score
+
+    if overall_score >= 6: overall_rank = "🔥S"
+    elif overall_score >= 4: overall_rank = "⭐A+"
+    elif overall_score >= 3: overall_rank = "✨A"
+    elif overall_score >= 2: overall_rank = "⚖️B+"
+    elif overall_score >= 1: overall_rank = "🔄B"
+    else: overall_rank = "⚠️C"
+
+    if nobi_score > deashi_score: foot_type = "🚀伸び足特化型"
+    elif deashi_score > nobi_score: foot_type = "🌀出足・回り足型"
+    else: foot_type = "⚖️正統派バランス型"
+
+    return overall_rank, foot_type, deashi_eval, nobi_eval
 
 def generate_race_tactical_advice(racer_data_list, in_rate):
     if not racer_data_list or len(racer_data_list) < 6:
         return "【⚡展開混戦】データ不足のためフラットな評価"
 
     boat1 = racer_data_list[0]
-    b1_class = boat1["class"]
-    b1_st = boat1["st"]
-    b1_f = boat1["f_count"]
-    b1_motor = boat1["score"]
+    b1_win = boat1["win_rate"]
+    b1_motor = boat1["motor_2ren"]
+    b1_shobu = boat1.get("shobu", "")
 
-    boat3 = racer_data_list[2]
-    boat4 = racer_data_list[3]
+    strong_outs = [d for d in racer_data_list[1:] if d["win_rate"] >= 6.0 or d["motor_2ren"] >= 45.0]
+    shobugake_boats = [d for d in racer_data_list if "勝負駆け" in d.get("shobu", "") or "1着勝負" in d.get("shobu", "")]
 
-    strong_outs = []
-    for d in racer_data_list[1:]:
-        if "A1" in d["class"] or d["score"] >= 5.0 or (d["st"] <= 0.13 and d["st"] > 0) or d["ex_time_val"] < 6.75:
-            strong_outs.append(d)
+    if "1着勝負" in b1_shobu or "2着条件" in b1_shobu:
+        return f"🔥【1号艇が勝負駆け・気迫の逃げ】 1号艇が崖っぷちの勝負駆け条件。是が非でもスタートを決めて逃げ切る構えに注目！"
 
-    if b1_f > 0 or b1_motor <= 2.0 or b1_st >= 0.17:
+    if shobugake_boats:
+        sb_str = "・".join([f"{d['boat_no']}号艇({d['r_name']})" for d in shobugake_boats])
+        return f"🔥【勝負駆け参戦レース】 {sb_str}が勝負駆け条件を抱えており、着順アップを狙う強気の攻め・思い切ったターンに警戒！"
+
+    if b1_win <= 4.0 or b1_motor <= 30.0:
         target_boat = strong_outs[0]["boat_no"] if strong_outs else "2"
-        return f"【⚠️ 1号艇ピンチ・波乱警戒】 1号艇の不安あり。**{target_boat}号艇**の差し・まくり抜けに要警戒！"
+        return f"【⚠️ 1号艇ピンチ・波乱警戒】 1号艇の勝率・機力に不安あり。**{target_boat}号艇**の逆転・差し抜けに要警戒！"
     
-    elif "A" in boat3["class"] and (boat3["st"] <= 0.14 or boat3["ex_time_val"] < 6.75) and boat3["score"] >= 4.0:
-        return f"【🌀3号艇のまくり差し警戒】 3号艇({boat3['class']})の鋭い全速まくり差しが炸裂する展開に注意！"
+    elif racer_data_list[2]["win_rate"] >= 6.5 and racer_data_list[2]["st"] <= 0.14:
+        return f"【🌀3号艇のセンター攻め警戒】 3号艇の勝率が高く、全速まくり・まくり差し炸裂の展開に注意！"
     
-    elif "A" in boat4["class"] and (boat4["st"] <= 0.14 or boat4["ex_time_val"] < 6.75) and boat4["score"] >= 4.0:
-        return f"【🌀4号艇のまくり差し・カド攻め警戒】 4号艇({boat4['class']})のカドからの自在戦（まくり差し）に要注目。"
+    elif racer_data_list[3]["win_rate"] >= 6.5:
+        return f"【🌀4号艇のカド自在戦警戒】 4号艇の実力が高く、カドからのダッシュ攻勢に要注目。"
     
-    elif in_rate >= 58.0 and "A" in b1_class and b1_motor >= 4.0:
-        return f"【🛡️固め・イン鉄壁】 1号艇({b1_class})の逃げ信頼度高。相手探し（2・3号艇の差し・粘り）が主軸。"
-    
-    elif len(strong_outs) >= 2 and in_rate < 50.0:
-        danger_boats = ", ".join([str(d["boat_no"]) for d in strong_outs[:2]])
-        return f"【🔥大荒れ・外マイ警戒】 センター・外枠（**{danger_boats}号艇**）が活発。激しい攻防戦に注意。"
+    elif in_rate >= 55.0 and b1_win >= 5.5:
+        return f"【🛡️固め・イン鉄壁】 1号艇のイン逃げ信頼度高。相手探し（2・3号艇）が主軸。"
     
     else:
-        return "【⚡差し・まくり交錯】 互角のメンバー構成。第1ターンマークの攻防に注目。"
+        return f"【⚡差し・まくり交錯】 互角のメンバー構成。第1ターンマークの攻防に注目。"
 
-# ── 重い集計処理を別スレッドで安全に実行する関数 ──
 def heavy_calculation(venue, venue_code, year, month, day, date_str):
-    all_rates = load_all_course_win_rates()
-    venue_rates = all_rates.get(venue, {c: 0.0 for c in range(1, 7)})
-    in_rate = venue_rates.get(1, 50.0)
+    all_race_rates = load_race_course_win_rates()
+    venue_rates_by_race = all_race_rates.get(venue, {})
+    
     tendency = VENUE_TENDENCIES.get(venue, "標準水面")
     
-    summary_text = f"🏟️ **【{venue}場】 当日出走表AIスクリーニング ({date_str})**\n"
-    summary_text += f"📝 水面特性: *{tendency}* (1コース勝率: **{in_rate:.1f}%**)\n\n"
+    race_card_path = f"data/programs/race_cards/{year}/{month}/{venue_code}.csv"
+    df_card = fetch_github_csv(race_card_path)
+    exhibition_stats = load_original_exhibition_stats(venue_code, year, month)
+    df_tokuten = load_tokuten_hayami(venue_code, year, month, day)
     
-    summary_text += "🎯 **【直近のコース別被弾・敗北傾向】**\n"
-    summary_text += f"{analyze_vulnerability_trends(year, month, day)}\n\n"
+    tokuten_dict = {}
+    if df_tokuten is not None and not df_tokuten.empty:
+        for _, row in df_tokuten.iterrows():
+            for i in range(1, 7):
+                for prefix in [f"組{i}_", f"艇{i}_"]:
+                    name_col = f"{prefix}選手名"
+                    if name_col in df_tokuten.columns:
+                        name = str(row.get(name_col, ""))
+                        if name and name != "nan":
+                            tokuten_dict[name] = {
+                                "tokuten_ritsu": row.get(f"{prefix}得点率", 0.0),
+                                "junni": row.get(f"{prefix}順位", "-"),
+                                "border": row.get(f"{prefix}ボーダー状態", ""),
+                                "t1": row.get(f"{prefix}1着時得点率", 0),
+                                "t2": row.get(f"{prefix}2着時得点率", 0),
+                                "t3": row.get(f"{prefix}3着時得点率", 0),
+                                "t4": row.get(f"{prefix}4着時得点率", 0),
+                            }
+
+    summary_text = f"🏟️ **【{venue}場】 勝負駆け条件・展示評価 AI分析 ({date_str})**\n"
+    summary_text += f"📝 水面特性: *{tendency}* | 📊 得点早見: *{'連携完了 ✅' if tokuten_dict else 'データなし ℹ️'}*\n\n"
     
-    entries_path = f"data/programs/race_cards/{year}/{month}/{day}.csv"
-    df_entries = fetch_github_csv(entries_path)
+    if df_card is None or df_card.empty:
+        return summary_text + f"⚠️ 指定日の出走表データ（{race_card_path}）が取得できませんでした。"
+
+    summary_text += "📋 **【レース別展開予測 ＆ 勝負駆け・機力詳細】**\n"
     
-    venue_entries = pd.DataFrame()
-    if df_entries is not None and not df_entries.empty:
-        col_venue = "レース場コード" if "レース場コード" in df_entries.columns else "場コード"
-        if col_venue in df_entries.columns:
-            venue_entries = df_entries[df_entries[col_venue].astype(str).str.zfill(2) == str(venue_code)]
+    col_r_num = "レース回" if "レース回" in df_card.columns else ("レース" if "レース" in df_card.columns else None)
     
-    summary_text += "📋 **【レース別展開予測 ＆ 全タイム詳細機力評価】**\n"
     for r in range(1, 13):
+        race_course_rate = venue_rates_by_race.get(r, {1: 50.0})
+        in_rate = race_course_rate.get(1, 50.0)
+
         racer_evals = []
         racer_structs = []
         
-        if not venue_entries.empty:
-            col_race = "レース回" if "レース回" in venue_entries.columns else "レース"
-            if col_race in venue_entries.columns:
-                target_r_str = f"{r}R"
-                df_race = venue_entries[venue_entries[col_race].astype(str).str.contains(target_r_str)]
+        row_race = None
+        if col_r_num:
+            target_r_str = f"{r}R"
+            matched = df_card[df_card[col_r_num].astype(str).str.contains(target_r_str)]
+            if not matched.empty:
+                row_race = matched.iloc[0]
+        else:
+            if len(df_card) >= r:
+                row_race = df_card.iloc[r-1]
+
+        if row_race is not None:
+            for b_no in range(1, 7):
+                r_name = str(row_race.get(f"艇{b_no}_選手名", f"{b_no}号艇"))
+                r_class = str(row_race.get(f"艇{b_no}_級別", "B1"))
                 
-                if not df_race.empty:
-                    row = df_race.iloc[0]
-                    for b_no in range(1, 7):
-                        r_name = str(row.get(f"艇{b_no}_選手名", "選手"))
-                        r_class = str(row.get(f"艇{b_no}_期別", "B1"))
-                        m_no = str(row.get(f"艇{b_no}_モーター番号", "-"))
-                        
-                        # 平均ST
-                        try:
-                            st_val = float(row.get(f"艇{b_no}_平均ST", 0.15))
-                            st_str = f"{st_val:.2f}"
-                        except:
-                            st_val = 0.15
-                            st_str = "0.15"
-                            
-                        # F回数
-                        try:
-                            f_int = int(row.get(f"艇{b_no}_F", 0))
-                        except:
-                            f_int = 0
-                        f_str = f" ⚠️F{f_int}" if f_int > 0 else ""
-                        
-                        # 当日の展示タイム等の取得
-                        ex_time_str = str(row.get(f"艇{b_no}_展示タイム", row.get(f"艇{b_no}_展タイム", "-")))
-                        try:
-                            ex_time_val = float(ex_time_str)
-                        except:
-                            ex_time_val = 6.80
-                            
-                        # 過去データから機力・全タイム平均・足質を完全解析
-                        deep_stats = calculate_historical_motor_deep_stats(year, month, day, venue_code, m_no, days_back=60)
-                        
-                        racer_structs.append({
-                            "boat_no": str(b_no),
-                            "class": r_class,
-                            "st": st_val,
-                            "f_count": f_int,
-                            "score": deep_stats["score"],
-                            "ex_time_val": ex_time_val
-                        })
-                        
-                        # 詳細評価フォーマット（展示、1周、回り足、直線すべての過去平均を含む）
-                        eval_detail = (
-                            f"M#{m_no}:{deep_stats['rank']} [{deep_stats['ex_type']}] "
-                            f"(出足:{deep_stats['deashi']} / 伸び:{deep_stats['nobibi']})\n"
-                            f"   └ 過去平均[展:{deep_stats['avg_ex_time']:.2f} | 1周:{deep_stats['avg_lap_time']:.2f} | 回:{deep_stats['avg_turn_time']:.2f} | 直:{deep_stats['avg_straight_time']:.2f}]"
-                        )
-                        racer_evals.append(f"• {b_no} {r_name}({r_class}) [ST:{st_str}{f_str}] ➔ {eval_detail}")
-        
+                try:
+                    win_rate = float(row_race.get(f"艇{b_no}_全国勝率", 0.0))
+                except:
+                    win_rate = 0.0
+                    
+                try:
+                    motor_num = int(row_race.get(f"艇{b_no}_モーター番号", 0))
+                except:
+                    motor_num = 0
+
+                motor_2ren = 0.0
+                try:
+                    motor_2ren = float(row_race.get(f"艇{b_no}_モーター2連対率", 0.0))
+                except:
+                    pass
+
+                avg_wari, avg_choku, avg_tenji, avg_1shu = 0.0, 0.0, 6.75, 37.0
+                if motor_num in exhibition_stats:
+                    if motor_2ren == 0.0:
+                        motor_2ren = exhibition_stats[motor_num]["2ren"]
+                    avg_wari = exhibition_stats[motor_num]["avg_wari"]
+                    avg_choku = exhibition_stats[motor_num]["avg_choku"]
+                    avg_tenji = exhibition_stats[motor_num]["avg_tenji"]
+                    avg_1shu = exhibition_stats[motor_num]["avg_1shu"]
+
+                try:
+                    avg_st = float(row_race.get(f"艇{b_no}_全国平均ST", 0.15))
+                except:
+                    avg_st = 0.15
+
+                overall_rank, foot_type, deashi_eval, nobi_eval = evaluate_from_exhibition_times(
+                    motor_2ren, avg_wari, avg_choku, avg_tenji, avg_1shu
+                )
+
+                tokuten_info = tokuten_dict.get(r_name, {})
+                shobu_cond = get_shobugake_condition(tokuten_info)
+                t_ritsu = tokuten_info.get("tokuten_ritsu", None)
+                t_junni = tokuten_info.get("junni", None)
+                
+                tokuten_str = ""
+                if t_ritsu is not None and pd.notna(t_ritsu):
+                    tokuten_str = f" [得点率:{float(t_ritsu):.2f}/順位:{t_junni}位]"
+
+                racer_structs.append({
+                    "boat_no": str(b_no),
+                    "r_name": r_name,
+                    "win_rate": win_rate,
+                    "motor_2ren": motor_2ren,
+                    "st": avg_st,
+                    "shobu": shobu_cond
+                })
+
+                eval_detail = (
+                    f"#{b_no} {r_name} ({r_class}): 機力{overall_rank}({foot_type}) | **{shobu_cond}**\n"
+                    f"   └ └ 勝率:{win_rate:.2f}{tokuten_str} | 出足:{deashi_eval} / 伸び:{nobi_eval}\n"
+                    f"   └ └ M#{motor_num}(2連:{motor_2ren:.1f}%) 展示平均[回り:{avg_wari:.2f}/直線:{avg_choku:.2f}/展示:{avg_tenji:.2f}/1周:{avg_1shu:.2f}]"
+                )
+                racer_evals.append(f"• {eval_detail}")
+
         tag = generate_race_tactical_advice(racer_structs, in_rate)
             
         if racer_evals:
             evals_str = "\n   ".join(racer_evals)
-            summary_text += f"・ **R{r:2d}** ➔ {tag}\n   {evals_str}\n"
+            summary_text += f"・ **R{r:2d}** (1ｺｰｽ勝率:{in_rate:.1f}%) ➔ {tag}\n   {evals_str}\n\n"
         else:
-            summary_text += f"・ **R{r:2d}** ➔ {tag}\n"
+            summary_text += f"・ **R{r:2d}** (1ｺｰｽ勝率:{in_rate:.1f}%) ➔ {tag}\n\n"
             
-    if df_entries is None or df_entries.empty:
-        summary_text += f"\n⚠️ *注意: 当日の出走表ファイル ({entries_path}) がまだ取得できないため、統計ベースの予測を表示しています。*"
-
     return summary_text
 
 class VenueSelect(discord.ui.Select):
     def __init__(self):
-        options = [discord.SelectOption(label=v, description=f"{v}場の全タイム平均・出足・伸び評価を表示") for v in VENUES]
+        options = [discord.SelectOption(label=v, description=f"{v}場の勝負駆け・機力評価をAI分析") for v in VENUES]
         super().__init__(placeholder="🏟️ 詳細を確認したい会場を選択してください...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
@@ -465,7 +452,7 @@ class VenueSelectView(discord.ui.View):
 async def daily_morning_report():
     channel = bot.get_channel(NOTIFICATION_CHANNEL_ID)
     if channel is not None:
-        header = "🏁 **【毎朝の自動AIスクリーニング速報（全タイム・足質完全対応版）】** 🏁\nGitHubのデータ更新完了！下のメニューから気になる会場を選んで詳細をチェックしてな👇"
+        header = "🏁 **【毎朝の自動AIスクリーニング速報（勝負駆け条件完全対応版）】** 🏁\n下のメニューから気になる会場を選んで詳細をチェックしてな👇"
         await channel.send(header, view=VenueSelectView())
 
 @daily_morning_report.before_loop
@@ -474,13 +461,13 @@ async def before_daily_report():
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user.name}! Morning auto-report scheduler is active.")
+    print(f"Logged in as {bot.user.name}! Morning report active.")
     if not daily_morning_report.is_running():
         daily_morning_report.start()
 
 @bot.command(name="boat_report")
 async def boat_report(ctx):
-    header = "🏁 **【全場AIスクリーニング速報（全タイム・足質完全対応版）】** 🏁\n下のメニューから会場を選んで詳細をチェック👇"
+    header = "🏁 **【全場AIスクリーニング速報（勝負駆け条件完全対応版）】** 🏁\n下のメニューから会場を選んで詳細をチェック👇"
     await ctx.send(header, view=VenueSelectView())
 
 if __name__ == "__main__":
