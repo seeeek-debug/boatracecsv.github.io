@@ -10,7 +10,7 @@ import pandas as pd
 import requests
 
 # --- Renderをごまかすための簡易Webサーバー ---
-app = Flask("")
+app = Flask(__name__)  # ← ここを修正しました！
 
 
 @app.route("/")
