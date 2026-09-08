@@ -316,7 +316,7 @@ def generate_race_tactical_advice(racer_data_list, in_rate):
     shobugake_boats = [d for d in racer_data_list if "勝負駆け" in d.get("shobu", "") or "1着勝負" in d.get("shobu", "")]
 
     if "1着勝負" in b1_shobu or "2着条件" in b1_shobu:
-        return f"🔥【1号艇が勝負駆け・気迫の逃げ】 1号艇が崖っぷちの勝負駆け条件。是が非でもスタートを決めて逃げ切る構えに注目！"
+        return "🔥【1号艇が勝負駆け・気迫の逃げ】 1号艇が崖っぷちの勝負駆け条件。是が非でもスタートを決めて逃げ切る構えに注目！"
 
     if shobugake_boats:
         sb_str = "・".join([f"{d['boat_no']}号艇({d['r_name']})" for d in shobugake_boats])
@@ -327,16 +327,16 @@ def generate_race_tactical_advice(racer_data_list, in_rate):
         return f"【⚠️ 1号艇ピンチ・波乱警戒】 1号艇の勝率・機力に不安あり。**{target_boat}号艇**の逆転・差し抜けに要警戒！"
     
     elif racer_data_list[2]["win_rate"] >= 6.5 and racer_data_list[2]["st"] <= 0.14:
-        return f"【🌀3号艇のセンター攻め警戒】 3号艇の勝率が高く、全速まくり・まくり差し炸裂の展開に注意！"
+        return "【🌀3号艇のセンター攻め警戒】 3号艇の勝率が高く、全速まくり・まくり差し炸裂の展開に注意！"
     
     elif racer_data_list[3]["win_rate"] >= 6.5:
-        return f"【🌀4号艇のカド自在戦警戒】 4号艇の実力が高く、カドからのダッシュ攻勢に要注目。"
+        return "【🌀4号艇のカド自在戦警戒】 4号艇の実力が高く、カドからのダッシュ攻勢に要注目。"
     
     elif in_rate >= 55.0 and b1_win >= 5.5:
-        return f"【🛡️固め・イン鉄壁】 1号艇のイン逃げ信頼度高。相手探し（2・3号艇）が主軸。"
+        return "【🛡️固め・イン鉄壁】 1号艇のイン逃げ信頼度高。相手探し（2・3号艇）が主軸。"
     
     else:
-        return f"【⚡差し・まくり交錯】 互角のメンバー構成。第1ターンマークの攻防に注目。"
+        return "【⚡差し・まくり交錯】 互角のメンバー構成。第1ターンマークの攻防に注目。"
 
 def heavy_calculation(venue, venue_code, year, month, day_str, date_str):
     all_race_rates = load_race_course_win_rates()
@@ -517,4 +517,10 @@ async def on_ready():
 
 @bot.command(name="boat_report")
 async def boat_report(ctx):
-    header = "🏁 **【全場AIスクリーニング速報（勝
+    header = "🏁 **【全場AIスクリーニング速報（勝負駆け条件完全対応版）】** 🏁\n下のメニューから会場を選んで詳細をチェック👇"
+    await ctx.send(header, view=VenueSelectView())
+
+if __name__ == "__main__":
+    keep_alive()
+    token = os.environ.get("DISCORD_TOKEN")
+    bot.run(token)
