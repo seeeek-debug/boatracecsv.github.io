@@ -246,7 +246,6 @@ def generate_race_tactical_advice(racer_data_list, in_rate):
     b5 = racer_data_list[4]
     b6 = racer_data_list[5]
 
-    # --- ① 隣り合うコース間の差分 ---
     diff_2_1_deashi  = b2["deashi_score"] - b1["deashi_score"]
     diff_3_2_deashi  = b3["deashi_score"] - b2["deashi_score"]
     diff_3_2_nobi    = b3["nobi_score"]   - b2["nobi_score"]
@@ -254,40 +253,33 @@ def generate_race_tactical_advice(racer_data_list, in_rate):
     diff_5_4_overall = b5["overall_score"] - b4["overall_score"]
     diff_6_5_overall = b6["overall_score"] - b5["overall_score"]
 
-    # --- ② 各艇と「1号艇」との関係（対1号艇の差分） ---
     diff_2_1_vs_b1 = b2["deashi_score"] - b1["deashi_score"]
     diff_3_1_vs_b1 = b3["nobi_score"]   - b1["nobi_score"]
     diff_4_1_vs_b1 = b4["nobi_score"]   - b1["nobi_score"]
     diff_5_1_vs_b1 = b5["overall_score"] - b1["overall_score"]
     diff_6_1_vs_b1 = b6["overall_score"] - b1["overall_score"]
 
-    # 1. 1号艇崩れ（1号艇自体の足が弱い、または2号艇に出足を完全にやられている場合）
     if b1["win_rate"] <= 4.5 or b1["overall_score"] <= 4 or diff_2_1_deashi >= 2:
-        return f"【⚠️ 1号艇ピンチ・波乱警戒】 1号艇の足色劣勢（対2号艇出足差: {diff_2_1_deashi:+d}）。**2号艇({b2['r_name']})**の差し抜けや波乱に要警戒！", "差し / まくり"
+        return f"【⚠️ 1号艇ピンチ】 1号艇足色劣勢（対2号艇出足差: {diff_2_1_deashi:+d}）。2号艇の差し・波乱警戒", "差し / まくり"
     
-    # 2. 2号艇の差し（2号艇の出足が1号艇と同等以上で、実力・機力がしっかりしている場合）
     elif diff_2_1_vs_b1 >= 0 and b2["win_rate"] >= 6.0 and b2["deashi_score"] >= 7:
-        return f"【🎯 2号艇の差し鋭い】 2号艇({b2['r_name']})の出足が1号艇をマーク（対1号艇出足差: {diff_2_1_vs_b1:+d}）。懐を鋭く突く差し抜けに注目！", "差し (2-1系)"
+        return f"【🎯 2号艇の差し鋭い】 2号艇の出足が1号艇をマーク（対1号艇出足差: {diff_2_1_vs_b1:+d}）", "差し (2-1系)"
 
-    # 3. 3号艇のまくり差し（3号艇が2号艇を上回り、かつ1号艇に対しても攻め込める足がある場合）
     elif (diff_3_2_deashi >= 1 or diff_3_2_nobi >= 1) and diff_3_1_vs_b1 >= -1 and (b3["win_rate"] >= 6.0 or b3["overall_score"] >= 7):
-        return f"【⚡ 3号艇の自在攻め警戒】 3号艇({b3['r_name']})が隣の2号艇を優り、1号艇との伸び差({diff_3_1_vs_b1:+d})も十分。まくり差し一撃に注意！", "まくり差し / センターまくり"
+        return f"【⚡ 3号艇の自在攻め】 3号艇が隣を優り1号艇との伸び差({diff_3_1_vs_b1:+d})も十分", "まくり差し"
 
-    # 4. 4号艇のカドまくり（4号艇が3号艇より伸びており、1・2号艇のイン勢を射程圏内に捉える場合）
     elif diff_4_3_nobi >= 1 and diff_4_1_vs_b1 >= 0 and b4["win_rate"] >= 6.0 and b4["nobi_score"] >= 7:
-        return f"【🚀 4号艇のカドまくり警戒】 4号艇({b4['r_name']})が3号艇より伸び（差: {diff_4_3_nobi:+d}）、対1号艇の足色も互角以上（差: {diff_4_1_vs_b1:+d}）。カドから内を呑み込む展開に注意！", "カドまくり (4-1, 4-5)"
+        return f"【🚀 4号艇のカドまくり】 3号艇より伸び（差: {diff_4_3_nobi:+d}）、対1号艇も互角以上", "カドまくり (4-1)"
 
-    # 5. アウト勢の展開突き（外の艇が内側の隣接艇および1号艇に対して機力優勢な場合）
     elif (diff_5_4_overall >= 1 and diff_5_1_vs_b1 >= 0 and b5["overall_score"] >= 7) or (diff_6_5_overall >= 1 and diff_6_1_vs_b1 >= 0 and b6["overall_score"] >= 7):
         best_out = b5 if (b5["overall_score"] - b1["overall_score"]) >= (b6["overall_score"] - b1["overall_score"]) else b6
-        return f"【🌐 アウト勢の展開突き警戒】 1号艇との総合力差({best_out['overall_score'] - b1['overall_score']:+d})を誇る**{best_out['boat_no']}号艇({best_out['r_name']})**が展開を突いて浮上！", "展開突き / 恵まれ"
+        return f"【🌐 アウト勢の展開突き】 {best_out['boat_no']}号艇({best_out['r_name']})が総合力差({best_out['overall_score'] - b1['overall_score']:+d})で浮上", "展開突き"
 
-    # 6. イン鉄壁（逃げ）：場の1コース勝率が高く、1号艇の出足が全艇（特に2号艇）に対して優勢または互角を死守している場合
     elif in_rate >= 50.0 and b1["win_rate"] >= 6.0 and diff_2_1_deashi <= 0:
-        return f"【🛡️ イン鉄壁ムード】 1号艇の出足が2号艇に対して優勢（対2号艇出足差: {diff_2_1_deashi:+d}）。逃げ信頼度高。相手探しが主軸。", "逃げ (1-2, 1-3)"
+        return f"【🛡️ イン鉄壁ムード】 1号艇の出足が対2号艇で優勢（出足差: {diff_2_1_deashi:+d}）", "逃げ (1-2, 1-3)"
     
     else:
-        return f"【⚔️ 差し・まくり交錯の混戦】 1号艇と各攻め手との機力差が拮抗しており、第1ターンマークの攻防は激しい混戦模様。", "差し / 混戦"
+        return f"【⚔️ 混戦模様】 機力差が拮抗し激しい攻防", "差し / 混戦"
 
 def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date_str, r):
     all_race_rates = load_race_course_win_rates()
@@ -380,7 +372,13 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
 class RaceSelect(discord.ui.Select):
     def __init__(self, venue):
         self.venue = venue
-        options = [discord.SelectOption(label=f"第 {i} レース (R{i})", value=str(i), description=f"{venue}場 第{i}Rの分析を見る") for i in range(1, 13)]
+        options = [
+            discord.SelectOption(label="🌐 全レース一括表示 (1R〜12R)", value="all", description=f"{venue}場の全12レースの展開予想を一挙に見る")
+        ]
+        options.extend([
+            discord.SelectOption(label=f"第 {i} レース (R{i})", value=str(i), description=f"{venue}場 第{i}Rの詳細分析を見る") 
+            for i in range(1, 13)
+        ])
         super().__init__(placeholder="🏁 分析するレースを選択してください...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
@@ -388,14 +386,73 @@ class RaceSelect(discord.ui.Select):
         try:
             venue = self.venue
             venue_code = VENUE_MAPPING.get(venue, "01")
-            r_num = int(self.values[0])
+            val = self.values[0]
             
             target_date = datetime.now(JST)
-            result_text = await asyncio.to_thread(
-                calculate_single_race_analysis, venue, venue_code, 
-                target_date.strftime("%Y"), target_date.strftime("%m"), 
-                target_date.strftime("%d"), target_date.strftime("%Y-%m-%d"), r_num
-            )
+            year = target_date.strftime("%Y")
+            month = target_date.strftime("%m")
+            day_str = target_date.strftime("%d")
+            date_str = target_date.strftime("%Y-%m-%d")
+
+            if val == "all":
+                # 全レース一括表示の生成
+                all_summaries = [f"🏟️ **【{venue}場】 全12レース展開予想一覧 ({date_str})**\n━━━━━━━━━━━━━━━━━━━━━━"]
+                
+                all_race_rates = load_race_course_win_rates()
+                venue_rates_by_race = all_race_rates.get(venue, {})
+                df_card, _ = load_race_card(venue, venue_code, year, month, day_str)
+                past_orig_df = load_past_3months_original_exhibition(venue_code, year, month)
+
+                for r in range(1, 13):
+                    race_course_rate = venue_rates_by_race.get(r, {1: 50.0})
+                    in_rate = race_course_rate.get(1, 50.0)
+
+                    racer_structs = []
+                    if df_card is not None and not df_card.empty:
+                        col_r_num = "レース回" if "レース回" in df_card.columns else ("レース" if "レース" in df_card.columns else None)
+                        row_race = None
+                        if col_r_num:
+                            matched = df_card[df_card[col_r_num].astype(str).str.contains(f"{r}R|{r}")]
+                            if not matched.empty:
+                                row_race = matched.iloc[0]
+                        else:
+                            if len(df_card) >= r:
+                                row_race = df_card.iloc[r-1]
+
+                        if row_race is not None:
+                            for b_no in range(1, 7):
+                                r_name = str(row_race.get(f"艇{b_no}_選手名", f"{b_no}号艇"))
+                                try:
+                                    win_rate = float(row_race.get(f"艇{b_no}_全国勝率", 0.0))
+                                except:
+                                    win_rate = 0.0
+                                try:
+                                    motor_2ren = float(row_race.get(f"艇{b_no}_モーター2連対率", 0.0))
+                                except:
+                                    motor_2ren = 0.0
+                                
+                                _, _, _, _, overall_score, deashi_score, nobi_score = evaluate_relative_from_past_exhibition(
+                                    b_no, motor_2ren, win_rate, past_orig_df, r
+                                )
+                                racer_structs.append({
+                                    "boat_no": str(b_no),
+                                    "r_name": r_name,
+                                    "win_rate": win_rate,
+                                    "overall_score": overall_score,
+                                    "deashi_score": deashi_score,
+                                    "nobi_score": nobi_score
+                                })
+
+                    tag, recommended_kimarite = generate_race_tactical_advice(racer_structs, in_rate)
+                    all_summaries.append(f"**【第{r}R】** {tag}  |  推: `{recommended_kimarite}`")
+
+                result_text = "\n".join(all_summaries)
+            else:
+                r_num = int(val)
+                result_text = await asyncio.to_thread(
+                    calculate_single_race_analysis, venue, venue_code, 
+                    year, month, day_str, date_str, r_num
+                )
 
             if len(result_text) <= 2000:
                 await interaction.followup.send(content=result_text, ephemeral=True)
@@ -417,40 +474,4 @@ class VenueSelect(discord.ui.Select):
         super().__init__(placeholder="🏟️ 会場を選択してください...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        venue = self.values[0]
-        await interaction.response.send_message(
-            content=f"🏟️ **【{venue}場】** が選択されました。続いて、分析したいレースを選んでください👇",
-            view=RaceSelectView(venue),
-            ephemeral=True
-        )
-
-class VenueSelectView(discord.ui.View):
-    def __init__(self):
-        super().__init__()
-        self.add_item(VenueSelect())
-
-@tasks.loop(time=time(hour=8, minute=30, tzinfo=JST))
-async def daily_morning_report():
-    channel = bot.get_channel(NOTIFICATION_CHANNEL_ID)
-    if channel is not None:
-        await channel.send("🏁 **【本日のAIレース分析】**\n下のメニューから会場を選んでください👇", view=VenueSelectView())
-
-@daily_morning_report.before_loop
-async def before_daily_report():
-    await bot.wait_until_ready()
-
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user.name}!")
-    if not daily_morning_report.is_running():
-        daily_morning_report.start()
-
-@bot.command(name="boat_report")
-async def boat_report(ctx):
-    await ctx.send("🏁 **【本日のAIレース分析】**\n下のメニューから会場を選んでください👇", view=VenueSelectView())
-
-if __name__ == "__main__":
-    keep_alive()
-    token = os.environ.get("DISCORD_TOKEN")
-    bot.run(token)
 
