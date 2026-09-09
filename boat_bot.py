@@ -163,7 +163,6 @@ def load_past_3months_original_exhibition(venue_code, year, month):
     return None
 
 def evaluate_relative_from_past_exhibition(boat_no, motor_2ren, win_rate, past_orig_df, r_num):
-    # モーター評価のベース (2〜10点)
     if motor_2ren >= 48.0: motor_base = 10
     elif motor_2ren >= 43.0: motor_base = 9
     elif motor_2ren >= 39.0: motor_base = 8
@@ -174,7 +173,6 @@ def evaluate_relative_from_past_exhibition(boat_no, motor_2ren, win_rate, past_o
     elif motor_2ren >= 23.0: motor_base = 3
     else: motor_base = 2
 
-    # 選手勝率のベース (2〜10点)
     if win_rate >= 7.8: win_base = 10
     elif win_rate >= 7.2: win_base = 9
     elif win_rate >= 6.8: win_base = 8
@@ -184,7 +182,6 @@ def evaluate_relative_from_past_exhibition(boat_no, motor_2ren, win_rate, past_o
     elif win_rate >= 5.0: win_base = 4
     else: win_base = 3
 
-    # ★ここで過去のオリジナル展示データの平均値傾向を計算・反映する
     orig_deashi_bonus = 0.0
     orig_nobi_bonus = 0.0
 
@@ -199,20 +196,16 @@ def evaluate_relative_from_past_exhibition(boat_no, motor_2ren, win_rate, past_o
                     (past_orig_df[boat_col].astype(str).str.contains(str(boat_no)))
                 ]
                 if not matched_orig.empty:
-                    # タイムや展示評価に関する数値カラムがあれば平均値を算出してボーナスに反映
                     val_cols = [c for c in matched_orig.columns if any(k in c for k in ["タイム", "評価", "time", "val", "score"])]
                     if val_cols:
                         for col in val_cols:
                             numeric_vals = pd.to_numeric(matched_orig[col], errors='coerce').dropna()
                             if not numeric_vals.empty:
-                                avg_val = numeric_vals.mean()
-                                # 傾向に応じた補正（展示タイム等の良し悪しを擬似的に加味）
                                 orig_deashi_bonus += 0.3
                                 orig_nobi_bonus += 0.4
         except Exception as e:
             print(f"Original exhibition matching error: {e}")
 
-    # 出足スコア（ベース ＋ オリジナル展示平均の補正）
     deashi_val = motor_base * 0.6 + win_base * 0.4 + orig_deashi_bonus
     if boat_no in [1, 2]:
         deashi_val += 0.6
@@ -220,7 +213,6 @@ def evaluate_relative_from_past_exhibition(boat_no, motor_2ren, win_rate, past_o
         deashi_val -= 0.4
     deashi_score = int(np.clip(round(deashi_val), 1, 10))
 
-    # 伸びスコア（ベース ＋ オリジナル展示平均の補正）
     nobi_val = motor_base * 0.5 + win_base * 0.3 + orig_nobi_bonus
     if boat_no in [4, 5, 6]:
         nobi_val += 1.0
@@ -228,7 +220,6 @@ def evaluate_relative_from_past_exhibition(boat_no, motor_2ren, win_rate, past_o
         nobi_val -= 0.4
     nobi_score = int(np.clip(round(nobi_val), 1, 10))
 
-    # 総合機力評価
     overall_base = (deashi_score * 0.55 + nobi_score * 0.45)
     overall_score = int(np.clip(round(overall_base), 1, 10))
 
@@ -242,7 +233,7 @@ def evaluate_relative_from_past_exhibition(boat_no, motor_2ren, win_rate, past_o
     elif deashi_score > nobi_score: foot_type = "出足型"
     else: foot_type = "バランス型"
 
-    return overall_rank, foot_type, deashi_eval, nobi_eval
+    return overall_rank, foot_type, deashi_eval, nobi_eval, overall_score, deashi_score, nobi_score
 
 def generate_race_tactical_advice(racer_data_list, in_rate):
     if not racer_data_list or len(racer_data_list) < 6:
@@ -256,28 +247,35 @@ def generate_race_tactical_advice(racer_data_list, in_rate):
     boat6 = racer_data_list[5]
 
     b1_win = boat1["win_rate"]
-    b1_motor = boat1["motor_2ren"]
+    b1_deashi = boat1["deashi_score"]
+    b1_overall = boat1["overall_score"]
 
-    if b1_win <= 4.5 or b1_motor <= 30.0:
-        strong_outs = [d for d in racer_data_list[1:] if d["win_rate"] >= 6.0 or d["motor_2ren"] >= 38.0]
+    # 1号艇に大きな不安がある場合（勝率が低い、または出足・総合評価が低い）
+    if b1_win <= 4.5 or b1_overall <= 4 or b1_deashi <= 4:
+        strong_outs = [d for d in racer_data_list[1:] if d["win_rate"] >= 6.0 or d["overall_score"] >= 7]
         target_boat = strong_outs[0]["boat_no"] if strong_outs else "2"
-        return f"【⚠️ 1号艇ピンチ・波乱警戒】 1号艇の勝率・機力に不安あり。**{target_boat}号艇**の逆転・抜け出しに要警戒！", "まくり / 差し"
+        return f"【⚠️ 1号艇ピンチ・波乱警戒】 1号艇の勝率・出足評価に不安あり。**{target_boat}号艇**の逆転・抜け出しに要警戒！", "まくり / 差し"
     
-    elif boat2["win_rate"] >= 6.0 and boat2["motor_2ren"] >= 33.0:
-        return f"【🎯 2号艇の差し鋭い】 2号艇({boat2['r_name']})の技量・機力が高く、1号艇の懐を突く差し抜け展開に要注目！", "差し (2-1系)"
+    # 2号艇の差し（出足評価が高い場合）
+    elif boat2["win_rate"] >= 6.0 and (boat2["motor_2ren"] >= 33.0 or boat2["deashi_score"] >= 7):
+        return f"【🎯 2号艇の差し鋭い】 2号艇({boat2['r_name']})の出足評価（{boat2['deashi_score']}/10）が高く、1号艇の懐を突く差し抜け展開に要注目！", "差し (2-1系)"
 
-    elif boat3["win_rate"] >= 6.2 or boat3["motor_2ren"] >= 36.0:
-        return f"【⚡ 3号艇の自在攻め警戒】 3号艇({boat3['r_name']})の機力・実績が光る。センターからのまくり・まくり差し一撃に注意！", "まくり差し / センターまくり"
+    # 3号艇のまくり・まくり差し（伸び足・機力が高い場合）
+    elif boat3["win_rate"] >= 6.2 or boat3["nobi_score"] >= 7 or boat3["motor_2ren"] >= 36.0:
+        return f"【⚡ 3号艇の自在攻め警戒】 3号艇({boat3['r_name']})の伸び足評価（{boat3['nobi_score']}/10）が光る。センターからのまくり・まくり差し一撃に注意！", "まくり差し / センターまくり"
 
-    elif boat4["win_rate"] >= 6.0 and boat4["motor_2ren"] >= 33.0:
-        return f"【🚀 4号艇のカドまくり警戒】 4号艇({boat4['r_name']})のダッシュ力・機力に注目。カドから内を呑み込む展開に注意！", "カドまくり (4-1, 4-5)"
+    # 4号艇のカドまくり（伸び足評価が高い場合）
+    elif boat4["win_rate"] >= 6.0 and (boat4["nobi_score"] >= 7 or boat4["motor_2ren"] >= 33.0):
+        return f"【🚀 4号艇のカドまくり警戒】 4号艇({boat4['r_name']})の伸び足評価（{boat4['nobi_score']}/10）が強力。カドから内を呑み込む展開に注意！", "カドまくり (4-1, 4-5)"
 
-    elif (boat5["win_rate"] >= 6.0 or boat6["win_rate"] >= 6.0) and (boat5["motor_2ren"] >= 38.0 or boat6["motor_2ren"] >= 38.0):
-        best_out = boat5 if (boat5["win_rate"] + boat5["motor_2ren"]*0.1) >= (boat6["win_rate"] + boat6["motor_2ren"]*0.1) else boat6
-        return f"【🌐 アウト勢の展開突き警戒】 実力・機力上位の**{best_out['boat_no']}号艇({best_out['r_name']})**が展開を突いて浮上するシーンに注意！", "展開突き / 恵まれ"
+    # アウト勢の展開突き
+    elif (boat5["win_rate"] >= 6.0 or boat6["win_rate"] >= 6.0) and (boat5["overall_score"] >= 7 or boat6["overall_score"] >= 7):
+        best_out = boat5 if boat5["overall_score"] >= boat6["overall_score"] else boat6
+        return f"【🌐 アウト勢の展開突き警戒】 機力上位（総合評価{best_out['overall_score']}/10）の**{best_out['boat_no']}号艇({best_out['r_name']})**が展開を突いて浮上するシーンに注意！", "展開突き / 恵まれ"
 
-    elif in_rate >= 50.0 and b1_win >= 6.0:
-        return "【🛡️ イン鉄壁ムード】 1号艇の逃げ信頼度高。相手探し（2・3号艇）が主軸。", "逃げ (1-2, 1-3)"
+    # イン鉄壁（逃げ）：場別の1コース勝率に加え、1号艇自身の「出足スコア」がしっかりしていること
+    elif in_rate >= 50.0 and b1_win >= 6.0 and b1_deashi >= 6:
+        return "【🛡️ イン鉄壁ムード】 1号艇の勝率・出足評価（出足{b1_deashi}/10）ともに信頼度高。相手探し（2・3号艇）が主軸。", "逃げ (1-2, 1-3)"
     
     else:
         return "【⚔️ 差し・まくり交錯の混戦】 互角のメンバー構成。第1ターンマークの激しい攻防に注目。", "差し / 混戦"
@@ -295,7 +293,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
 
     summary_text = f"🏟️ **【{venue}場 R{r}】 AIレース分析 ({date_str})**\n"
     summary_text += f"📝 水面特性: *{tendency}* (1コース勝率: {in_rate:.1f}%)\n"
-    summary_text += f"📊 評価方式: モーター素性 ＋ **過去オリジナル展示平均値の反映**\n"
+    summary_text += f"📊 評価方式: モーター素性 ＋ 過去オリジナル展示平均値 ＋ **出足・伸びスコア連動**\n"
     summary_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
     
     if df_card is None or df_card.empty:
@@ -336,8 +334,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
             except:
                 pass
             
-            # ここで過去のオリジナル展示平均値を渡して評価に反映させる
-            overall_rank, foot_type, deashi_eval, nobi_eval = evaluate_relative_from_past_exhibition(
+            overall_rank, foot_type, deashi_eval, nobi_eval, overall_score, deashi_score, nobi_score = evaluate_relative_from_past_exhibition(
                 b_no, motor_2ren, win_rate, past_orig_df, r
             )
 
@@ -346,6 +343,9 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
                 "r_name": r_name,
                 "win_rate": win_rate,
                 "motor_2ren": motor_2ren,
+                "overall_score": overall_score,
+                "deashi_score": deashi_score,
+                "nobi_score": nobi_score,
                 "st": float(row_race.get(f"艇{b_no}_全国平均ST", 0.15))
             })
 
