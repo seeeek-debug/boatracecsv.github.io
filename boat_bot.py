@@ -237,7 +237,7 @@ def evaluate_relative_from_past_exhibition(boat_no, motor_2ren, win_rate, past_o
 
 def generate_race_tactical_advice(racer_data_list, in_rate, venue_name):
     if not racer_data_list or len(racer_data_list) < 6:
-        return "【⚠️ 展開混戦】データ不足のためフラットな評価", "混戦"
+        return "【⚠️ 展開混戦】データ不足のためフラットな評価", "混戦", "特になし"
 
     b1 = racer_data_list[0]
     b2 = racer_data_list[1]
@@ -247,29 +247,53 @@ def generate_race_tactical_advice(racer_data_list, in_rate, venue_name):
     b6 = racer_data_list[5]
 
     diff_2_1_deashi  = b2["deashi_score"] - b1["deashi_score"]
-    diff_3_2_deashi  = b3["deashi_score"] - b2["deashi_score"]
     diff_3_1_nobi    = b3["nobi_score"]   - b1["nobi_score"]
-    diff_4_3_nobi    = b4["nobi_score"]   - b3["nobi_score"]
 
     is_strong_in_venue = venue_name in ["大村", "芦屋", "徳山"]
 
+    # --- 展開・決まり手判定 ---
     if b1["win_rate"] <= 4.2 or b1["overall_score"] <= 4 or diff_2_1_deashi >= 3:
-        return f"【⚠️ 1号艇ピンチ】 1号艇足色劣勢（対2号艇出足差: {diff_2_1_deashi:+d}）。2号艇の差し・波乱警戒", "差し / まくり"
-    
+        tag = f"【⚠️ 1号艇ピンチ】 1号艇足色劣勢（対2号艇出足差: {diff_2_1_deashi:+d}）。2号艇の差し・波乱警戒"
+        recommended_kimarite = "差し / まくり"
     elif diff_3_1_nobi >= 2 and b3["win_rate"] >= 6.0:
-        return f"【⚡ 3号艇の自在攻め】 3号艇の伸び足が魅力（対1号艇伸び差: {diff_3_1_nobi:+d}）", "まくり差し (1-3, 3-1)"
-
+        tag = f"【⚡ 3号艇の自在攻め】 3号艇の伸び足が魅力（対1号艇伸び差: {diff_3_1_nobi:+d}）"
+        recommended_kimarite = "まくり差し (1-3, 3-1)"
     elif diff_2_1_deashi >= 2 and b2["win_rate"] >= 6.0:
-        return f"【🎯 2号艇の差し鋭い】 2号艇の出足が光る（対1号艇出足差: {diff_2_1_deashi:+d}）", "差し (2-1系)"
-
+        tag = f"【🎯 2号艇の差し鋭い】 2号艇の出足が光る（対1号艇出足差: {diff_2_1_deashi:+d}）"
+        recommended_kimarite = "差し (2-1系)"
     elif is_strong_in_venue and b1["win_rate"] >= 5.5 and diff_2_1_deashi < 2:
-        return f"【🛡️ イン堅実】 {venue_name}の水面特性と1号艇の踏ん張り。1-2・1-3本線", "逃げ (1-2, 1-3)"
-
+        tag = f"【🛡️ イン堅実】 {venue_name}の水面特性と1号艇の踏ん張り。1-2・1-3本線"
+        recommended_kimarite = "逃げ (1-2, 1-3)"
     elif in_rate >= 52.0 and b1["win_rate"] >= 5.5 and diff_2_1_deashi <= 0:
-        return f"【🛡️ イン鉄壁ムード】 1号艇の出足が優勢（出足差: {diff_2_1_deashi:+d}）", "逃げ (1-2)"
-    
+        tag = f"【🛡️ イン鉄壁ムード】 1号艇の出足が優勢（出足差: {diff_2_1_deashi:+d}）"
+        recommended_kimarite = "逃げ (1-2)"
     else:
-        return f"【⚔️ 展開もつれ】 機力拮抗でヒモ荒れ注意", "差し / 1-2-3"
+        tag = f"【⚔️ 展開もつれ】 機力拮抗でヒモ荒れ注意"
+        recommended_kimarite = "差し / 1-2-3"
+
+    # --- 💥 穴目・高配当狙いの判定ロジック ---
+    longshot_items = []
+    # 外枠(4, 5, 6号艇)で伸び足や総合評価が高い場合をチェック
+    for b in racer_data_list:
+        b_no = int(b["boat_no"])
+        if b_no >= 4 and (b["nobi_score"] >= 7 or b["overall_score"] >= 7):
+            if b["nobi_score"] > b["deashi_score"]:
+                longshot_items.append(f"**{b_no}号艇 ({b['r_name']})** のセンター・大外まくり (`{b_no}-全-全`)")
+            else:
+                longshot_items.append(f"**{b_no}号艇 ({b['r_name']})** の展開突き・差し抜け (`{b_no}着ケツづまり狙い`)")
+                
+    # 2号艇や3号艇のまくり差し・抜きの穴
+    if b2["deashi_score"] >= 8 and b1["overall_score"] <= 6:
+        longshot_items.append(f"**2号艇 ({b2['r_name']})** の鋭い差し抜け (`2-1, 2-3`)")
+    if b3["nobi_score"] >= 8 and b1["overall_score"] <= 6:
+        longshot_items.append(f"**3号艇 ({b3['r_name']})** のまくり強襲 (`3-1, 3-4`)")
+
+    if longshot_items:
+        longshot_advice = " / ".join(longshot_items[:2])
+    else:
+        longshot_advice = "目立った特大気配の穴党向け伏兵は不在。手堅い決着が本線"
+
+    return tag, recommended_kimarite, longshot_advice
 
 def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date_str, r):
     all_race_rates = load_race_course_win_rates()
@@ -347,9 +371,10 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
             )
             racer_evals.append(eval_detail)
 
-    tag, recommended_kimarite = generate_race_tactical_advice(racer_structs, in_rate, venue)
+    tag, recommended_kimarite, longshot_advice = generate_race_tactical_advice(racer_structs, in_rate, venue)
     summary_text += f"💡 **展開予想**: {tag}\n"
     summary_text += f"🎯 **推奨決まり手**: `{recommended_kimarite}`\n"
+    summary_text += f"💥 **穴狙い目**: {longshot_advice}\n"
     summary_text += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
     
     if racer_evals:
@@ -432,8 +457,8 @@ class RaceSelect(discord.ui.Select):
                                     "nobi_score": nobi_score
                                 })
 
-                    tag, recommended_kimarite = generate_race_tactical_advice(racer_structs, in_rate, venue)
-                    all_summaries.append(f"**【第{r}R】** {tag}  |  推: `{recommended_kimarite}`")
+                    tag, recommended_kimarite, longshot_advice = generate_race_tactical_advice(racer_structs, in_rate, venue)
+                    all_summaries.append(f"**【第{r}R】** {tag}  |  推: `{recommended_kimarite}`\n└ 💥穴: {longshot_advice}")
 
                 result_text = "\n".join(all_summaries)
             else:
@@ -472,7 +497,7 @@ class VenueSelect(discord.ui.Select):
 
 class VenueSelectView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None) # タイムアウトをなくして常駐化
+        super().__init__(timeout=None)
         self.add_item(VenueSelect())
 
 @tasks.loop(time=time(hour=8, minute=30, tzinfo=JST))
@@ -488,16 +513,14 @@ async def before_daily_report():
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user.name}!")
-    # 永続ビューをボットに登録（再起動後もメニューを生かすため）
     bot.add_view(VenueSelectView())
     if not daily_morning_report.is_running():
         daily_morning_report.start()
 
-# --- 常時メニューを配置するためのセットアップ用コマンド ---
 @bot.command(name="setup")
 async def setup_menu(ctx):
     await ctx.send("🏁 **【AIレース分析メニュー】**\n下のメニューからいつでも会場を選んでください👇", view=VenueSelectView())
-    await ctx.message.delete() # 指令メッセージを削除してスッキリさせる
+    await ctx.message.delete()
 
 if __name__ == "__main__":
     keep_alive()
