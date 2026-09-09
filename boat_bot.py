@@ -246,41 +246,48 @@ def generate_race_tactical_advice(racer_data_list, in_rate):
     b5 = racer_data_list[4]
     b6 = racer_data_list[5]
 
-    # --- 全隣接コース間（1-2, 2-3, 3-4, 4-5, 5-6）の相対差分を徹底算出 ---
-    diff_2_1_deashi  = b2["deashi_score"] - b1["deashi_score"]   # 2号艇出足 - 1号艇出足
-    diff_3_2_deashi  = b3["deashi_score"] - b2["deashi_score"]   # 3号艇出足 - 2号艇出足
-    diff_3_2_nobi    = b3["nobi_score"]   - b2["nobi_score"]     # 3号艇伸び - 2号艇伸び
-    diff_4_3_nobi    = b4["nobi_score"]   - b3["nobi_score"]     # 4号艇伸び - 3号艇伸び
-    diff_5_4_overall = b5["overall_score"] - b4["overall_score"] # 5号艇総合 - 4号艇総合
-    diff_6_5_overall = b6["overall_score"] - b5["overall_score"] # 6号艇総合 - 5号艇総合
+    # --- ① 隣り合うコース間の差分 ---
+    diff_2_1_deashi  = b2["deashi_score"] - b1["deashi_score"]
+    diff_3_2_deashi  = b3["deashi_score"] - b2["deashi_score"]
+    diff_3_2_nobi    = b3["nobi_score"]   - b2["nobi_score"]
+    diff_4_3_nobi    = b4["nobi_score"]   - b3["nobi_score"]
+    diff_5_4_overall = b5["overall_score"] - b4["overall_score"]
+    diff_6_5_overall = b6["overall_score"] - b5["overall_score"]
 
-    # 1. 1号艇崩れ（1号艇の足が弱い、または2号艇に完全に出足を圧倒されている場合）
+    # --- ② 各艇と「1号艇」との関係（対1号艇の差分） ---
+    diff_2_1_vs_b1 = b2["deashi_score"] - b1["deashi_score"]
+    diff_3_1_vs_b1 = b3["nobi_score"]   - b1["nobi_score"]
+    diff_4_1_vs_b1 = b4["nobi_score"]   - b1["nobi_score"]
+    diff_5_1_vs_b1 = b5["overall_score"] - b1["overall_score"]
+    diff_6_1_vs_b1 = b6["overall_score"] - b1["overall_score"]
+
+    # 1. 1号艇崩れ（1号艇自体の足が弱い、または2号艇に出足を完全にやられている場合）
     if b1["win_rate"] <= 4.5 or b1["overall_score"] <= 4 or diff_2_1_deashi >= 2:
         return f"【⚠️ 1号艇ピンチ・波乱警戒】 1号艇の足色劣勢（対2号艇出足差: {diff_2_1_deashi:+d}）。**2号艇({b2['r_name']})**の差し抜けや波乱に要警戒！", "差し / まくり"
     
     # 2. 2号艇の差し（2号艇の出足が1号艇と同等以上で、実力・機力がしっかりしている場合）
-    elif diff_2_1_deashi >= 0 and b2["win_rate"] >= 6.0 and b2["deashi_score"] >= 7:
-        return f"【🎯 2号艇の差し鋭い】 2号艇({b2['r_name']})の出足が1号艇と同等以上（出足差: {diff_2_1_deashi:+d}）。懐を鋭く突く差し抜けに注目！", "差し (2-1系)"
+    elif diff_2_1_vs_b1 >= 0 and b2["win_rate"] >= 6.0 and b2["deashi_score"] >= 7:
+        return f"【🎯 2号艇の差し鋭い】 2号艇({b2['r_name']})の出足が1号艇をマーク（対1号艇出足差: {diff_2_1_vs_b1:+d}）。懐を鋭く突く差し抜けに注目！", "差し (2-1系)"
 
-    # 3. 3号艇のまくり差し（3号艇の出足・伸びが2号艇を上回り、壁を突ける場合）
-    elif (diff_3_2_deashi >= 1 or diff_3_2_nobi >= 1) and (b3["win_rate"] >= 6.0 or b3["overall_score"] >= 7):
-        return f"【⚡ 3号艇の自在攻め警戒】 3号艇({b3['r_name']})が隣の2号艇より優勢（出足差: {diff_3_2_deashi:+d} / 伸び差: {diff_3_2_nobi:+d}）。センターからのまくり差し一撃に注意！", "まくり差し / センターまくり"
+    # 3. 3号艇のまくり差し（3号艇が2号艇を上回り、かつ1号艇に対しても攻め込める足がある場合）
+    elif (diff_3_2_deashi >= 1 or diff_3_2_nobi >= 1) and diff_3_1_vs_b1 >= -1 and (b3["win_rate"] >= 6.0 or b3["overall_score"] >= 7):
+        return f"【⚡ 3号艇の自在攻め警戒】 3号艇({b3['r_name']})が隣の2号艇を優り、1号艇との伸び差({diff_3_1_vs_b1:+d})も十分。まくり差し一撃に注意！", "まくり差し / センターまくり"
 
-    # 4. 4号艇のカドまくり（4号艇の伸び足が3号艇を明確に上回る場合）
-    elif diff_4_3_nobi >= 1 and b4["win_rate"] >= 6.0 and b4["nobi_score"] >= 7:
-        return f"【🚀 4号艇のカドまくり警戒】 4号艇({b4['r_name']})の伸び足が3号艇をリード（伸び差: {diff_4_3_nobi:+d}）。カドから内を呑み込む展開に注意！", "カドまくり (4-1, 4-5)"
+    # 4. 4号艇のカドまくり（4号艇が3号艇より伸びており、1・2号艇のイン勢を射程圏内に捉える場合）
+    elif diff_4_3_nobi >= 1 and diff_4_1_vs_b1 >= 0 and b4["win_rate"] >= 6.0 and b4["nobi_score"] >= 7:
+        return f"【🚀 4号艇のカドまくり警戒】 4号艇({b4['r_name']})が3号艇より伸び（差: {diff_4_3_nobi:+d}）、対1号艇の足色も互角以上（差: {diff_4_1_vs_b1:+d}）。カドから内を呑み込む展開に注意！", "カドまくり (4-1, 4-5)"
 
-    # 5. アウト勢（5号艇・6号艇）の展開突き（外の艇が内の隣接艇より明らかに総合力上位の場合）
-    elif (diff_5_4_overall >= 1 and b5["overall_score"] >= 7) or (diff_6_5_overall >= 1 and b6["overall_score"] >= 7):
-        best_out = b5 if diff_5_4_overall >= diff_6_5_overall else b6
-        return f"【🌐 アウト勢の展開突き警戒】 隣接する内側艇に対して機力優勢な**{best_out['boat_no']}号艇({best_out['r_name']})**が展開を突いて浮上！", "展開突き / 恵まれ"
+    # 5. アウト勢の展開突き（外の艇が内側の隣接艇および1号艇に対して機力優勢な場合）
+    elif (diff_5_4_overall >= 1 and diff_5_1_vs_b1 >= 0 and b5["overall_score"] >= 7) or (diff_6_5_overall >= 1 and diff_6_1_vs_b1 >= 0 and b6["overall_score"] >= 7):
+        best_out = b5 if (b5["overall_score"] - b1["overall_score"]) >= (b6["overall_score"] - b1["overall_score"]) else b6
+        return f"【🌐 アウト勢の展開突き警戒】 1号艇との総合力差({best_out['overall_score'] - b1['overall_score']:+d})を誇る**{best_out['boat_no']}号艇({best_out['r_name']})**が展開を突いて浮上！", "展開突き / 恵まれ"
 
-    # 6. イン鉄壁（逃げ）：場の1コース勝率が高く、1号艇の出足が2号艇に対して互角以上を死守している場合
+    # 6. イン鉄壁（逃げ）：場の1コース勝率が高く、1号艇の出足が全艇（特に2号艇）に対して優勢または互角を死守している場合
     elif in_rate >= 50.0 and b1["win_rate"] >= 6.0 and diff_2_1_deashi <= 0:
-        return f"【🛡️ イン鉄壁ムード】 1号艇の出足が2号艇以上をキープ（対2号艇出足差: {diff_2_1_deashi:+d}）。逃げ信頼度高。相手探しが主軸。", "逃げ (1-2, 1-3)"
+        return f"【🛡️ イン鉄壁ムード】 1号艇の出足が2号艇に対して優勢（対2号艇出足差: {diff_2_1_deashi:+d}）。逃げ信頼度高。相手探しが主軸。", "逃げ (1-2, 1-3)"
     
     else:
-        return f"【⚔️ 差し・まくり交錯の混戦】 全コース間で決定的な機力差が少なく、第1ターンマークの攻防は激しい混戦模様。", "差し / 混戦"
+        return f"【⚔️ 差し・まくり交錯の混戦】 1号艇と各攻め手との機力差が拮抗しており、第1ターンマークの攻防は激しい混戦模様。", "差し / 混戦"
 
 def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date_str, r):
     all_race_rates = load_race_course_win_rates()
@@ -295,7 +302,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
 
     summary_text = f"🏟️ **【{venue}場 R{r}】 AIレース分析 ({date_str})**\n"
     summary_text += f"📝 水面特性: *{tendency}* (1コース勝率: {in_rate:.1f}%)\n"
-    summary_text += f"📊 評価方式: モーター素性 ＋ 過去オリジナル展示平均値 ＋ **全コース間相対比較連動**\n"
+    summary_text += f"📊 評価方式: モーター素性 ＋ 過去オリジナル展示平均値 ＋ **全コース間 ＆ 1号艇との相対比較連動**\n"
     summary_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
     
     if df_card is None or df_card.empty:
