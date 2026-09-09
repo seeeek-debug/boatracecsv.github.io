@@ -235,9 +235,69 @@ def evaluate_relative_from_past_exhibition(boat_no, motor_2ren, win_rate, past_o
 
     return overall_rank, foot_type, deashi_eval, nobi_eval, overall_score, deashi_score, nobi_score
 
+def calculate_course_probabilities(racer_structs, in_rate):
+    """各コースの1着率・2連率・3連率を機力・勝率・コース基準から算出"""
+    base_weights = []
+    for b in racer_structs:
+        b_no = int(b["boat_no"])
+        score = (b["win_rate"] * 3.5) + (b["overall_score"] * 2.5) + (b["deashi_score"] * 2.0)
+        # コース補正（1コースは圧倒的に有利、外は減衰）
+        if b_no == 1:
+            score *= (in_rate / 45.0) * 1.4
+        elif b_no == 2:
+            score *= 1.1
+        elif b_no == 3:
+            score *= 1.0
+        elif b_no == 4:
+            score *= 0.95
+        elif b_no == 5:
+            score *= 0.85
+        elif b_no == 6:
+            score *= 0.75
+        base_weights.append(max(score, 1.0))
+
+    # 1着率の正規化 (合計100%)
+    total_w = sum(base_weights)
+    win_probs = [w / total_w * 100 for w in base_weights]
+
+    # 2連率・3連率の簡易推計（上位艇の組み合わせ確率を重み付けして算出）
+    # ボートレースの統計的傾向に合わせ、1着率をベースに2着・3着確率を分配
+    double_probs = []
+    triple_probs = []
+    
+    for i, b in enumerate(racer_structs):
+        p1 = win_probs[i]
+        # 2連率 = 1着率 ＋ 他が勝ったときの2着に入る確率
+        # 3連率 = 2連率 ＋ 3着に入る確率
+        b_no = int(b["boat_no"])
+        # インや2号艇は連対率が跳ね上がりやすい
+        if b_no == 1:
+            d_rate = min(p1 + 32.0, 92.0)
+            t_rate = min(d_rate + 20.0, 98.0)
+        elif b_no == 2:
+            d_rate = min(p1 + 25.0, 75.0)
+            t_rate = min(d_rate + 22.0, 88.0)
+        elif b_no == 3:
+            d_rate = min(p1 + 18.0, 60.0)
+            t_rate = min(d_rate + 22.0, 78.0)
+        elif b_no == 4:
+            d_rate = min(p1 + 14.0, 50.0)
+            t_rate = min(d_rate + 20.0, 70.0)
+        elif b_no == 5:
+            d_rate = min(p1 + 10.0, 38.0)
+            t_rate = min(d_rate + 18.0, 58.0)
+        else:
+            d_rate = min(p1 + 7.0, 28.0)
+            t_rate = min(d_rate + 15.0, 48.0]
+            
+        double_probs.append(d_rate)
+        triple_probs.append(t_rate)
+
+    return win_probs, double_probs, triple_probs
+
 def generate_race_tactical_advice(racer_data_list, in_rate, venue_name):
     if not racer_data_list or len(racer_data_list) < 6:
-        return "【⚠️ 展開混戦】データ不足のためフラットな評価", "混戦", "特になし"
+        return "【⚠️ 展開混戦】データ不足のためフラットな評価", "混戦", "特になし", "特になし"
 
     b1 = racer_data_list[0]
     b2 = racer_data_list[1]
@@ -251,29 +311,36 @@ def generate_race_tactical_advice(racer_data_list, in_rate, venue_name):
 
     is_strong_in_venue = venue_name in ["大村", "芦屋", "徳山"]
 
-    # --- 展開・決まり手判定 ---
+    # --- 展開・決まり手判定 ＆ 逃げ時の次位（2着・3着）の決まり手 ---
+    next_kimarite_advice = "特になし"
+
     if b1["win_rate"] <= 4.2 or b1["overall_score"] <= 4 or diff_2_1_deashi >= 3:
         tag = f"【⚠️ 1号艇ピンチ】 1号艇足色劣勢（対2号艇出足差: {diff_2_1_deashi:+d}）。2号艇の差し・波乱警戒"
         recommended_kimarite = "差し / まくり"
+        next_kimarite_advice = f"2号艇({b2['r_name']})の差し抜け (`2-1, 2-3`) または外マイ連動"
     elif diff_3_1_nobi >= 2 and b3["win_rate"] >= 6.0:
         tag = f"【⚡ 3号艇の自在攻め】 3号艇の伸び足が魅力（対1号艇伸び差: {diff_3_1_nobi:+d}）"
         recommended_kimarite = "まくり差し (1-3, 3-1)"
+        next_kimarite_advice = f"3号艇のまくり差し追走 (`1-3-2`)、または3号艇頭の全流し"
     elif diff_2_1_deashi >= 2 and b2["win_rate"] >= 6.0:
         tag = f"【🎯 2号艇の差し鋭い】 2号艇の出足が光る（対1号艇出足差: {diff_2_1_deashi:+d}）"
         recommended_kimarite = "差し (2-1系)"
+        next_kimarite_advice = f"2号艇が差した後の1号艇の残り(`2-1`)、3号艇の展開突き(`2-1-3` / `2-3-1`)"
     elif is_strong_in_venue and b1["win_rate"] >= 5.5 and diff_2_1_deashi < 2:
         tag = f"【🛡️ イン堅実】 {venue_name}の水面特性と1号艇の踏ん張り。1-2・1-3本線"
         recommended_kimarite = "逃げ (1-2, 1-3)"
+        next_kimarite_advice = f"**【逃げ時の次位】** 2号艇の堅実な差し追走(`1-2`) または 3号艇の自在ハンドル(`1-3`)。ヒモは4号艇のマーク(`1-X-4`)"
     elif in_rate >= 52.0 and b1["win_rate"] >= 5.5 and diff_2_1_deashi <= 0:
         tag = f"【🛡️ イン鉄壁ムード】 1号艇の出足が優勢（出足差: {diff_2_1_deashi:+d}）"
         recommended_kimarite = "逃げ (1-2)"
+        next_kimarite_advice = f"**【逃げ時の次位】** 2号艇の差し(`1-2`)が本線。スリット同体なら1-2-3、2号艇が遅れれば1-3-2"
     else:
         tag = f"【⚔️ 展開もつれ】 機力拮抗でヒモ荒れ注意"
         recommended_kimarite = "差し / 1-2-3"
+        next_kimarite_advice = f"混戦模様のため、ボックスや流し（`1-23-234`）推奨"
 
     # --- 💥 穴目・高配当狙いの判定ロジック ---
     longshot_items = []
-    # 外枠(4, 5, 6号艇)で伸び足や総合評価が高い場合をチェック
     for b in racer_data_list:
         b_no = int(b["boat_no"])
         if b_no >= 4 and (b["nobi_score"] >= 7 or b["overall_score"] >= 7):
@@ -282,7 +349,6 @@ def generate_race_tactical_advice(racer_data_list, in_rate, venue_name):
             else:
                 longshot_items.append(f"**{b_no}号艇 ({b['r_name']})** の展開突き・差し抜け (`{b_no}着ケツづまり狙い`)")
                 
-    # 2号艇や3号艇のまくり差し・抜きの穴
     if b2["deashi_score"] >= 8 and b1["overall_score"] <= 6:
         longshot_items.append(f"**2号艇 ({b2['r_name']})** の鋭い差し抜け (`2-1, 2-3`)")
     if b3["nobi_score"] >= 8 and b1["overall_score"] <= 6:
@@ -293,7 +359,7 @@ def generate_race_tactical_advice(racer_data_list, in_rate, venue_name):
     else:
         longshot_advice = "目立った特大気配の穴党向け伏兵は不在。手堅い決着が本線"
 
-    return tag, recommended_kimarite, longshot_advice
+    return tag, recommended_kimarite, next_kimarite_advice, longshot_advice
 
 def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date_str, r):
     all_race_rates = load_race_course_win_rates()
@@ -356,6 +422,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
             racer_structs.append({
                 "boat_no": str(b_no),
                 "r_name": r_name,
+                "r_class": r_class,
                 "win_rate": win_rate,
                 "motor_2ren": motor_2ren,
                 "overall_score": overall_score,
@@ -371,12 +438,24 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
             )
             racer_evals.append(eval_detail)
 
-    tag, recommended_kimarite, longshot_advice = generate_race_tactical_advice(racer_structs, in_rate, venue)
+    # 展開予想・決まり手・次位の取得
+    tag, recommended_kimarite, next_kimarite_advice, longshot_advice = generate_race_tactical_advice(racer_structs, in_rate, venue)
+    
+    # 各コースの予想確率（1着・2連・3連）算出
+    win_p, double_p, triple_p = calculate_course_probabilities(racer_structs, in_rate)
+
     summary_text += f"💡 **展開予想**: {tag}\n"
     summary_text += f"🎯 **推奨決まり手**: `{recommended_kimarite}`\n"
+    summary_text += f"🔄 **逃げ・本線時の次位展開**: {next_kimarite_advice}\n"
     summary_text += f"💥 **穴狙い目**: {longshot_advice}\n"
-    summary_text += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    summary_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
     
+    # 各コース確率の表組みセクション
+    summary_text += "📈 **【各コースの予想確率 (1着 / 2連 / 3連)】**\n"
+    for i, b in enumerate(racer_structs):
+        summary_text += f"• **{b['boat_no']}コース** ({b['r_name']}) ➔ 1着: **{win_p[i]:.1f}%** | 2連: **{double_p[i]:.1f}%** | 3連: **{triple_p[i]:.1f}%**\n"
+    summary_text += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+
     if racer_evals:
         summary_text += "\n\n".join(racer_evals) + "\n"
         
@@ -457,8 +536,8 @@ class RaceSelect(discord.ui.Select):
                                     "nobi_score": nobi_score
                                 })
 
-                    tag, recommended_kimarite, longshot_advice = generate_race_tactical_advice(racer_structs, in_rate, venue)
-                    all_summaries.append(f"**【第{r}R】** {tag}  |  推: `{recommended_kimarite}`\n└ 💥穴: {longshot_advice}")
+                    tag, recommended_kimarite, next_kimarite_advice, longshot_advice = generate_race_tactical_advice(racer_structs, in_rate, venue)
+                    all_summaries.append(f"**【第{r}R】** {tag}  |  推: `{recommended_kimarite}`\n└ 次位: {next_kimarite_advice}\n└ 💥穴: {longshot_advice}")
 
                 result_text = "\n".join(all_summaries)
             else:
