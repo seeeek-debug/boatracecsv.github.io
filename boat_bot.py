@@ -288,7 +288,7 @@ def calculate_course_probabilities(racer_structs, in_rate):
             t_rate = min(d_rate + 18.0, 58.0)
         else:
             d_rate = min(p1 + 7.0, 28.0)
-            t_rate = min(d_rate + 15.0, 48.0]
+            t_rate = min(d_rate + 15.0, 48.0)
             
         double_probs.append(d_rate)
         triple_probs.append(t_rate)
