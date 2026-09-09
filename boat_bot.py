@@ -235,60 +235,48 @@ def evaluate_relative_from_past_exhibition(boat_no, motor_2ren, win_rate, past_o
 
     return overall_rank, foot_type, deashi_eval, nobi_eval, overall_score, deashi_score, nobi_score
 
-def calculate_course_probabilities(racer_structs, in_rate):
-    """各コースの1着率・2連率・3連率を機力・勝率・コース基準から算出"""
-    base_weights = []
-    for b in racer_structs:
-        b_no = int(b["boat_no"])
-        score = (b["win_rate"] * 3.5) + (b["overall_score"] * 2.5) + (b["deashi_score"] * 2.0)
-        # コース補正（1コースは圧倒的に有利、外は減衰）
-        if b_no == 1:
-            score *= (in_rate / 45.0) * 1.4
-        elif b_no == 2:
-            score *= 1.1
-        elif b_no == 3:
-            score *= 1.0
-        elif b_no == 4:
-            score *= 0.95
-        elif b_no == 5:
-            score *= 0.85
-        elif b_no == 6:
-            score *= 0.75
-        base_weights.append(max(score, 1.0))
+def calculate_course_probabilities(race_course_rate, racer_structs):
+    """CSVに入っている全コース勝率データをベースに、選手勝率・機力で微調整して1着率を算出"""
+    raw_scores = []
+    for i, b in enumerate(racer_structs):
+        b_no = i + 1  # 1〜6コース
+        # CSVから取得した各コースの基本勝率（デフォルトは一律10%等）
+        base_rate = race_course_rate.get(b_no, 10.0)
+        
+        # 選手の能力・機力指数（平均的な選手なら1.0前後）
+        power_factor = (b["win_rate"] * 0.5 + b["overall_score"] * 0.5) / 6.0
+        
+        # CSVのコース勝率をベースに、選手の力で微調整
+        score = base_rate * max(power_factor, 0.4)
+        raw_scores.append(max(score, 0.1))
 
-    # 1着率の正規化 (合計100%)
-    total_w = sum(base_weights)
-    win_probs = [w / total_w * 100 for w in base_weights]
+    # 合計を100%に正規化
+    total_score = sum(raw_scores)
+    win_probs = [s / total_score * 100 for s in raw_scores]
 
-    # 2連率・3連率の簡易推計（上位艇の組み合わせ確率を重み付けして算出）
-    # ボートレースの統計的傾向に合わせ、1着率をベースに2着・3着確率を分配
+    # 2連率・3連率の算出（1着率をベースに競艇の統計的傾向に沿って上乗せ）
     double_probs = []
     triple_probs = []
-    
-    for i, b in enumerate(racer_structs):
-        p1 = win_probs[i]
-        # 2連率 = 1着率 ＋ 他が勝ったときの2着に入る確率
-        # 3連率 = 2連率 ＋ 3着に入る確率
-        b_no = int(b["boat_no"])
-        # インや2号艇は連対率が跳ね上がりやすい
+    for i, p1 in enumerate(win_probs):
+        b_no = i + 1
         if b_no == 1:
-            d_rate = min(p1 + 32.0, 92.0)
+            d_rate = min(p1 + 35.0, 92.0)
             t_rate = min(d_rate + 20.0, 98.0)
         elif b_no == 2:
             d_rate = min(p1 + 25.0, 75.0)
             t_rate = min(d_rate + 22.0, 88.0)
         elif b_no == 3:
             d_rate = min(p1 + 18.0, 60.0)
-            t_rate = min(d_rate + 22.0, 78.0)
+            t_rate = min(d_rate + 20.0, 78.0)
         elif b_no == 4:
-            d_rate = min(p1 + 14.0, 50.0)
-            t_rate = min(d_rate + 20.0, 70.0)
+            d_rate = min(p1 + 12.0, 48.0)
+            t_rate = min(d_rate + 18.0, 68.0)
         elif b_no == 5:
-            d_rate = min(p1 + 10.0, 38.0)
-            t_rate = min(d_rate + 18.0, 58.0)
+            d_rate = min(p1 + 8.0, 35.0)
+            t_rate = min(d_rate + 15.0, 55.0)
         else:
-            d_rate = min(p1 + 7.0, 28.0)
-            t_rate = min(d_rate + 15.0, 48.0)
+            d_rate = min(p1 + 5.0, 25.0)
+            t_rate = min(d_rate + 12.0, 42.0)
             
         double_probs.append(d_rate)
         triple_probs.append(t_rate)
@@ -311,7 +299,6 @@ def generate_race_tactical_advice(racer_data_list, in_rate, venue_name):
 
     is_strong_in_venue = venue_name in ["大村", "芦屋", "徳山"]
 
-    # --- 展開・決まり手判定 ＆ 逃げ時の次位（2着・3着）の決まり手 ---
     next_kimarite_advice = "特になし"
 
     if b1["win_rate"] <= 4.2 or b1["overall_score"] <= 4 or diff_2_1_deashi >= 3:
@@ -339,7 +326,6 @@ def generate_race_tactical_advice(racer_data_list, in_rate, venue_name):
         recommended_kimarite = "差し / 1-2-3"
         next_kimarite_advice = f"混戦模様のため、ボックスや流し（`1-23-234`）推奨"
 
-    # --- 💥 穴目・高配当狙いの判定ロジック ---
     longshot_items = []
     for b in racer_data_list:
         b_no = int(b["boat_no"])
@@ -366,7 +352,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
     venue_rates_by_race = all_race_rates.get(venue, {})
     tendency = VENUE_TENDENCIES.get(venue, "標準水面")
     
-    race_course_rate = venue_rates_by_race.get(r, {1: 50.0})
+    race_course_rate = venue_rates_by_race.get(r, {1: 50.0, 2: 15.0, 3: 12.0, 4: 10.0, 5: 8.0, 6: 5.0})
     in_rate = race_course_rate.get(1, 50.0)
 
     df_card, _ = load_race_card(venue, venue_code, year, month, day_str)
@@ -374,7 +360,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
 
     summary_text = f"🏟️ **【{venue}場 R{r}】 AIレース分析 ({date_str})**\n"
     summary_text += f"📝 水面特性: *{tendency}* (1コース勝率: {in_rate:.1f}%)\n"
-    summary_text += f"📊 評価方式: モーター素性 ＋ 過去オリジナル展示平均値 ＋ **全コース間 ＆ 1号艇との相対比較連動**\n"
+    summary_text += f"📊 評価方式: モーター素性 ＋ 過去オリジナル展示平均値 ＋ **全コース勝率データ連動**\n"
     summary_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
     
     if df_card is None or df_card.empty:
@@ -438,11 +424,10 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
             )
             racer_evals.append(eval_detail)
 
-    # 展開予想・決まり手・次位の取得
     tag, recommended_kimarite, next_kimarite_advice, longshot_advice = generate_race_tactical_advice(racer_structs, in_rate, venue)
     
-    # 各コースの予想確率（1着・2連・3連）算出
-    win_p, double_p, triple_p = calculate_course_probabilities(racer_structs, in_rate)
+    # CSVから取得した各コース勝率データを渡して確率を算出
+    win_p, double_p, triple_p = calculate_course_probabilities(race_course_rate, racer_structs)
 
     summary_text += f"💡 **展開予想**: {tag}\n"
     summary_text += f"🎯 **推奨決まり手**: `{recommended_kimarite}`\n"
@@ -450,7 +435,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
     summary_text += f"💥 **穴狙い目**: {longshot_advice}\n"
     summary_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
     
-    # 各コース確率の表組みセクション
     summary_text += "📈 **【各コースの予想確率 (1着 / 2連 / 3連)】**\n"
     for i, b in enumerate(racer_structs):
         summary_text += f"• **{b['boat_no']}コース** ({b['r_name']}) ➔ 1着: **{win_p[i]:.1f}%** | 2連: **{double_p[i]:.1f}%** | 3連: **{triple_p[i]:.1f}%**\n"
@@ -497,7 +481,7 @@ class RaceSelect(discord.ui.Select):
                 past_orig_df = load_past_3months_original_exhibition(venue_code, year, month)
 
                 for r in range(1, 13):
-                    race_course_rate = venue_rates_by_race.get(r, {1: 50.0})
+                    race_course_rate = venue_rates_by_race.get(r, {1: 50.0, 2: 15.0, 3: 12.0, 4: 10.0, 5: 8.0, 6: 5.0})
                     in_rate = race_course_rate.get(1, 50.0)
 
                     racer_structs = []
@@ -508,6 +492,7 @@ class RaceSelect(discord.ui.Select):
                             matched = df_card[df_card[col_r_num].astype(str).str.contains(f"{r}R|{r}")]
                             if not matched.empty:
                                 row_race = matched.iloc[0]
+                        
                         else:
                             if len(df_card) >= r:
                                 row_race = df_card.iloc[r-1]
