@@ -251,30 +251,23 @@ def generate_race_tactical_advice(racer_data_list, in_rate, venue_name):
     diff_3_1_nobi    = b3["nobi_score"]   - b1["nobi_score"]
     diff_4_3_nobi    = b4["nobi_score"]   - b3["nobi_score"]
 
-    # インが特に強い会場（大村・芦屋・徳山など）
     is_strong_in_venue = venue_name in ["大村", "芦屋", "徳山"]
 
-    # 1号艇が明らかに厳しいケース
     if b1["win_rate"] <= 4.2 or b1["overall_score"] <= 4 or diff_2_1_deashi >= 3:
         return f"【⚠️ 1号艇ピンチ】 1号艇足色劣勢（対2号艇出足差: {diff_2_1_deashi:+d}）。2号艇の差し・波乱警戒", "差し / まくり"
     
-    # 3号艇の動きが良い場合
     elif diff_3_1_nobi >= 2 and b3["win_rate"] >= 6.0:
         return f"【⚡ 3号艇の自在攻め】 3号艇の伸び足が魅力（対1号艇伸び差: {diff_3_1_nobi:+d}）", "まくり差し (1-3, 3-1)"
 
-    # 2号艇の差しが届くケース
     elif diff_2_1_deashi >= 2 and b2["win_rate"] >= 6.0:
         return f"【🎯 2号艇の差し鋭い】 2号艇の出足が光る（対1号艇出足差: {diff_2_1_deashi:+d}）", "差し (2-1系)"
 
-    # インが強い場での標準的な評価
     elif is_strong_in_venue and b1["win_rate"] >= 5.5 and diff_2_1_deashi < 2:
         return f"【🛡️ イン堅実】 {venue_name}の水面特性と1号艇の踏ん張り。1-2・1-3本線", "逃げ (1-2, 1-3)"
 
-    # 通常のイン優勢ケース
     elif in_rate >= 52.0 and b1["win_rate"] >= 5.5 and diff_2_1_deashi <= 0:
         return f"【🛡️ イン鉄壁ムード】 1号艇の出足が優勢（出足差: {diff_2_1_deashi:+d}）", "逃げ (1-2)"
     
-    # それ以外はバランスよく混戦・本線へ
     else:
         return f"【⚔️ 展開もつれ】 機力拮抗でヒモ荒れ注意", "差し / 1-2-3"
 
@@ -354,7 +347,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
             )
             racer_evals.append(eval_detail)
 
- tag, recommended_kimarite = generate_race_tactical_advice(racer_structs, in_rate, venue)
+    tag, recommended_kimarite = generate_race_tactical_advice(racer_structs, in_rate, venue)
     summary_text += f"💡 **展開予想**: {tag}\n"
     summary_text += f"🎯 **推奨決まり手**: `{recommended_kimarite}`\n"
     summary_text += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -364,7 +357,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
         
     return summary_text
 
-# --- 2段階セレクトメニューの定義 ---
+# --- 永続セレクトメニューの定義 ---
 
 class RaceSelect(discord.ui.Select):
     def __init__(self, venue):
@@ -467,7 +460,7 @@ class RaceSelectView(discord.ui.View):
 class VenueSelect(discord.ui.Select):
     def __init__(self):
         options = [discord.SelectOption(label=v, description=f"{v}場のレースを選択する") for v in VENUES]
-        super().__init__(placeholder="🏟️ 会場を選択してください...", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder="🏟️ 会場を選択してください...", min_values=1, max_values=1, options=options, custom_id="persistent_venue_select")
 
     async def callback(self, interaction: discord.Interaction):
         venue = self.values[0]
@@ -479,7 +472,7 @@ class VenueSelect(discord.ui.Select):
 
 class VenueSelectView(discord.ui.View):
     def __init__(self):
-        super().__init__()
+        super().__init__(timeout=None) # タイムアウトをなくして常駐化
         self.add_item(VenueSelect())
 
 @tasks.loop(time=time(hour=8, minute=30, tzinfo=JST))
@@ -495,12 +488,16 @@ async def before_daily_report():
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user.name}!")
+    # 永続ビューをボットに登録（再起動後もメニューを生かすため）
+    bot.add_view(VenueSelectView())
     if not daily_morning_report.is_running():
         daily_morning_report.start()
 
-@bot.command(name="boat_report")
-async def boat_report(ctx):
-    await ctx.send("🏁 **【本日のAIレース分析】**\n下のメニューから会場を選んでください👇", view=VenueSelectView())
+# --- 常時メニューを配置するためのセットアップ用コマンド ---
+@bot.command(name="setup")
+async def setup_menu(ctx):
+    await ctx.send("🏁 **【AIレース分析メニュー】**\n下のメニューからいつでも会場を選んでください👇", view=VenueSelectView())
+    await ctx.message.delete() # 指令メッセージを削除してスッキリさせる
 
 if __name__ == "__main__":
     keep_alive()
