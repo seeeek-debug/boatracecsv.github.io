@@ -235,7 +235,7 @@ def evaluate_relative_from_past_exhibition(boat_no, motor_2ren, win_rate, past_o
 
     return overall_rank, foot_type, deashi_eval, nobi_eval, overall_score, deashi_score, nobi_score
 
-def generate_race_tactical_advice(racer_data_list, in_rate):
+def generate_race_tactical_advice(racer_data_list, in_rate, venue_name):
     if not racer_data_list or len(racer_data_list) < 6:
         return "【⚠️ 展開混戦】データ不足のためフラットな評価", "混戦"
 
@@ -248,38 +248,35 @@ def generate_race_tactical_advice(racer_data_list, in_rate):
 
     diff_2_1_deashi  = b2["deashi_score"] - b1["deashi_score"]
     diff_3_2_deashi  = b3["deashi_score"] - b2["deashi_score"]
-    diff_3_2_nobi    = b3["nobi_score"]   - b2["nobi_score"]
+    diff_3_1_nobi    = b3["nobi_score"]   - b1["nobi_score"]
     diff_4_3_nobi    = b4["nobi_score"]   - b3["nobi_score"]
-    diff_5_4_overall = b5["overall_score"] - b4["overall_score"]
-    diff_6_5_overall = b6["overall_score"] - b5["overall_score"]
 
-    diff_2_1_vs_b1 = b2["deashi_score"] - b1["deashi_score"]
-    diff_3_1_vs_b1 = b3["nobi_score"]   - b1["nobi_score"]
-    diff_4_1_vs_b1 = b4["nobi_score"]   - b1["nobi_score"]
-    diff_5_1_vs_b1 = b5["overall_score"] - b1["overall_score"]
-    diff_6_1_vs_b1 = b6["overall_score"] - b1["overall_score"]
+    # インが特に強い会場（大村・芦屋・徳山など）
+    is_strong_in_venue = venue_name in ["大村", "芦屋", "徳山"]
 
-    if b1["win_rate"] <= 4.5 or b1["overall_score"] <= 4 or diff_2_1_deashi >= 2:
+    # 1号艇が明らかに厳しいケース
+    if b1["win_rate"] <= 4.2 or b1["overall_score"] <= 4 or diff_2_1_deashi >= 3:
         return f"【⚠️ 1号艇ピンチ】 1号艇足色劣勢（対2号艇出足差: {diff_2_1_deashi:+d}）。2号艇の差し・波乱警戒", "差し / まくり"
     
-    elif diff_2_1_vs_b1 >= 0 and b2["win_rate"] >= 6.0 and b2["deashi_score"] >= 7:
-        return f"【🎯 2号艇の差し鋭い】 2号艇の出足が1号艇をマーク（対1号艇出足差: {diff_2_1_vs_b1:+d}）", "差し (2-1系)"
+    # 3号艇の動きが良い場合
+    elif diff_3_1_nobi >= 2 and b3["win_rate"] >= 6.0:
+        return f"【⚡ 3号艇の自在攻め】 3号艇の伸び足が魅力（対1号艇伸び差: {diff_3_1_nobi:+d}）", "まくり差し (1-3, 3-1)"
 
-    elif (diff_3_2_deashi >= 1 or diff_3_2_nobi >= 1) and diff_3_1_vs_b1 >= -1 and (b3["win_rate"] >= 6.0 or b3["overall_score"] >= 7):
-        return f"【⚡ 3号艇の自在攻め】 3号艇が隣を優り1号艇との伸び差({diff_3_1_vs_b1:+d})も十分", "まくり差し"
+    # 2号艇の差しが届くケース
+    elif diff_2_1_deashi >= 2 and b2["win_rate"] >= 6.0:
+        return f"【🎯 2号艇の差し鋭い】 2号艇の出足が光る（対1号艇出足差: {diff_2_1_deashi:+d}）", "差し (2-1系)"
 
-    elif diff_4_3_nobi >= 1 and diff_4_1_vs_b1 >= 0 and b4["win_rate"] >= 6.0 and b4["nobi_score"] >= 7:
-        return f"【🚀 4号艇のカドまくり】 3号艇より伸び（差: {diff_4_3_nobi:+d}）、対1号艇も互角以上", "カドまくり (4-1)"
+    # インが強い場での標準的な評価
+    elif is_strong_in_venue and b1["win_rate"] >= 5.5 and diff_2_1_deashi < 2:
+        return f"【🛡️ イン堅実】 {venue_name}の水面特性と1号艇の踏ん張り。1-2・1-3本線", "逃げ (1-2, 1-3)"
 
-    elif (diff_5_4_overall >= 1 and diff_5_1_vs_b1 >= 0 and b5["overall_score"] >= 7) or (diff_6_5_overall >= 1 and diff_6_1_vs_b1 >= 0 and b6["overall_score"] >= 7):
-        best_out = b5 if (b5["overall_score"] - b1["overall_score"]) >= (b6["overall_score"] - b1["overall_score"]) else b6
-        return f"【🌐 アウト勢の展開突き】 {best_out['boat_no']}号艇({best_out['r_name']})が総合力差({best_out['overall_score'] - b1['overall_score']:+d})で浮上", "展開突き"
-
-    elif in_rate >= 50.0 and b1["win_rate"] >= 6.0 and diff_2_1_deashi <= 0:
-        return f"【🛡️ イン鉄壁ムード】 1号艇の出足が対2号艇で優勢（出足差: {diff_2_1_deashi:+d}）", "逃げ (1-2, 1-3)"
+    # 通常のイン優勢ケース
+    elif in_rate >= 52.0 and b1["win_rate"] >= 5.5 and diff_2_1_deashi <= 0:
+        return f"【🛡️ イン鉄壁ムード】 1号艇の出足が優勢（出足差: {diff_2_1_deashi:+d}）", "逃げ (1-2)"
     
+    # それ以外はバランスよく混戦・本線へ
     else:
-        return f"【⚔️ 混戦模様】 機力差が拮抗し激しい攻防", "差し / 混戦"
+        return f"【⚔️ 展開もつれ】 機力拮抗でヒモ荒れ注意", "差し / 1-2-3"
 
 def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date_str, r):
     all_race_rates = load_race_course_win_rates()
@@ -357,7 +354,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, date
             )
             racer_evals.append(eval_detail)
 
-    tag, recommended_kimarite = generate_race_tactical_advice(racer_structs, in_rate)
+ tag, recommended_kimarite = generate_race_tactical_advice(racer_structs, in_rate, venue)
     summary_text += f"💡 **展開予想**: {tag}\n"
     summary_text += f"🎯 **推奨決まり手**: `{recommended_kimarite}`\n"
     summary_text += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -442,7 +439,7 @@ class RaceSelect(discord.ui.Select):
                                     "nobi_score": nobi_score
                                 })
 
-                    tag, recommended_kimarite = generate_race_tactical_advice(racer_structs, in_rate)
+                    tag, recommended_kimarite = generate_race_tactical_advice(racer_structs, in_rate, venue)
                     all_summaries.append(f"**【第{r}R】** {tag}  |  推: `{recommended_kimarite}`")
 
                 result_text = "\n".join(all_summaries)
