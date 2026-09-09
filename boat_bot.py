@@ -395,7 +395,6 @@ class RaceSelect(discord.ui.Select):
             date_str = target_date.strftime("%Y-%m-%d")
 
             if val == "all":
-                # 全レース一括表示の生成
                 all_summaries = [f"🏟️ **【{venue}場】 全12レース展開予想一覧 ({date_str})**\n━━━━━━━━━━━━━━━━━━━━━━"]
                 
                 all_race_rates = load_race_course_win_rates()
@@ -474,4 +473,39 @@ class VenueSelect(discord.ui.Select):
         super().__init__(placeholder="🏟️ 会場を選択してください...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
+        venue = self.values[0]
+        await interaction.response.send_message(
+            content=f"🏟️ **【{venue}場】** が選択されました。続いて、分析したいレースまたは全レース一覧を選んでください👇",
+            view=RaceSelectView(venue),
+            ephemeral=True
+        )
 
+class VenueSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__()
+        self.add_item(VenueSelect())
+
+@tasks.loop(time=time(hour=8, minute=30, tzinfo=JST))
+async def daily_morning_report():
+    channel = bot.get_channel(NOTIFICATION_CHANNEL_ID)
+    if channel is not None:
+        await channel.send("🏁 **【本日のAIレース分析】**\n下のメニューから会場を選んでください👇", view=VenueSelectView())
+
+@daily_morning_report.before_loop
+async def before_daily_report():
+    await bot.wait_until_ready()
+
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user.name}!")
+    if not daily_morning_report.is_running():
+        daily_morning_report.start()
+
+@bot.command(name="boat_report")
+async def boat_report(ctx):
+    await ctx.send("🏁 **【本日のAIレース分析】**\n下のメニューから会場を選んでください👇", view=VenueSelectView())
+
+if __name__ == "__main__":
+    keep_alive()
+    token = os.environ.get("DISCORD_TOKEN")
+    bot.run(token)
