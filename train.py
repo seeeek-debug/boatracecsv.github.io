@@ -7,9 +7,10 @@ from sklearn.model_selection import train_test_split
 import joblib
 
 def load_and_merge_data():
-    print("GitHub上の data/results/ からCSVデータを読み込んでいます...")
+    print("GitHub上のCSVデータを読み込んでいます...")
     
-    result_files = glob.glob("data/results/**/*.csv", recursive=True)
+    # data/ 配下のすべてのCSVを自動で取得
+    result_files = glob.glob("data/**/*.csv", recursive=True)
     if not result_files:
         print("データファイルが見つかりません。パスを確認してください。")
         return None
@@ -18,6 +19,8 @@ def load_and_merge_data():
     for file in result_files:
         try:
             df = pd.read_csv(file)
+            # カラム名に入っている余計なスペースをすべて削除（これ重要！）
+            df.columns = df.columns.str.strip()
             df_list.append(df)
         except Exception as e:
             print(f"ファイル読み込みエラー ({file}): {e}")
@@ -35,8 +38,8 @@ def train_model():
         print("有効な学習データがありません。処理を中断します。")
         return
 
-    # 特徴量（説明変数）
-    features = [
+    # 希望する特徴量候補
+    target_features = [
         "レース場",
         "風速(m)",
         "波の高さ(cm)",
@@ -52,21 +55,33 @@ def train_model():
         "6コース_スタートタイミング",
     ]
     
-    # 1着から6着までのターゲット列
-    targets = [
+    # 実際にデータフレームに存在するカラムだけに絞り込む（存在しないものでエラーになるのを防ぐ）
+    features = [col for col in target_features if col in df_train.columns]
+    print(f"実際に使用する特徴量: {features}")
+
+    # 1着から6着までのターゲット列（こちらも存在するものを対象にする）
+    target_candidates = [
         "1着_艇番", "2着_艇番", "3着_艇番", 
         "4着_艇番", "5着_艇番", "6着_艇番"
     ]
+    targets = [col for col in target_candidates if col in df_train.columns]
+    
+    if not targets:
+        print("エラー: 目的変数（着番データ）が見つかりません。")
+        return
 
     # 必要な列に欠損がない行を抽出
     df_train = df_train.dropna(subset=targets + features)
-    X = df_train[features]
+    if len(df_train) == 0:
+        print("エラー: 有効なデータ行が0件になってしまいました。")
+        return
 
+    X = df_train[features]
     models = {}
 
     # 1着〜6着までそれぞれのモデルをループで学習
     for i, target_col in enumerate(targets, start=1):
-        print(f"--- {i}着の予測モデルを学習中 ---")
+        print(f"--- {i}着の予測モデルを学習中 ({target_col}) ---")
         y = df_train[target_col].astype(int) - 1  # 艇番（1〜6）を0始まり（0〜5）に補正
 
         X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -97,7 +112,7 @@ def train_model():
     # 1着〜6着すべてのモデルをまとめた辞書を保存
     model_filename = "boatrace_lgb_model.pkl"
     joblib.dump(models, model_filename)
-    print(f"学習が完了しました！1〜6着の予測モデルをまとめて {model_filename} として保存しました。")
+    print(f"学習が完了しました！モデルを {model_filename} として保存しました。")
 
 if __name__ == "__main__":
     train_model()
