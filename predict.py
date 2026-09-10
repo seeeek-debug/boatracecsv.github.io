@@ -1,8 +1,9 @@
 import pandas as pd
 import joblib
+import glob
+import numpy as np
 
 def predict_race():
-    # 1. 保存したモデルの読み込み
     model_filename = "boatrace_lgb_model.pkl"
     try:
         models = joblib.load(model_filename)
@@ -11,8 +12,6 @@ def predict_race():
         print(f"モデルの読み込みに失敗しました: {e}")
         return
 
-    # 2. テスト用のレースデータ（例として最新のCSVから1行取得する想定）
-    import glob
     result_files = glob.glob("data/results/**/*.csv", recursive=True)
     if not result_files:
         result_files = glob.glob("data/**/*.csv", recursive=True)
@@ -21,11 +20,26 @@ def predict_race():
         print("テスト用のCSVファイルが見つかりません。")
         return
 
-    # 適当なファイルから1行読み込んでテストデータを作成
-    df_test = pd.read_csv(result_files[0]).dropna().head(1)
+    df_test = pd.read_csv(result_files[0])
     df_test.columns = df_test.columns.str.strip()
+    
+    if len(df_test) == 0:
+        print("テストデータの行がありません。")
+        return
+        
+    df_test = df_test.head(1).copy()
 
-    # 特徴量の定義（学習時と同じもの）
+    if "級別" in df_test.columns:
+        rank_map = {'A1': 4, 'A2': 3, 'B1': 2, 'B2': 1}
+        df_test["級別"] = df_test["級別"].map(rank_map)
+
+    player_col = None
+    for col in ["選手コード", "登録番号", "選手名"]:
+        if col in df_test.columns:
+            player_col = col
+            df_test[player_col] = df_test[player_col].astype('category').cat.codes
+            break
+
     features = [
         "レース場",
         "風速(m)",
@@ -44,31 +58,37 @@ def predict_race():
         "直線",
         "一周タイム",
         "半周タイム",
+        "級別",
+        "全国勝率",
+        "当地勝率",
+        "モーター2連率",
+        "ボート2連率",
     ]
+    
+    if player_col and player_col not in features:
+        features.append(player_col)
 
-    # 存在する特徴量だけに絞る
     use_features = [col for col in features if col in df_test.columns]
-    X_input = df_test[use_features]
+    
+    for col in use_features:
+        if col != player_col:
+            df_test[col] = pd.to_numeric(df_test[col], errors='coerce')
 
-    print("\n--- 入力データ（コンディション・展示） ---")
+    X_input = df_test[use_features].fillna(0)
+
+    print("\n--- 入力データ（選手個人の癖・スタート含む） ---")
     print(X_input)
 
     print("\n--- 予想結果（各着順の確率・艇番） ---")
     
-    # 1着〜6着のモデルを使ってそれぞれの確率を予測
     for i in range(1, 7):
         model_key = f"rank_{i}"
         if model_key in models:
             model = models[model_key]
-            # 予測確率を取得 (0〜5のインデックスが艇番1〜6に対応)
             probs = model.predict(X_input)[0]
-            
-            # 最も確率が高い艇番（0〜5なので +1 する）
             predicted_boat = probs.argmax() + 1
             max_prob = probs.max() * 100
-            
             print(f"{i}着予想: {predicted_boat}号艇 (確率: {max_prob:.1f}%)")
 
 if __name__ == "__main__":
     predict_race()
-
