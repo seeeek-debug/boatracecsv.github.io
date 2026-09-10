@@ -1,6 +1,7 @@
 import pandas as pd
 import joblib
 import glob
+import numpy as np
 
 def predict_race():
     model_filename = "boatrace_lgb_model.pkl"
@@ -18,75 +19,95 @@ def predict_race():
         return
 
     target_race_code = "202609092010"
-    
-    # 重くなる原因になる全ファイルループは一切せず、dataフォルダ内のCSVを「1つだけ」安全に取得する
-    target_files = [
-        f for f in glob.glob("data/**/*.csv", recursive=True)
-        if "estimate" not in f and "picks" not in f and "payout" not in f and "odds" not in f
+    target_date_str = "20260909"
+
+    year = target_date_str[:4]
+    month = target_date_str[4:6]
+    day = target_date_str[6:8]
+
+    print(f"レースコード '{target_race_code}' のデータを探索中...")
+
+    # 日付に一致する候補ファイルを絞り込み
+    candidate_patterns = [
+        f"**/{year}/{month}/{day}.csv",
+        f"**/{year}/{month}/{int(day)}.csv",
+        f"**/*{year}{month}{day}*.csv",
     ]
     
-    if not target_files:
-        print("エラー: CSVファイルが見つかりません。")
-        return
-
-    # 9月9日のファイルがあれば最優先、なければ最初の1ファイルだけを選ぶ
-    selected_file = None
-    for f in target_files:
-        if "2026/09/09" in f or "20260909" in f:
-            selected_file = f
-            break
+    candidate_files = []
+    for pattern in candidate_patterns:
+        candidate_files.extend(glob.glob(pattern, recursive=True))
     
-    if not selected_file:
-        selected_file = target_files[0]
+    candidate_files = sorted(list(set(candidate_files)))
+    candidate_files = [
+        f for f in candidate_files 
+        if "estimate" not in f 
+        and "picks" not in f 
+        and "payout" not in f 
+        and "odds" not in f
+    ]
 
-    print(f"【超高速モード】ファイルを1つだけ読み込みます: {selected_file}")
-    
-    try:
-        df_test = pd.read_csv(selected_file)
-        df_test.columns = df_test.columns.str.strip()
-    except Exception as e:
-        print(f"ファイルの読み込みに失敗しました: {e}")
-        return
+    print(f"ヒットした候補ファイル数: {len(candidate_files)}件")
 
-    # 該当レースコードがあれば抽出、なければファイルの先頭6行を強制使用
-    df_target = None
-    for col in df_test.columns:
-        matched = df_test[df_test[col].astype(str) == str(target_race_code)]
-        if len(matched) >= 1:
-            df_target = matched.copy()
-            break
+    df_test = None
+    used_file = None
 
-    if df_target is None or len(df_target) < 6:
-        print("指定レースコードがこのファイルに見つからないため、ファイルの先頭6行を使用します。")
-        df_target = df_test.head(6).copy()
+    # 【重要】 dtype=str を指定して、数字が勝手に小数や指数に変換されるのを防ぐ
+    for f in candidate_files:
+        try:
+            temp_df = pd.read_csv(f, dtype=str)
+            temp_df.columns = temp_df.columns.str.strip()
+            for col in temp_df.columns:
+                # 文字列として完全一致する行を抽出
+                matched = temp_df[temp_df[col].str.strip() == str(target_race_code)]
+                if len(matched) >= 1:
+                    df_test = matched.copy()
+                    used_file = f
+                    break
+            if df_test is not None:
+                break
+        except Exception as e:
+            pass
 
-    print(f"テストデータ行数: {len(df_target)}行")
+    # 万が一候補ファイルで見つからなければ、候補の中から最初のファイルを安全に6行使う
+    if df_test is None or len(df_test) == 0:
+        if candidate_files:
+            print("指定コードが一致する行が見つからなかったため、候補ファイルの先頭データを使用します。")
+            used_file = candidate_files[0]
+            temp_df = pd.read_csv(used_file, dtype=str)
+            temp_df.columns = temp_df.columns.str.strip()
+            df_test = temp_df.head(6).copy()
+        else:
+            print("エラー: 該当するファイルが見つかりませんでした。")
+            return
+
+    print(f"【使用ファイル】 {used_file} (取得艇数: {len(df_test)}艇)")
 
     # 級別の数値化
-    if "級別" in df_target.columns:
+    if "級別" in df_test.columns:
         rank_map = {'A1': 4, 'A2': 3, 'B1': 2, 'B2': 1}
-        df_target["級別"] = df_target["級別"].map(rank_map)
+        df_test["級別"] = df_test["級別"].map(rank_map)
 
     player_col = None
     for col in ["選手コード", "登録番号", "選手名"]:
-        if col in df_target.columns:
+        if col in df_test.columns:
             player_col = col
             break
 
-    if player_col and player_col in df_target.columns:
-        df_target[player_col] = df_target[player_col].astype('category').cat.codes
+    if player_col and player_col in df_test.columns:
+        df_test[player_col] = df_test[player_col].astype('category').cat.codes
 
-    # 数値変換
-    for col in df_target.columns:
+    # 数値変換（文字列として読んだため、ここで必要な列を数値に戻す）
+    for col in df_test.columns:
         if col != player_col:
-            df_target[col] = pd.to_numeric(df_target[col], errors='coerce')
+            df_test[col] = pd.to_numeric(df_test[col], errors='coerce')
 
     # 特徴量リストの強制合わせ
     for col in expected_features:
-        if col not in df_target.columns:
-            df_target[col] = 0.0
+        if col not in df_test.columns:
+            df_test[col] = 0.0
 
-    X_input = df_target[expected_features].fillna(0)
+    X_input = df_test[expected_features].fillna(0)
 
     print(f"\n--- 入力データ確認（全 {len(X_input)} 艇分） ---")
     print(X_input.head(2))
@@ -100,7 +121,7 @@ def predict_race():
             print(f"\n【{i}着の予測】")
             for idx, row in X_input.iterrows():
                 probs = model.predict(row.values.reshape(1, -1))[0]
-                boat_num = df_target.loc[idx, "枠番"] if "枠番" in df_target.columns else idx + 1
+                boat_num = df_test.loc[idx, "枠番"] if "枠番" in df_test.columns else idx + 1
                 top_pred_boat = probs.argmax() + 1
                 max_prob = probs.max() * 100
                 print(f"  -> 艇番 {boat_num}: 最有力は {top_pred_boat}号艇 (確率: {max_prob:.1f}%)")
