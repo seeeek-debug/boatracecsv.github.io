@@ -104,14 +104,13 @@ def train_model():
             break
 
     if kimarite_col:
-        print("決まり手データをエンコード・集計しています...")
+        print("決まり手をエンコード・集計しています...")
         # 決まり手をカテゴリコード（数値）に変換
         df_train["決まり手_コード"] = df_train[kimarite_col].astype('category').cat.codes
 
-        # ① 【レース場 × 風向】ごとの決まり手傾向（どの風でどの決まり手が出やすいか）
+        # ① 【レース場 × 風向】ごとの決まり手傾向（※ここを正しい「風向」に修正！）
         if "レース場" in df_train.columns and "風向" in df_train.columns:
-            # モーターの良し悪し（直線や回り足）も加味した複合条件での発生率を近似するためグループ化
-            venue_wind_kimarite = df_train.groupby(["レース場", "风向", kimarite_col]).size().reset_index(name="決まり手_発生回数")
+            venue_wind_kimarite = df_train.groupby(["レース場", "風向", kimarite_col]).size().reset_index(name="決まり手_発生回数")
             # 出現割合に変換
             venue_wind_kimarite["場・風別_決まり手確率"] = venue_wind_kimarite["決まり手_発生回数"] / venue_wind_kimarite.groupby(["レース場", "風向"])["決まり手_発生回数"].transform("sum")
             df_train = pd.merge(df_train, venue_wind_kimarite[["レース場", "風向", kimarite_col, "場・風別_決まり手確率"]], on=["レース場", "風向", kimarite_col], how="left")
