@@ -18,20 +18,26 @@ def predict_race():
         print("エラー: モデル内に rank_1 が見つかりません。")
         return
 
-    result_files = glob.glob("data/**/*.csv", recursive=True)
-    if not result_files:
-        print("テスト用のCSVファイルが見つかりません。")
-        return
-
-    # 払戻金ファイル（payoutsなど）を除外して、レース・出走データファイルを優先する
-    target_files = [f for f in result_files if "payout" not in f and "odds" not in f]
+    # 全CSVから、予測出力やゴミフォルダ（estimate, picks, payouts等）を完全に除外する
+    all_files = glob.glob("data/**/*.csv", recursive=True)
+    target_files = [
+        f for f in all_files 
+        if "estimate" not in f 
+        and "picks" not in f 
+        and "payout" not in f 
+        and "odds" not in f
+    ]
+    
     if not target_files:
-        target_files = result_files
+        target_files = all_files
 
-    print("全データから履歴と対象レースを探索中...")
+    print(f"探索対象のデータファイル数: {len(target_files)}件")
+
     df_history_list = []
     df_test = None
-    target_race_code = "202609092010" 
+    target_race_code = "202609092010"  # 検証したいレースコード
+
+    print(f"レースコード '{target_race_code}' の6艇データを探索中...")
 
     for f in target_files:
         try:
@@ -39,27 +45,29 @@ def predict_race():
             temp_df.columns = temp_df.columns.str.strip()
             df_history_list.append(temp_df)
             
+            # 各列をスキャンして、レースコードに完全一致する行を探す
             for col in temp_df.columns:
                 matched = temp_df[temp_df[col].astype(str) == str(target_race_code)]
-                if len(matched) > 1:  # 1レース複数艇（通常6艇）あるはずなので1より大きいものを優先
+                # 1レースなら通常6艇分あるはずなので、複数行ヒットしたものを優先
+                if len(matched) >= 4:
                     df_test = matched.copy()
-                    print(f"レースコード '{target_race_code}' を発見しました！（ファイル: {f}, 艇数: {len(df_test)}艇）")
+                    print(f"【発見】ファイル: {f} (一致行数: {len(df_test)}行)")
                     break
-            if df_test is not None and len(df_test) > 1:
+            if df_test is not None and len(df_test) >= 4:
                 break
         except Exception as e:
             pass
 
-    # もし見つからなければ、最初の有効そうなファイルから複数行（1レース分）を切り出す
-    if df_test is None or len(df_test) <= 1:
-        print(f"警告: 指定レースコードが見つからないため、代替データを使用します。")
+    # それでも見つからない場合のフォールバック（最初の有効なレースの6行）
+    if df_test is None or len(df_test) < 4:
+        print("警告: 指定レースコードの6艇データが見つからないため、先頭のレースデータを使用します。")
         for f in target_files:
             try:
                 fallback_df = pd.read_csv(f)
                 fallback_df.columns = fallback_df.columns.str.strip()
                 if len(fallback_df) >= 6:
                     df_test = fallback_df.head(6).copy()
-                    print(f"代替ファイルを使用: {f} (6艇分)")
+                    print(f"代替データを使用: {f} (6艇分)")
                     break
             except:
                 pass
@@ -69,6 +77,8 @@ def predict_race():
         return
 
     df_history_all = pd.concat(df_history_list, ignore_index=True) if df_history_list else df_test.copy()
+
+    print(f"取得したテストデータの形状: {df_test.shape} （※ここが(6, 列数)になっていれば完璧です）")
 
     # 級別の数値化
     if "級別" in df_test.columns:
@@ -132,11 +142,10 @@ def predict_race():
 
     X_input = df_test[expected_features].fillna(0)
 
-    print(f"\n--- 入力データ（対象レース / 艇数: {len(X_input)}艇） ---")
-    # 存在するカラムだけを安全に抽出して表示
+    print(f"\n--- 入力データ確認（全 {len(X_input)} 艇分） ---")
     print_cols = [c for c in ["レース場", "風速(m)", "風向", "全国勝率", "モーター2連率"] if c in X_input.columns]
     if print_cols:
-        print(X_input[print_cols].head(2))
+        print(X_input[print_cols])
     else:
         print(X_input.head(2))
 
@@ -147,12 +156,13 @@ def predict_race():
         if model_key in models:
             model = models[model_key]
             print(f"\n【{i}着の予測】")
+            # 6艇それぞれのデータをモデルに入れて予測
             for idx, row in X_input.iterrows():
                 probs = model.predict(row.values.reshape(1, -1))[0]
                 boat_num = df_test.loc[idx, "枠番"] if "枠番" in df_test.columns else idx + 1
                 top_pred_boat = probs.argmax() + 1
                 max_prob = probs.max() * 100
-                print(f"  -> 艇番 {boat_num}: この着順の最有力は {top_pred_boat}号艇 (確率: {max_prob:.1f}%)")
+                print(f"  -> {boat_num}号艇のデータによる予測: 1番確率が高いのは {top_pred_boat}号艇 (確率: {max_prob:.1f}%)")
 
 if __name__ == "__main__":
     predict_race()
