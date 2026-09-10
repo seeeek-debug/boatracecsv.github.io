@@ -30,7 +30,7 @@ def keep_alive():
 
 # --- Discordボット設定 ---
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/seeeek-debug/boatracecsv.github.io/main/"
-NOTIFICATION_CHANNEL_ID = 1346042625253493923
+NOTIFICATION_CHANNEL_ID = 1546632999624511610  # ←ここを正しいIDに変更！
 
 JST = timezone(timedelta(hours=9))
 
