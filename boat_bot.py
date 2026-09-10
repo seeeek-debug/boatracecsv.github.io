@@ -297,16 +297,6 @@ class VenueSelectView(discord.ui.View):
         super().__init__(timeout=None)
         self.add_item(VenueSelect())
 
-@tasks.loop(time=time(hour=8, minute=30, tzinfo=JST))
-async def daily_morning_report():
-    channel = bot.get_channel(NOTIFICATION_CHANNEL_ID)
-    if channel:
-        await channel.send("📢 【本日のAIレース分析・展開予想】以下のメニューからいつでも各場の予測を確認できます！")
-
-@daily_morning_report.before_loop
-async def before_daily_report():
-    await bot.wait_until_ready()
-
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user.name}")
@@ -331,9 +321,6 @@ async def on_ready():
             print("初期メニューの自動送信に成功しました！")
     except Exception as e:
         print(f"自動送信エラー（無視しても動作に影響はありません）: {e}")
-        
-    if not daily_morning_report.is_running():
-        daily_morning_report.start()
 
 @bot.command(name="setup")
 async def setup_menu(ctx):
