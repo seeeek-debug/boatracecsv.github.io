@@ -18,7 +18,6 @@ def predict_race():
 
     target_race_code = "202609092010"
     
-    # レースコードから年月日のパスを直接組み立てる
     year = target_race_code[:4]
     month = target_race_code[4:6]
     day = target_race_code[6:8]
@@ -27,31 +26,43 @@ def predict_race():
     sui_path = f"data/previews/sui/{year}/{month}/{day}.csv"
     orig_path = f"data/previews/original_exhibition/{year}/{month}/{day}.csv"
 
-    print(f"指定パスからデータを直接取得します: {race_card_path}")
+    print(f"出走表データを取得中: {race_card_path}")
 
     try:
         df_cards = pd.read_csv(race_card_path, dtype=str)
         df_cards.columns = df_cards.columns.str.strip()
     except Exception as e:
-        print(f"出走表の読み込みに失敗しました ({race_card_path}): {e}")
+        print(f"出走表の読み込みに失敗しました: {e}")
         return
 
-    # レースコードが一致する行（6艇分）をピンポイントで抽出
-    race_code_col = None
+    # レースコードが一致する「1行（横持ち）」をピンポイントで検索
+    df_matched = None
     for col in df_cards.columns:
         matched = df_cards[df_cards[col].str.strip() == str(target_race_code)]
-        if len(matched) >= 4:
-            race_code_col = col
-            df_target = matched.copy()
+        if len(matched) > 0:
+            df_matched = matched.iloc[0:1]
+            print(f"レースコード '{target_race_code}' を横持ちデータから発見しました。")
             break
 
-    if race_code_col is None:
-        print(f"エラー: レースコード '{target_race_code}' に該当するデータが見つかりませんでした。")
+    if df_matched is None or len(df_matched) == 0:
+        print(f"エラー: レースコード '{target_race_code}' が見つかりませんでした。")
         return
 
-    print(f"出走表データの取得成功（取得艇数: {len(df_target)}艇）")
+    # 横持ちの1行（艇1〜艇6）を、モデルが処理しやすい6行の縦持ちデータに変換
+    vertical_rows = []
+    for i in range(1, 7):
+        row_data = {}
+        for col in df_matched.columns:
+            if col.startswith(f"艇{i}_"):
+                new_col = col.replace(f"艇{i}_", "")
+                row_data[new_col] = df_matched[col].values[0]
+            elif not col.startswith("艇"):
+                row_data[col] = df_matched[col].values[0]
+        row_data["枠番"] = i
+        vertical_rows.append(row_data)
 
-    # 必要に応じて風や水面情報、オリジナル展示もここでファイルパス(sui_path, orig_path)から読み込んで結合可能やで！
+    df_target = pd.DataFrame(vertical_rows)
+    print(f"縦持ちへの変換が完了しました（展開艇数: {len(df_target)}艇）")
 
     # 級別の数値化
     if "級別" in df_target.columns:
@@ -95,4 +106,3 @@ def predict_race():
 
 if __name__ == "__main__":
     predict_race()
-
