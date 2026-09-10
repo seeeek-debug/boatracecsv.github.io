@@ -30,7 +30,6 @@ def load_and_merge_data():
     print(f"2026年3月以降の対象ファイル数: {len(target_files)}件")
     
     if not target_files:
-        print("警告: 条件に一致するファイルが見つかりなかったため、最新の50件を使用します。")
         target_files = sorted(result_files)[-50:]
 
     df_list = []
@@ -49,7 +48,6 @@ def load_and_merge_data():
     df_base = pd.concat(df_list, ignore_index=True)
     
     if len(df_base) > 100000:
-        print(f"データ数が多いため（{len(df_base)}行）、10万行にサンプリングします。")
         df_base = df_base.sample(n=100000, random_state=42)
         
     return df_base
@@ -60,6 +58,20 @@ def train_model():
     if df_train is None or len(df_train) == 0:
         print("有効な学習データがありません。処理を中断します。")
         return
+
+    # 級別の数値化
+    if "級別" in df_train.columns:
+        rank_map = {'A1': 4, 'A2': 3, 'B1': 2, 'B2': 1}
+        df_train["級別"] = df_train["級別"].map(rank_map)
+
+    # 選手IDや選手名（もしCSVにあれば）をカテゴリカル（数値ID）に変換
+    player_col = None
+    for col in ["選手コード", "登録番号", "選手名"]:
+        if col in df_train.columns:
+            player_col = col
+            # 文字列の場合はカテゴリコードに変換して数値化
+            df_train[player_col] = df_train[player_col].astype('category').cat.codes
+            break
 
     target_features = [
         "レース場",
@@ -79,8 +91,16 @@ def train_model():
         "直線",
         "一周タイム",
         "半周タイム",
+        "級別",
+        "全国勝率",
+        "当地勝率",
+        "モーター2連率",
+        "ボート2連率",
     ]
     
+    if player_col and player_col not in target_features:
+        target_features.append(player_col)
+
     features = [col for col in target_features if col in df_train.columns]
     print(f"実際に使用する特徴量: {features}")
 
@@ -94,13 +114,12 @@ def train_model():
         print("エラー: 目的変数（着番データ）が見つかりません。")
         return
 
-    # 1. まず特徴量の各列を強制的に数値型に変換（Fや文字などはNaNになる）
     for col in features:
-        df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
+        if col != player_col:
+            df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
 
-    # 2. 欠損値（NaNになったものや元々ないもの）をまとめて除外
-    df_train = df_train.dropna(subset=targets + features)
-    print(f"欠損値・文字混入データ除外後の有効データ数: {len(df_train)}行")
+    df_train = df_train.dropna(subset=targets + [c for c in features if c != player_col])
+    print(f"有効データ数: {len(df_train)}行")
     
     if len(df_train) == 0:
         print("エラー: 有効なデータ行が0件です。")
@@ -141,8 +160,7 @@ def train_model():
 
     model_filename = "boatrace_lgb_model.pkl"
     joblib.dump(models, model_filename)
-    print(f"学習完了！モデルを {model_filename} として保存しました。")
+    print(f"学習完了！選手別の癖を含めたモデルを {model_filename} として保存しました。")
 
 if __name__ == "__main__":
     train_model()
-
