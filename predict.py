@@ -18,56 +18,53 @@ def predict_race():
         print("エラー: モデル内に rank_1 が見つかりません。")
         return
 
-    # 全CSVから、予測出力やゴミフォルダ（estimate, picks, payouts等）を完全に除外する
-    all_files = glob.glob("data/**/*.csv", recursive=True)
-    target_files = [
-        f for f in all_files 
+    target_race_code = "202609092010"
+    target_date_str = "20260909"
+
+    print(f"レースコード '{target_race_code}' のデータをピンポイントで高速探索中...")
+
+    # 1. 20260909の日付が含まれるファイルだけを絞り込んで探す（全ファイル走査しないので一瞬で終わる）
+    candidate_files = glob.glob(f"**/*{target_date_str}*.csv", recursive=True)
+    candidate_files = [
+        f for f in candidate_files 
         if "estimate" not in f 
         and "picks" not in f 
         and "payout" not in f 
         and "odds" not in f
     ]
-    
-    if not target_files:
-        target_files = all_files
 
-    print(f"探索対象のデータファイル数: {len(target_files)}件")
-
-    df_history_list = []
     df_test = None
-    target_race_code = "202609092010"  # 検証したいレースコード
+    used_file = None
 
-    print(f"レースコード '{target_race_code}' の6艇データを探索中...")
-
-    for f in target_files:
+    for f in candidate_files:
         try:
             temp_df = pd.read_csv(f)
             temp_df.columns = temp_df.columns.str.strip()
-            df_history_list.append(temp_df)
-            
-            # 各列をスキャンして、レースコードに完全一致する行を探す
             for col in temp_df.columns:
                 matched = temp_df[temp_df[col].astype(str) == str(target_race_code)]
-                # 1レースなら通常6艇分あるはずなので、複数行ヒットしたものを優先
                 if len(matched) >= 4:
                     df_test = matched.copy()
-                    print(f"【発見】ファイル: {f} (一致行数: {len(df_test)}行)")
+                    used_file = f
                     break
-            if df_test is not None and len(df_test) >= 4:
+            if df_test is not None:
                 break
-        except Exception as e:
+        except Exception:
             pass
 
-    # それでも見つからない場合のフォールバック（最初の有効なレースの6行）
+    # もしピンポイントで見つからなければ、通常のデータフォルダから最初の数ファイルだけを安全にチェック
     if df_test is None or len(df_test) < 4:
-        print("警告: 指定レースコードの6艇データが見つからないため、先頭のレースデータを使用します。")
-        for f in target_files:
+        print("ピンポイントファイルが見つからないため、通常データから代用を探索します...")
+        all_files = [
+            f for f in glob.glob("data/**/*.csv", recursive=True)
+            if "estimate" not in f and "picks" not in f and "payout" not in f and "odds" not in f
+        ]
+        for f in all_files[:10]:  # 最初の10個に限定して高速化
             try:
-                fallback_df = pd.read_csv(f)
-                fallback_df.columns = fallback_df.columns.str.strip()
-                if len(fallback_df) >= 6:
-                    df_test = fallback_df.head(6).copy()
-                    print(f"代替データを使用: {f} (6艇分)")
+                temp_df = pd.read_csv(f)
+                temp_df.columns = temp_df.columns.str.strip()
+                if len(temp_df) >= 6:
+                    df_test = temp_df.head(6).copy()
+                    used_file = f
                     break
             except:
                 pass
@@ -76,9 +73,7 @@ def predict_race():
         print("エラー: 有効なレースデータが取得できませんでした。")
         return
 
-    df_history_all = pd.concat(df_history_list, ignore_index=True) if df_history_list else df_test.copy()
-
-    print(f"取得したテストデータの形状: {df_test.shape} （※ここが(6, 列数)になっていれば完璧です）")
+    print(f"【使用ファイル】 {used_file} (取得艇数: {len(df_test)}艇)")
 
     # 級別の数値化
     if "級別" in df_test.columns:
@@ -90,42 +85,6 @@ def predict_race():
         if col in df_test.columns:
             player_col = col
             break
-
-    # 過去データから実績やスタートタイミングの平均を計算してマージ
-    if player_col and "枠番" in df_history_all.columns and "着順" in df_history_all.columns:
-        df_history_all["is_win"] = (df_history_all["着順"] == 1).astype(int)
-        if "スタートタイミング" in df_history_all.columns:
-            df_history_all["スタートタイミング"] = pd.to_numeric(df_history_all["スタートタイミング"], errors='coerce')
-
-        player_course_stats = df_history_all.groupby([player_col, "枠番"]).agg({
-            "is_win": "mean",
-            "スタートタイミング": "mean"
-        }).reset_index().rename(columns={
-            "is_win": "実績_コース別勝率",
-            "スタートタイミング": "実績_平均ST"
-        })
-        if all(c in df_test.columns for c in [player_col, "枠番"]):
-            df_test = pd.merge(df_test, player_course_stats, on=[player_col, "枠番"], how="left")
-
-    # 決まり手確率の計算・マージ
-    kimarite_col = None
-    for col in ["決まり手", "決まり手（逃げ・まくり等）"]:
-        if col in df_history_all.columns:
-            kimarite_col = col
-            break
-
-    if kimarite_col and "レース場" in df_history_all.columns and "風向" in df_history_all.columns and "風向" in df_test.columns:
-        venue_wind_kimarite = df_history_all.groupby(["レース場", "風向", kimarite_col]).size().reset_index(name="決まり手_発生回数")
-        venue_wind_kimarite["場・風別_決まり手確率"] = venue_wind_kimarite["決まり手_発生回数"] / venue_wind_kimarite.groupby(["レース場", "風向"])["決まり手_発生回数"].transform("sum")
-        if all(c in df_test.columns for c in ["レース場", "風向", kimarite_col]):
-            df_test = pd.merge(df_test, venue_wind_kimarite[["レース場", "風向", kimarite_col, "場・風別_決まり手確率"]], on=["レース場", "風向", kimarite_col], how="left")
-
-        winners = df_history_all[df_history_all["着順"] == 1]
-        if len(winners) > 0 and kimarite_col in winners.columns and player_col:
-            player_fav_kimarite = winners.groupby([player_col, kimarite_col]).size().reset_index(name="選手別_得意決まり手回数")
-            player_fav_kimarite["選手別_得意決まり手率"] = player_fav_kimarite["選手別_得意決まり手回数"] / player_fav_kimarite.groupby(player_col)["選手別_得意決まり手回数"].transform("sum")
-            if all(c in df_test.columns for c in [player_col, kimarite_col]):
-                df_test = pd.merge(df_test, player_fav_kimarite[[player_col, kimarite_col, "選手別_得意決まり手率"]], on=[player_col, kimarite_col], how="left")
 
     if player_col and player_col in df_test.columns:
         df_test[player_col] = df_test[player_col].astype('category').cat.codes
@@ -149,14 +108,13 @@ def predict_race():
     else:
         print(X_input.head(2))
 
-    print("\n--- 予想結果（各着順の確率・艇番） ---")
+    print("\n--- 予想結果（各着順の確率・艇番） ---++")
     
     for i in range(1, 7):
         model_key = f"rank_{i}"
         if model_key in models:
             model = models[model_key]
             print(f"\n【{i}着の予測】")
-            # 6艇それぞれのデータをモデルに入れて予測
             for idx, row in X_input.iterrows():
                 probs = model.predict(row.values.reshape(1, -1))[0]
                 boat_num = df_test.loc[idx, "枠番"] if "枠番" in df_test.columns else idx + 1
