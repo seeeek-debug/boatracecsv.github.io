@@ -183,7 +183,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     top_1st = max(boat_data, key=lambda x: x['p1']) if boat_data else {"boat": 1, "p1": 0}
     top_2nd = max(boat_data, key=lambda x: x['p2']) if boat_data else {"boat": 2, "p2": 0}
 
-    # 展開予想の判定（「2の直まくり」条件を追加）
+    # 展開予想の判定（「2の直まくり」条件を含む）
     if len(boat_data) >= 2 and (boat_data[1]['p1'] >= 22.0 or (boat_data[1]['p1'] > boat_data[0]['p1'] and boat_data[1]['p1'] >= 18.0)):
         tactical_tag = "🚀 【2号艇の直まくり強襲】2号艇がインを叩くまくり展開"
         kimarite = "まくり (2-3, 2-4)"
@@ -311,6 +311,15 @@ async def before_daily_report():
 async def on_ready():
     print(f"Logged in as {bot.user.name}")
     bot.add_view(VenueSelectView())
+    
+    # 起動時に自動で指定チャンネルへメニューを送信・常設する処理
+    channel = bot.get_channel(NOTIFICATION_CHANNEL_ID)
+    if channel:
+        await channel.send(
+            "🤖 **【AIレース分析・展開メニュー】**\n👇下のメニューからいつでも会場を選択して予測を実行できます！", 
+            view=VenueSelectView()
+        )
+        
     if not daily_morning_report.is_running():
         daily_morning_report.start()
 
@@ -323,3 +332,4 @@ if __name__ == "__main__":
     keep_alive()
     token = os.environ.get("DISCORD_TOKEN")
     bot.run(token)
+
