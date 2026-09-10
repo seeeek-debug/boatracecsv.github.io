@@ -21,10 +21,28 @@ def predict_race():
     target_race_code = "202609092010"
     target_date_str = "20260909"
 
-    print(f"レースコード '{target_race_code}' のデータをピンポイントで高速探索中...")
+    year = target_date_str[:4]
+    month = target_date_str[4:6]
+    day = target_date_str[6:8]
 
-    # 1. 20260909の日付が含まれるファイルだけを絞り込んで探す（全ファイル走査しないので一瞬で終わる）
-    candidate_files = glob.glob(f"**/*{target_date_str}*.csv", recursive=True)
+    print(f"レースコード '{target_race_code}' ({year}年{month}月{day}日) のデータを正確に探索中...")
+
+    # フォルダ階層（YYYY/MM/DD.csv）にしっかり対応した検索パターン
+    candidate_patterns = [
+        f"**/{year}/{month}/{day}.csv",
+        f"**/{year}/{month}/{int(day)}.csv",
+        f"**/*{year}{month}{day}*.csv",
+        f"**/realtime/{year}/{month}/{day}.csv",
+        f"**/results/{year}/{month}/{day}.csv"
+    ]
+    
+    candidate_files = []
+    for pattern in candidate_patterns:
+        candidate_files.extend(glob.glob(pattern, recursive=True))
+    
+    candidate_files = sorted(list(set(candidate_files)))
+    
+    # 予測出力やゴミファイルを除外
     candidate_files = [
         f for f in candidate_files 
         if "estimate" not in f 
@@ -33,9 +51,12 @@ def predict_race():
         and "odds" not in f
     ]
 
+    print(f"ヒットした候補ファイル数: {len(candidate_files)}件")
+
     df_test = None
     used_file = None
 
+    # 1. 候補ファイルから該当レースコードを探索
     for f in candidate_files:
         try:
             temp_df = pd.read_csv(f)
@@ -48,29 +69,33 @@ def predict_race():
                     break
             if df_test is not None:
                 break
-        except Exception:
+        except Exception as e:
             pass
 
-    # もしピンポイントで見つからなければ、通常のデータフォルダから最初の数ファイルだけを安全にチェック
-    if df_test is None or len(df_test) < 4:
-        print("ピンポイントファイルが見つからないため、通常データから代用を探索します...")
+    # 2. もし見つからない場合は、全CSVからそのレースコードを直接持っているファイルを強制検索（勝手に関係ない日を代用しない）
+    if df_test is None:
+        print("指定日のパスから直接見つからないため、全データからレースコードを総検索します...")
         all_files = [
             f for f in glob.glob("data/**/*.csv", recursive=True)
             if "estimate" not in f and "picks" not in f and "payout" not in f and "odds" not in f
         ]
-        for f in all_files[:10]:  # 最初の10個に限定して高速化
+        for f in all_files:
             try:
                 temp_df = pd.read_csv(f)
                 temp_df.columns = temp_df.columns.str.strip()
-                if len(temp_df) >= 6:
-                    df_test = temp_df.head(6).copy()
-                    used_file = f
+                for col in temp_df.columns:
+                    matched = temp_df[temp_df[col].astype(str) == str(target_race_code)]
+                    if len(matched) >= 4:
+                        df_test = matched.copy()
+                        used_file = f
+                        break
+                if df_test is not None:
                     break
             except:
                 pass
 
     if df_test is None or len(df_test) == 0:
-        print("エラー: 有効なレースデータが取得できませんでした。")
+        print(f"エラー: レースコード '{target_race_code}' のデータがどのファイルにも見つかりませんでした。")
         return
 
     print(f"【使用ファイル】 {used_file} (取得艇数: {len(df_test)}艇)")
@@ -108,7 +133,7 @@ def predict_race():
     else:
         print(X_input.head(2))
 
-    print("\n--- 予想結果（各着順の確率・艇番） ---++")
+    print("\n--- 予想結果（各着順の確率・艇番） ---")
     
     for i in range(1, 7):
         model_key = f"rank_{i}"
