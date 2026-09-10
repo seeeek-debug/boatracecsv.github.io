@@ -26,43 +26,71 @@ def predict_race():
     sui_path = f"data/previews/sui/{year}/{month}/{day}.csv"
     orig_path = f"data/previews/original_exhibition/{year}/{month}/{day}.csv"
 
-    print(f"出走表データを取得中: {race_card_path}")
+    print(f"必要なファイルを一括取得中...")
 
-    try:
-        df_cards = pd.read_csv(race_card_path, dtype=str)
-        df_cards.columns = df_cards.columns.str.strip()
-    except Exception as e:
-        print(f"出走表の読み込みに失敗しました: {e}")
+    # 各CSVの読み込み関数
+    def load_csv_safe(path):
+        try:
+            df = pd.read_csv(path, dtype=str)
+            df.columns = df.columns.str.strip()
+            return df
+        except Exception as e:
+            print(f"ファイルの読み込みに失敗しました ({path}): {e}")
+            return None
+
+    df_cards = load_csv_safe(race_card_path)
+    df_sui = load_csv_safe(sui_path)
+    df_orig = load_csv_safe(orig_path)
+
+    if df_cards is None:
+        print("エラー: 出走表データが取得できないため処理を中断します。")
         return
 
-    # レースコードが一致する「1行（横持ち）」をピンポイントで検索
-    df_matched = None
-    for col in df_cards.columns:
-        matched = df_cards[df_cards[col].str.strip() == str(target_race_code)]
-        if len(matched) > 0:
-            df_matched = matched.iloc[0:1]
-            print(f"レースコード '{target_race_code}' を横持ちデータから発見しました。")
-            break
+    # 指定したレースコードの行を横持ちのまま1行だけ抜き出すヘルパー
+    def get_matched_row(df, code):
+        if df is None: return None
+        for col in df.columns:
+            matched = df[df[col].str.strip() == str(code)]
+            if len(matched) > 0:
+                return matched.iloc[0:1].copy()
+        return None
 
-    if df_matched is None or len(df_matched) == 0:
-        print(f"エラー: レースコード '{target_race_code}' が見つかりませんでした。")
+    df_c_row = get_matched_row(df_cards, target_race_code)
+    if df_c_row is None or len(df_c_row) == 0:
+        print(f"エラー: レースコード '{target_race_code}' が出走表に見つかりませんでした。")
         return
 
-    # 横持ちの1行（艇1〜艇6）を、モデルが処理しやすい6行の縦持ちデータに変換
+    df_s_row = get_matched_row(df_sui, target_race_code)
+    df_o_row = get_matched_row(df_orig, target_race_code)
+
+    # 横方向へデータを結合
+    combined_row = df_c_row.reset_index(drop=True)
+    
+    if df_s_row is not None:
+        for c in df_s_row.columns:
+            if c not in combined_row.columns:
+                combined_row[f"sui_{c}"] = df_s_row[c].values[0]
+
+    if df_o_row is not None:
+        for c in df_o_row.columns:
+            if c not in combined_row.columns:
+                combined_row[f"orig_{c}"] = df_o_row[c].values[0]
+
+    # 1行（横持ち）を6艇分（縦持ち）に展開
     vertical_rows = []
     for i in range(1, 7):
         row_data = {}
-        for col in df_matched.columns:
+        for col in combined_row.columns:
             if col.startswith(f"艇{i}_"):
                 new_col = col.replace(f"艇{i}_", "")
-                row_data[new_col] = df_matched[col].values[0]
+                row_data[new_col] = combined_row[col].values[0]
             elif not col.startswith("艇"):
-                row_data[col] = df_matched[col].values[0]
+                row_data[col] = combined_row[col].values[0]
         row_data["枠番"] = i
         vertical_rows.append(row_data)
 
     df_target = pd.DataFrame(vertical_rows)
-    print(f"縦持ちへの変換が完了しました（展開艇数: {len(df_target)}艇）")
+    print(f"データの結合と縦持ち展開が完了しました（展開艇数: {len(df_target)}艇）")
 
     # 級別の数値化
     if "級別" in df_target.columns:
@@ -106,3 +134,4 @@ def predict_race():
 
 if __name__ == "__main__":
     predict_race()
+
