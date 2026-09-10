@@ -12,6 +12,15 @@ def predict_race():
         print(f"モデルの読み込みに失敗しました: {e}")
         return
 
+    # ★超重要：学習時に使われた正確な特徴量リストをモデルから直接取得する！
+    if "rank_1" in models:
+        expected_features = models["rank_1"].feature_name()
+    else:
+        print("エラー: モデル内に rank_1 が見つかりません。")
+        return
+
+    print(f"学習時の期待される特徴量数: {len(expected_features)}個")
+
     # テストデータの取得
     result_files = glob.glob("data/results/**/*.csv", recursive=True)
     if not result_files:
@@ -27,19 +36,6 @@ def predict_race():
     if len(df_test) == 0:
         print("テストデータの行がありません。")
         return
-        
-    # 全体の過去データも読み込んで、学習時と同じように統計マスターを作る
-    print("予測用の過去データを集計中...")
-    df_all_list = []
-    for f in result_files[:10]: # 直近のファイルから高速に集計
-        try:
-            temp_df = pd.read_csv(f)
-            temp_df.columns = temp_df.columns.str.strip()
-            df_all_list.append(temp_df)
-        except:
-            pass
-            
-    df_history = pd.concat(df_all_list, ignore_index=True) if df_all_list else df_test.copy()
 
     # 級別の数値化
     if "級別" in df_test.columns:
@@ -52,15 +48,24 @@ def predict_race():
             player_col = col
             break
 
-    # -------------------------------------------------------------
-    # ★ 学習時と同じロジックで「実績」や「決まり手確率」を計算して付与
-    # -------------------------------------------------------------
+    # 過去データの読み込み（統計用）
+    df_all_list = []
+    for f in result_files[:10]:
+        try:
+            temp_df = pd.read_csv(f)
+            temp_df.columns = temp_df.columns.str.strip()
+            df_all_list.append(temp_df)
+        except:
+            pass
+            
+    df_history = pd.concat(df_all_list, ignore_index=True) if df_all_list else df_test.copy()
+
+    # 実績や決まり手確率の計算・マージ（学習時と同一ロジック）
     if player_col and "枠番" in df_history.columns and "着順" in df_history.columns:
         df_history["is_win"] = (df_history["着順"] == 1).astype(int)
         if "スタートタイミング" in df_history.columns:
             df_history["スタートタイミング"] = pd.to_numeric(df_history["スタートタイミング"], errors='coerce')
 
-        # 選手×枠番ごとの実績
         player_course_stats = df_history.groupby([player_col, "枠番"]).agg({
             "is_win": "mean",
             "スタートタイミング": "mean"
@@ -70,7 +75,6 @@ def predict_race():
         })
         df_test = pd.merge(df_test, player_course_stats, on=[player_col, "枠番"], how="left")
 
-    # 決まり手傾向の付与
     kimarite_col = None
     for col in ["決まり手", "決まり手（逃げ・まくり等）"]:
         if col in df_history.columns:
@@ -78,12 +82,10 @@ def predict_race():
             break
 
     if kimarite_col and "レース場" in df_history.columns and "風向" in df_history.columns:
-        # 場・風別の決まり手確率
         venue_wind_kimarite = df_history.groupby(["レース場", "風向", kimarite_col]).size().reset_index(name="決まり手_発生回数")
         venue_wind_kimarite["場・風別_決まり手確率"] = venue_wind_kimarite["決まり手_発生回数"] / venue_wind_kimarite.groupby(["レース場", "風向"])["決まり手_発生回数"].transform("sum")
         df_test = pd.merge(df_test, venue_wind_kimarite[["レース場", "風向", kimarite_col, "場・風別_決まり手確率"]], on=["レース場", "風向", kimarite_col], how="left")
 
-        # 選手別の得意決まり手率
         winners = df_history[df_history["着順"] == 1]
         if len(winners) > 0 and kimarite_col in winners.columns and player_col:
             player_fav_kimarite = winners.groupby([player_col, kimarite_col]).size().reset_index(name="選手別_得意決まり手回数")
@@ -93,50 +95,22 @@ def predict_race():
     if player_col:
         df_test[player_col] = df_test[player_col].astype('category').cat.codes
 
+    # 1行に絞る
     df_test = df_test.head(1).copy()
 
-    # 学習時と同じ特徴量リスト（※未来の答えである '決まり手_コード' は除外）
-    features = [
-        "レース場",
-        "風速(m)",
-        "波の高さ(cm)",
-        "水温(°C)",
-        "気温(°C)",
-        "風向",
-        "天候",
-        "1コース_スタートタイミング",
-        "2コース_スタートタイミング",
-        "3コース_スタートタイミング",
-        "4コース_スタートタイミング",
-        "5コース_スタートタイミング",
-        "6コース_スタートタイミング",
-        "回り足",
-        "直線",
-        "一周タイム",
-        "半周タイム",
-        "級別",
-        "全国勝率",
-        "当地勝率",
-        "モーター2連率",
-        "ボート2連率",
-        "実績_コース別勝率",
-        "実績_平均ST",
-        "場・風別_決まり手確率",
-        "選手別_得意決まり手率",
-    ]
-    
-    if player_col and player_col not in features:
-        features.append(player_col)
-
-    use_features = [col for col in features if col in df_test.columns]
-    
-    for col in use_features:
+    # 数値変換
+    for col in df_test.columns:
         if col != player_col:
             df_test[col] = pd.to_numeric(df_test[col], errors='coerce')
 
-    X_input = df_test[use_features].fillna(0)
+    # ★ここがミソ：学習時と完全に同じ特徴量リストに強制合わせ（足りない列は0で自動補完！）
+    for col in expected_features:
+        if col not in df_test.columns:
+            df_test[col] = 0.0
 
-    print("\n--- 入力データ（究極の学習モデル対応版） ---")
+    X_input = df_test[expected_features].fillna(0)
+
+    print(f"\n--- 入力データ（特徴量数: {X_input.shape[1]}個で完全一致） ---")
     print(X_input)
 
     print("\n--- 予想結果（各着順の確率・艇番） ---")
@@ -152,3 +126,4 @@ def predict_race():
 
 if __name__ == "__main__":
     predict_race()
+
