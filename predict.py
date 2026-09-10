@@ -18,51 +18,55 @@ def predict_race():
         print("エラー: モデル内に rank_1 が見つかりません。")
         return
 
-    result_files = glob.glob("data/results/**/*.csv", recursive=True)
-    if not result_files:
-        result_files = glob.glob("data/**/*.csv", recursive=True)
-        
+    result_files = glob.glob("data/**/*.csv", recursive=True)
     if not result_files:
         print("テスト用のCSVファイルが見つかりません。")
         return
 
-    # 全ファイルをスキャンして過去データ（履歴）を集めつつ、対象レースコードを探す
+    # 払戻金ファイル（payoutsなど）を除外して、レース・出走データファイルを優先する
+    target_files = [f for f in result_files if "payout" not in f and "odds" not in f]
+    if not target_files:
+        target_files = result_files
+
     print("全データから履歴と対象レースを探索中...")
     df_history_list = []
     df_test = None
-    
-    # 狙い撃ちしたいレースコード（例: 画像にある場20の10Rなら "202609092010" など。適宜変更可能）
     target_race_code = "202609092010" 
 
-    for f in result_files:
+    for f in target_files:
         try:
             temp_df = pd.read_csv(f)
             temp_df.columns = temp_df.columns.str.strip()
             df_history_list.append(temp_df)
             
-            # 左端のレースコードっぽい列を探す（数値や文字列で長めのIDが格納されている列）
             for col in temp_df.columns:
-                # 文字列変換して target_race_code に完全一致するものがあるか
                 matched = temp_df[temp_df[col].astype(str) == str(target_race_code)]
-                if len(matched) > 0:
+                if len(matched) > 1:  # 1レース複数艇（通常6艇）あるはずなので1より大きいものを優先
                     df_test = matched.copy()
                     print(f"レースコード '{target_race_code}' を発見しました！（ファイル: {f}, 艇数: {len(df_test)}艇）")
                     break
-            if df_test is not None and len(df_test) > 0:
+            if df_test is not None and len(df_test) > 1:
                 break
         except Exception as e:
             pass
 
-    # もし指定コードが見つからなければ、最新ファイルの先頭のレース（または最初の数行）を使用
+    # もし見つからなければ、最初の有効そうなファイルから複数行（1レース分）を切り出す
+    if df_test is None or len(df_test) <= 1:
+        print(f"警告: 指定レースコードが見つからないため、代替データを使用します。")
+        for f in target_files:
+            try:
+                fallback_df = pd.read_csv(f)
+                fallback_df.columns = fallback_df.columns.str.strip()
+                if len(fallback_df) >= 6:
+                    df_test = fallback_df.head(6).copy()
+                    print(f"代替ファイルを使用: {f} (6艇分)")
+                    break
+            except:
+                pass
+
     if df_test is None or len(df_test) == 0:
-        print(f"警告: 指定レースコードが見つからないため、最新データの先頭レースを使用します。")
-        fallback_df = pd.read_csv(result_files[0])
-        fallback_df.columns = fallback_df.columns.str.strip()
-        # 先頭のレースコードを自動取得して6艇分抽出
-        first_col = fallback_df.columns[0]
-        first_code = fallback_df[first_col].iloc[0]
-        df_test = fallback_df[fallback_df[first_col] == first_code].copy()
-        print(f"自動取得したレースコード: {first_code} ({len(df_test)}艇)")
+        print("エラー: 有効なレースデータが取得できませんでした。")
+        return
 
     df_history_all = pd.concat(df_history_list, ignore_index=True) if df_history_list else df_test.copy()
 
@@ -129,7 +133,12 @@ def predict_race():
     X_input = df_test[expected_features].fillna(0)
 
     print(f"\n--- 入力データ（対象レース / 艇数: {len(X_input)}艇） ---")
-    print(X_input[["レース場", "風速(m)", "風向", "全国勝率", "モーター2連率"]].head(2) if "風速(m)" in X_input.columns else X_input.head(2))
+    # 存在するカラムだけを安全に抽出して表示
+    print_cols = [c for c in ["レース場", "風速(m)", "風向", "全国勝率", "モーター2連率"] if c in X_input.columns]
+    if print_cols:
+        print(X_input[print_cols].head(2))
+    else:
+        print(X_input.head(2))
 
     print("\n--- 予想結果（各着順の確率・艇番） ---")
     
@@ -138,10 +147,8 @@ def predict_race():
         if model_key in models:
             model = models[model_key]
             print(f"\n【{i}着の予測】")
-            # 6艇それぞれの確率を計算して表示
             for idx, row in X_input.iterrows():
                 probs = model.predict(row.values.reshape(1, -1))[0]
-                # 各着順になる確率の最大値、あるいはその艇が1着になる確率など
                 boat_num = df_test.loc[idx, "枠番"] if "枠番" in df_test.columns else idx + 1
                 top_pred_boat = probs.argmax() + 1
                 max_prob = probs.max() * 100
