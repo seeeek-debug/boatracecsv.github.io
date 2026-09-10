@@ -19,69 +19,48 @@ def predict_race():
         return
 
     target_race_code = "202609092010"
-    target_date_str = "20260909"
+    print(f"レースコード '{target_race_code}' の6艇データを正確に探索中...")
 
-    year = target_date_str[:4]
-    month = target_date_str[4:6]
-    day = target_date_str[6:8]
-
-    print(f"レースコード '{target_race_code}' のデータを探索中...")
-
-    # 日付に一致する候補ファイルを絞り込み
-    candidate_patterns = [
-        f"**/{year}/{month}/{day}.csv",
-        f"**/{year}/{month}/{int(day)}.csv",
-        f"**/*{year}{month}{day}*.csv",
-    ]
-    
-    candidate_files = []
-    for pattern in candidate_patterns:
-        candidate_files.extend(glob.glob(pattern, recursive=True))
-    
-    candidate_files = sorted(list(set(candidate_files)))
-    candidate_files = [
-        f for f in candidate_files 
-        if "estimate" not in f 
+    # プレビュー、オッズ、払戻金、予測結果などの特殊ファイルを完全に除外して純粋なデータファイルだけを対象にする
+    all_files = glob.glob("data/**/*.csv", recursive=True)
+    target_files = [
+        f for f in all_files 
+        if "preview" not in f 
+        and "od1" not in f 
+        and "estimate" not in f 
         and "picks" not in f 
         and "payout" not in f 
         and "odds" not in f
     ]
 
-    print(f"ヒットした候補ファイル数: {len(candidate_files)}件")
+    print(f"検索対象の有効なCSVファイル数: {len(target_files)}件")
 
     df_test = None
     used_file = None
 
-    # 【重要】 dtype=str を指定して、数字が勝手に小数や指数に変換されるのを防ぐ
-    for f in candidate_files:
+    # 各ファイルを総当たり（ただし有効なデータファイルのみ）し、
+    # 該当レースコードで「ちょうど複数行（6艇分）」ヒットするファイルをドンピシャで見つける
+    for f in target_files:
         try:
             temp_df = pd.read_csv(f, dtype=str)
             temp_df.columns = temp_df.columns.str.strip()
             for col in temp_df.columns:
-                # 文字列として完全一致する行を抽出
                 matched = temp_df[temp_df[col].str.strip() == str(target_race_code)]
-                if len(matched) >= 1:
+                # 1レースなら通常6艇分の行があるはずなので、4行以上ヒットしたものを本物とする
+                if len(matched) >= 4:
                     df_test = matched.copy()
                     used_file = f
                     break
             if df_test is not None:
                 break
-        except Exception as e:
+        except Exception:
             pass
 
-    # 万が一候補ファイルで見つからなければ、候補の中から最初のファイルを安全に6行使う
     if df_test is None or len(df_test) == 0:
-        if candidate_files:
-            print("指定コードが一致する行が見つからなかったため、候補ファイルの先頭データを使用します。")
-            used_file = candidate_files[0]
-            temp_df = pd.read_csv(used_file, dtype=str)
-            temp_df.columns = temp_df.columns.str.strip()
-            df_test = temp_df.head(6).copy()
-        else:
-            print("エラー: 該当するファイルが見つかりませんでした。")
-            return
+        print(f"エラー: レースコード '{target_race_code}' の6艇データがどのファイルにも見つかりませんでした。")
+        return
 
-    print(f"【使用ファイル】 {used_file} (取得艇数: {len(df_test)}艇)")
+    print(f"【大正解ファイルを発見】 {used_file} (取得艇数: {len(df_test)}艇)")
 
     # 級別の数値化
     if "級別" in df_test.columns:
@@ -97,7 +76,7 @@ def predict_race():
     if player_col and player_col in df_test.columns:
         df_test[player_col] = df_test[player_col].astype('category').cat.codes
 
-    # 数値変換（文字列として読んだため、ここで必要な列を数値に戻す）
+    # 数値変換
     for col in df_test.columns:
         if col != player_col:
             df_test[col] = pd.to_numeric(df_test[col], errors='coerce')
