@@ -17,7 +17,6 @@ def load_and_merge_data():
         print("エラー: データファイルが見つかりません。")
         return None
 
-    # 2026年3月以降のファイルに絞り込むフィルタリング
     target_files = []
     for file in result_files:
         if "2026/01" in file or "2026/02" in file or "2026-01" in file or "2026-02" in file:
@@ -62,7 +61,6 @@ def train_model():
         print("有効な学習データがありません。処理を中断します。")
         return
 
-    # 回り足、直線、一周・半周タイムを追加した特徴量リスト
     target_features = [
         "レース場",
         "風速(m)",
@@ -96,8 +94,13 @@ def train_model():
         print("エラー: 目的変数（着番データ）が見つかりません。")
         return
 
+    # 1. まず特徴量の各列を強制的に数値型に変換（Fや文字などはNaNになる）
+    for col in features:
+        df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
+
+    # 2. 欠損値（NaNになったものや元々ないもの）をまとめて除外
     df_train = df_train.dropna(subset=targets + features)
-    print(f"欠損値除外後の有効データ数: {len(df_train)}行")
+    print(f"欠損値・文字混入データ除外後の有効データ数: {len(df_train)}行")
     
     if len(df_train) == 0:
         print("エラー: 有効なデータ行が0件です。")
