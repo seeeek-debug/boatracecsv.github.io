@@ -12,14 +12,11 @@ def predict_race():
         print(f"モデルの読み込みに失敗しました: {e}")
         return
 
-    # ★超重要：学習時に使われた正確な特徴量リストをモデルから直接取得する！
     if "rank_1" in models:
         expected_features = models["rank_1"].feature_name()
     else:
         print("エラー: モデル内に rank_1 が見つかりません。")
         return
-
-    print(f"学習時の期待される特徴量数: {len(expected_features)}個")
 
     # テストデータの取得
     result_files = glob.glob("data/results/**/*.csv", recursive=True)
@@ -30,12 +27,42 @@ def predict_race():
         print("テスト用のCSVファイルが見つかりません。")
         return
 
-    df_test = pd.read_csv(result_files[0])
-    df_test.columns = df_test.columns.str.strip()
-    
-    if len(df_test) == 0:
-        print("テストデータの行がありません。")
-        return
+    # 全ファイルを読み込んで「場コード20」かつ「10R」のデータを探す
+    print("指定されたレース（場コード20の10R）を探索中...")
+    target_row = None
+    df_history = []
+
+    for f in result_files:
+        try:
+            temp_df = pd.read_csv(f)
+            temp_df.columns = temp_df.columns.str.strip()
+            df_history.append(temp_df)
+            
+            # 場コード20かつ10Rの行があるかチェック
+            # （※カラム名は「レース場」「R」「レース」などの可能性があるので柔軟に探す）
+            venue_col = next((c for c in ["レース場", "場コード", "場"] if c in temp_df.columns), None)
+            race_col = next((c for c in ["R", "レース", "レース番号"] if c in temp_df.columns), None)
+            
+            if venue_col and race_col:
+                # 20 と 10（または "10R"）で絞り込み
+                matched = temp_df[
+                    (temp_df[venue_col].astype(str).str.contains("20")) & 
+                    (temp_df[race_col].astype(str).str.contains("10"))
+                ]
+                if len(matched) > 0:
+                    df_test = matched.copy()
+                    print(f"該当レースを発見しました！（ファイル: {f}, 行数: {len(df_test)}行）")
+                    break
+        except Exception as e:
+            pass
+
+    # もし見つからんかったら、安全のために最初のファイルをフォールバック
+    if 'df_test' not in locals() or len(df_test) == 0:
+        print("警告: 指定条件のレースが見つからなかったため、先頭のデータを使用します。")
+        df_test = pd.read_csv(result_files[0])
+        df_test.columns = df_test.columns.str.strip()
+
+    df_history_all = pd.concat(df_history, ignore_index=True) if df_history else df_test.copy()
 
     # 級別の数値化
     if "級別" in df_test.columns:
@@ -48,25 +75,13 @@ def predict_race():
             player_col = col
             break
 
-    # 過去データの読み込み（統計用）
-    df_all_list = []
-    for f in result_files[:10]:
-        try:
-            temp_df = pd.read_csv(f)
-            temp_df.columns = temp_df.columns.str.strip()
-            df_all_list.append(temp_df)
-        except:
-            pass
-            
-    df_history = pd.concat(df_all_list, ignore_index=True) if df_all_list else df_test.copy()
+    # 実績や決まり手確率の計算・マージ
+    if player_col and "枠番" in df_history_all.columns and "着順" in df_history_all.columns:
+        df_history_all["is_win"] = (df_history_all["着順"] == 1).astype(int)
+        if "スタートタイミング" in df_history_all.columns:
+            df_history_all["スタートタイミング"] = pd.to_numeric(df_history_all["スタートタイミング"], errors='coerce')
 
-    # 実績や決まり手確率の計算・マージ（学習時と同一ロジック）
-    if player_col and "枠番" in df_history.columns and "着順" in df_history.columns:
-        df_history["is_win"] = (df_history["着順"] == 1).astype(int)
-        if "スタートタイミング" in df_history.columns:
-            df_history["スタートタイミング"] = pd.to_numeric(df_history["スタートタイミング"], errors='coerce')
-
-        player_course_stats = df_history.groupby([player_col, "枠番"]).agg({
+        player_course_stats = df_history_all.groupby([player_col, "枠番"]).agg({
             "is_win": "mean",
             "スタートタイミング": "mean"
         }).reset_index().rename(columns={
@@ -77,16 +92,16 @@ def predict_race():
 
     kimarite_col = None
     for col in ["決まり手", "決まり手（逃げ・まくり等）"]:
-        if col in df_history.columns:
+        if col in df_history_all.columns:
             kimarite_col = col
             break
 
-    if kimarite_col and "レース場" in df_history.columns and "風向" in df_history.columns:
-        venue_wind_kimarite = df_history.groupby(["レース場", "風向", kimarite_col]).size().reset_index(name="決まり手_発生回数")
+    if kimarite_col and "レース場" in df_history_all.columns and "風向" in df_history_all.columns:
+        venue_wind_kimarite = df_history_all.groupby(["レース場", "風向", kimarite_col]).size().reset_index(name="決まり手_発生回数")
         venue_wind_kimarite["場・風別_決まり手確率"] = venue_wind_kimarite["決まり手_発生回数"] / venue_wind_kimarite.groupby(["レース場", "風向"])["決まり手_発生回数"].transform("sum")
         df_test = pd.merge(df_test, venue_wind_kimarite[["レース場", "風向", kimarite_col, "場・風別_決まり手確率"]], on=["レース場", "風向", kimarite_col], how="left")
 
-        winners = df_history[df_history["着順"] == 1]
+        winners = df_history_all[df_history_all["着順"] == 1]
         if len(winners) > 0 and kimarite_col in winners.columns and player_col:
             player_fav_kimarite = winners.groupby([player_col, kimarite_col]).size().reset_index(name="選手別_得意決まり手回数")
             player_fav_kimarite["選手別_得意決まり手率"] = player_fav_kimarite["選手別_得意決まり手回数"] / player_fav_kimarite.groupby(player_col)["選手別_得意決まり手回数"].transform("sum")
@@ -95,23 +110,21 @@ def predict_race():
     if player_col:
         df_test[player_col] = df_test[player_col].astype('category').cat.codes
 
-    # 1行に絞る
-    df_test = df_test.head(1).copy()
-
     # 数値変換
     for col in df_test.columns:
         if col != player_col:
             df_test[col] = pd.to_numeric(df_test[col], errors='coerce')
 
-    # ★ここがミソ：学習時と完全に同じ特徴量リストに強制合わせ（足りない列は0で自動補完！）
+    # 特徴量リストの強制合わせ
     for col in expected_features:
         if col not in df_test.columns:
             df_test[col] = 0.0
 
+    # 1行だけでなく、そのレースの全艇分（または先頭）をしっかり確認できるようにする
     X_input = df_test[expected_features].fillna(0)
 
-    print(f"\n--- 入力データ（特徴量数: {X_input.shape[1]}個で完全一致） ---")
-    print(X_input)
+    print(f"\n--- 入力データ（場20・10R / 特徴量数: {X_input.shape[1]}個） ---")
+    print(X_input.head())
 
     print("\n--- 予想結果（各着順の確率・艇番） ---")
     
@@ -119,6 +132,7 @@ def predict_race():
         model_key = f"rank_{i}"
         if model_key in models:
             model = models[model_key]
+            # 複数艇ある場合は先頭の艇、あるいは全艇分の予測を出す
             probs = model.predict(X_input)[0]
             predicted_boat = probs.argmax() + 1
             max_prob = probs.max() * 100
