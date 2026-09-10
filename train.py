@@ -47,9 +47,6 @@ def load_and_merge_data():
     print("データを結合しています...")
     df_base = pd.concat(df_list, ignore_index=True)
     
-    if len(df_base) > 100000:
-        df_base = df_base.sample(n=100000, random_state=42)
-        
     return df_base
 
 def train_model():
@@ -64,15 +61,74 @@ def train_model():
         rank_map = {'A1': 4, 'A2': 3, 'B1': 2, 'B2': 1}
         df_train["級別"] = df_train["級別"].map(rank_map)
 
-    # 選手IDや選手名（もしCSVにあれば）をカテゴリカル（数値ID）に変換
     player_col = None
     for col in ["選手コード", "登録番号", "選手名"]:
         if col in df_train.columns:
             player_col = col
-            # 文字列の場合はカテゴリコードに変換して数値化
-            df_train[player_col] = df_train[player_col].astype('category').cat.codes
             break
 
+    # -------------------------------------------------------------
+    # ★ 1. 過去レースから「選手別のコース実績・平均ST」を自動集計
+    # -------------------------------------------------------------
+    if player_col and "枠番" in df_train.columns:
+        print("過去レースの積み重ねから選手別の実績を計算中...")
+        if "着順" in df_train.columns:
+            df_train["is_win"] = (df_train["着順"] == 1).astype(int)
+        else:
+            df_train["is_win"] = 0 
+
+        if "スタートタイミング" in df_train.columns:
+            df_train["スタートタイミング"] = pd.to_numeric(df_train["スタートタイミング"], errors='coerce')
+
+        agg_dict = {}
+        if "is_win" in df_train.columns:
+            agg_dict["is_win"] = "mean"
+        if "スタートタイミング" in df_train.columns:
+            agg_dict["スタートタイミング"] = "mean"
+
+        if agg_dict:
+            player_course_stats = df_train.groupby([player_col, "枠番"]).agg(agg_dict).reset_index()
+            player_course_stats = player_course_stats.rename(columns={
+                "is_win": "実績_コース別勝率",
+                "starting_timing": "実績_平均ST"
+            })
+            df_train = pd.merge(df_train, player_course_stats, on=[player_col, "枠番"], how="left")
+
+    # -------------------------------------------------------------
+    # ★ 2. 「決まり手」の高度な特徴量化（レース場×風×機力 ＆ 選手ごとの得意・弱点）
+    # -------------------------------------------------------------
+    kimarite_col = None
+    for col in ["決まり手", "決まり手（逃げ・まくり等）"]:
+        if col in df_train.columns:
+            kimarite_col = col
+            break
+
+    if kimarite_col:
+        print("決まり手データをエンコード・集計しています...")
+        # 決まり手をカテゴリコード（数値）に変換
+        df_train["決まり手_コード"] = df_train[kimarite_col].astype('category').cat.codes
+
+        # ① 【レース場 × 風向】ごとの決まり手傾向（どの風でどの決まり手が出やすいか）
+        if "レース場" in df_train.columns and "風向" in df_train.columns:
+            # モーターの良し悪し（直線や回り足）も加味した複合条件での発生率を近似するためグループ化
+            venue_wind_kimarite = df_train.groupby(["レース場", "风向", kimarite_col]).size().reset_index(name="決まり手_発生回数")
+            # 出現割合に変換
+            venue_wind_kimarite["場・風別_決まり手確率"] = venue_wind_kimarite["決まり手_発生回数"] / venue_wind_kimarite.groupby(["レース場", "風向"])["決まり手_発生回数"].transform("sum")
+            df_train = pd.merge(df_train, venue_wind_kimarite[["レース場", "風向", kimarite_col, "場・風別_決まり手確率"]], on=["レース場", "風向", kimarite_col], how="left")
+
+        # ② 【選手ごと】の得意な決まり手（勝ったときによく使う決まり手）
+        if player_col and "着順" in df_train.columns:
+            winners = df_train[df_train["着順"] == 1]
+            if len(winners) > 0 and kimarite_col in winners.columns:
+                player_fav_kimarite = winners.groupby([player_col, kimarite_col]).size().reset_index(name="選手別_得意決まり手回数")
+                player_fav_kimarite["選手別_得意決まり手率"] = player_fav_kimarite["選手別_得意決まり手回数"] / player_fav_kimarite.groupby(player_col)["選手別_得意決まり手回数"].transform("sum")
+                df_train = pd.merge(df_train, player_fav_kimarite[[player_col, kimarite_col, "選手別_得意決まり手率"]], on=[player_col, kimarite_col], how="left")
+
+    # 選手IDをカテゴリカル変数に変換
+    if player_col:
+        df_train[player_col] = df_train[player_col].astype('category').cat.codes
+
+    # 特徴量リスト
     target_features = [
         "レース場",
         "風速(m)",
@@ -96,6 +152,12 @@ def train_model():
         "当地勝率",
         "モーター2連率",
         "ボート2連率",
+        "実績_コース別勝率",
+        "実績_平均ST",
+        # ▼ 追加された決まり手関連の特徴量
+        "決まり手_コード",
+        "場・風別_決まり手確率",
+        "選手別_得意決まり手率",
     ]
     
     if player_col and player_col not in target_features:
@@ -117,6 +179,9 @@ def train_model():
     for col in features:
         if col != player_col:
             df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
+
+    if len(df_train) > 100000:
+        df_train = df_train.sample(n=100000, random_state=42)
 
     df_train = df_train.dropna(subset=targets + [c for c in features if c != player_col])
     print(f"有効データ数: {len(df_train)}行")
@@ -160,7 +225,8 @@ def train_model():
 
     model_filename = "boatrace_lgb_model.pkl"
     joblib.dump(models, model_filename)
-    print(f"学習完了！選手別の癖を含めたモデルを {model_filename} として保存しました。")
+    print(f"学習完了！決まり手や水面特性を含めた究極モデルを {model_filename} として保存しました。")
 
 if __name__ == "__main__":
     train_model()
+
