@@ -18,7 +18,6 @@ def predict_race():
         print("エラー: モデル内に rank_1 が見つかりません。")
         return
 
-    # テストデータの取得
     result_files = glob.glob("data/results/**/*.csv", recursive=True)
     if not result_files:
         result_files = glob.glob("data/**/*.csv", recursive=True)
@@ -27,42 +26,45 @@ def predict_race():
         print("テスト用のCSVファイルが見つかりません。")
         return
 
-    # 全ファイルを読み込んで「場コード20」かつ「10R」のデータを探す
-    print("指定されたレース（場コード20の10R）を探索中...")
-    target_row = None
-    df_history = []
+    # 全ファイルをスキャンして過去データ（履歴）を集めつつ、対象レースコードを探す
+    print("全データから履歴と対象レースを探索中...")
+    df_history_list = []
+    df_test = None
+    
+    # 狙い撃ちしたいレースコード（例: 画像にある場20の10Rなら "202609092010" など。適宜変更可能）
+    target_race_code = "202609092010" 
 
     for f in result_files:
         try:
             temp_df = pd.read_csv(f)
             temp_df.columns = temp_df.columns.str.strip()
-            df_history.append(temp_df)
+            df_history_list.append(temp_df)
             
-            # 場コード20かつ10Rの行があるかチェック
-            # （※カラム名は「レース場」「R」「レース」などの可能性があるので柔軟に探す）
-            venue_col = next((c for c in ["レース場", "場コード", "場"] if c in temp_df.columns), None)
-            race_col = next((c for c in ["R", "レース", "レース番号"] if c in temp_df.columns), None)
-            
-            if venue_col and race_col:
-                # 20 と 10（または "10R"）で絞り込み
-                matched = temp_df[
-                    (temp_df[venue_col].astype(str).str.contains("20")) & 
-                    (temp_df[race_col].astype(str).str.contains("10"))
-                ]
+            # 左端のレースコードっぽい列を探す（数値や文字列で長めのIDが格納されている列）
+            for col in temp_df.columns:
+                # 文字列変換して target_race_code に完全一致するものがあるか
+                matched = temp_df[temp_df[col].astype(str) == str(target_race_code)]
                 if len(matched) > 0:
                     df_test = matched.copy()
-                    print(f"該当レースを発見しました！（ファイル: {f}, 行数: {len(df_test)}行）")
+                    print(f"レースコード '{target_race_code}' を発見しました！（ファイル: {f}, 艇数: {len(df_test)}艇）")
                     break
+            if df_test is not None and len(df_test) > 0:
+                break
         except Exception as e:
             pass
 
-    # もし見つからんかったら、安全のために最初のファイルをフォールバック
-    if 'df_test' not in locals() or len(df_test) == 0:
-        print("警告: 指定条件のレースが見つからなかったため、先頭のデータを使用します。")
-        df_test = pd.read_csv(result_files[0])
-        df_test.columns = df_test.columns.str.strip()
+    # もし指定コードが見つからなければ、最新ファイルの先頭のレース（または最初の数行）を使用
+    if df_test is None or len(df_test) == 0:
+        print(f"警告: 指定レースコードが見つからないため、最新データの先頭レースを使用します。")
+        fallback_df = pd.read_csv(result_files[0])
+        fallback_df.columns = fallback_df.columns.str.strip()
+        # 先頭のレースコードを自動取得して6艇分抽出
+        first_col = fallback_df.columns[0]
+        first_code = fallback_df[first_col].iloc[0]
+        df_test = fallback_df[fallback_df[first_col] == first_code].copy()
+        print(f"自動取得したレースコード: {first_code} ({len(df_test)}艇)")
 
-    df_history_all = pd.concat(df_history, ignore_index=True) if df_history else df_test.copy()
+    df_history_all = pd.concat(df_history_list, ignore_index=True) if df_history_list else df_test.copy()
 
     # 級別の数値化
     if "級別" in df_test.columns:
@@ -75,7 +77,7 @@ def predict_race():
             player_col = col
             break
 
-    # 実績や決まり手確率の計算・マージ
+    # 過去データから実績やスタートタイミングの平均を計算してマージ
     if player_col and "枠番" in df_history_all.columns and "着順" in df_history_all.columns:
         df_history_all["is_win"] = (df_history_all["着順"] == 1).astype(int)
         if "スタートタイミング" in df_history_all.columns:
@@ -88,26 +90,30 @@ def predict_race():
             "is_win": "実績_コース別勝率",
             "スタートタイミング": "実績_平均ST"
         })
-        df_test = pd.merge(df_test, player_course_stats, on=[player_col, "枠番"], how="left")
+        if all(c in df_test.columns for c in [player_col, "枠番"]):
+            df_test = pd.merge(df_test, player_course_stats, on=[player_col, "枠番"], how="left")
 
+    # 決まり手確率の計算・マージ
     kimarite_col = None
     for col in ["決まり手", "決まり手（逃げ・まくり等）"]:
         if col in df_history_all.columns:
             kimarite_col = col
             break
 
-    if kimarite_col and "レース場" in df_history_all.columns and "風向" in df_history_all.columns:
+    if kimarite_col and "レース場" in df_history_all.columns and "風向" in df_history_all.columns and "風向" in df_test.columns:
         venue_wind_kimarite = df_history_all.groupby(["レース場", "風向", kimarite_col]).size().reset_index(name="決まり手_発生回数")
         venue_wind_kimarite["場・風別_決まり手確率"] = venue_wind_kimarite["決まり手_発生回数"] / venue_wind_kimarite.groupby(["レース場", "風向"])["決まり手_発生回数"].transform("sum")
-        df_test = pd.merge(df_test, venue_wind_kimarite[["レース場", "風向", kimarite_col, "場・風別_決まり手確率"]], on=["レース場", "風向", kimarite_col], how="left")
+        if all(c in df_test.columns for c in ["レース場", "風向", kimarite_col]):
+            df_test = pd.merge(df_test, venue_wind_kimarite[["レース場", "風向", kimarite_col, "場・風別_決まり手確率"]], on=["レース場", "風向", kimarite_col], how="left")
 
         winners = df_history_all[df_history_all["着順"] == 1]
         if len(winners) > 0 and kimarite_col in winners.columns and player_col:
             player_fav_kimarite = winners.groupby([player_col, kimarite_col]).size().reset_index(name="選手別_得意決まり手回数")
             player_fav_kimarite["選手別_得意決まり手率"] = player_fav_kimarite["選手別_得意決まり手回数"] / player_fav_kimarite.groupby(player_col)["選手別_得意決まり手回数"].transform("sum")
-            df_test = pd.merge(df_test, player_fav_kimarite[[player_col, kimarite_col, "選手別_得意決まり手率"]], on=[player_col, kimarite_col], how="left")
+            if all(c in df_test.columns for c in [player_col, kimarite_col]):
+                df_test = pd.merge(df_test, player_fav_kimarite[[player_col, kimarite_col, "選手別_得意決まり手率"]], on=[player_col, kimarite_col], how="left")
 
-    if player_col:
+    if player_col and player_col in df_test.columns:
         df_test[player_col] = df_test[player_col].astype('category').cat.codes
 
     # 数値変換
@@ -120,11 +126,10 @@ def predict_race():
         if col not in df_test.columns:
             df_test[col] = 0.0
 
-    # 1行だけでなく、そのレースの全艇分（または先頭）をしっかり確認できるようにする
     X_input = df_test[expected_features].fillna(0)
 
-    print(f"\n--- 入力データ（場20・10R / 特徴量数: {X_input.shape[1]}個） ---")
-    print(X_input.head())
+    print(f"\n--- 入力データ（対象レース / 艇数: {len(X_input)}艇） ---")
+    print(X_input[["レース場", "風速(m)", "風向", "全国勝率", "モーター2連率"]].head(2) if "風速(m)" in X_input.columns else X_input.head(2))
 
     print("\n--- 予想結果（各着順の確率・艇番） ---")
     
@@ -132,11 +137,15 @@ def predict_race():
         model_key = f"rank_{i}"
         if model_key in models:
             model = models[model_key]
-            # 複数艇ある場合は先頭の艇、あるいは全艇分の予測を出す
-            probs = model.predict(X_input)[0]
-            predicted_boat = probs.argmax() + 1
-            max_prob = probs.max() * 100
-            print(f"{i}着予想: {predicted_boat}号艇 (確率: {max_prob:.1f}%)")
+            print(f"\n【{i}着の予測】")
+            # 6艇それぞれの確率を計算して表示
+            for idx, row in X_input.iterrows():
+                probs = model.predict(row.values.reshape(1, -1))[0]
+                # 各着順になる確率の最大値、あるいはその艇が1着になる確率など
+                boat_num = df_test.loc[idx, "枠番"] if "枠番" in df_test.columns else idx + 1
+                top_pred_boat = probs.argmax() + 1
+                max_prob = probs.max() * 100
+                print(f"  -> 艇番 {boat_num}: この着順の最有力は {top_pred_boat}号艇 (確率: {max_prob:.1f}%)")
 
 if __name__ == "__main__":
     predict_race()
