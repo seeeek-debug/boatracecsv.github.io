@@ -310,15 +310,27 @@ async def before_daily_report():
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user.name}")
-    bot.add_view(VenueSelectView())
+    
+    try:
+        bot.add_view(VenueSelectView())
+    except Exception as e:
+        print(f"Error adding view: {e}")
     
     # 起動時に自動で指定チャンネルへメニューを送信・常設する処理
-    channel = bot.get_channel(NOTIFICATION_CHANNEL_ID)
-    if channel:
-        await channel.send(
-            "🤖 **【AIレース分析・展開メニュー】**\n👇下のメニューからいつでも会場を選択して予測を実行できます！", 
-            view=VenueSelectView()
-        )
+    try:
+        channel_id = int(NOTIFICATION_CHANNEL_ID)
+        channel = bot.get_channel(channel_id)
+        if channel is None:
+            channel = await bot.fetch_channel(channel_id)
+            
+        if channel:
+            await channel.send(
+                "🤖 **【AIレース分析・展開メニュー】**\n👇下のメニューからいつでも会場を選択して予測を実行できます！", 
+                view=VenueSelectView()
+            )
+            print("初期メニューの自動送信に成功しました！")
+    except Exception as e:
+        print(f"自動送信エラー（無視しても動作に影響はありません）: {e}")
         
     if not daily_morning_report.is_running():
         daily_morning_report.start()
