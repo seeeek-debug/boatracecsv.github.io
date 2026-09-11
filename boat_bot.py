@@ -182,7 +182,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     top_1st = max(boat_data, key=lambda x: x['p1']) if boat_data else {"boat": 1, "p1": 0}
     top_2nd = max(boat_data, key=lambda x: x['p2']) if boat_data else {"boat": 2, "p2": 0}
 
-    # --- 展開予想の判定（すべての分岐を完全に網羅） ---
+    # --- 展開予想の判定 ---
     if len(boat_data) >= 1 and boat_data[0]['p1'] >= 38.0:
         tactical_tag = "🛡️ 【イン鉄壁・逃げ本線】 1号艇が抜群の信頼度で逃走"
         kimarite = "逃げ (1-2, 1-3)"
@@ -243,11 +243,7 @@ class RaceSelect(discord.ui.Select):
         super().__init__(placeholder="👇 分析するレースを選択してください...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        # 1. 最優先で defer を実行してDiscordからのタイムアウトを完全に回避する
         await interaction.response.defer(ephemeral=True)
-        
-        # 2. 処理中メッセージを followup で送信
-        await interaction.followup.send(content="⏳ データを取得してAI分析中やで！ちょっと待ってな...", ephemeral=True)
 
         try:
             venue = self.venue
@@ -269,7 +265,6 @@ class RaceSelect(discord.ui.Select):
                 r_num = int(val)
                 result_text = calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num)
 
-            # 3. 結果を分割して送信
             if len(result_text) <= 2000:
                 await interaction.followup.send(content=result_text, ephemeral=True)
             else:
@@ -290,8 +285,11 @@ class VenueSelect(discord.ui.Select):
         super().__init__(placeholder="🏟️ 会場を選択してください...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
+        # 会場選択時も即座に defer する
+        await interaction.response.defer(ephemeral=True)
+        
         venue = self.values[0]
-        await interaction.response.send_message(
+        await interaction.followup.send(
             content=f"🏟️ **{venue}場** が選択されました。続いて、予測・展開を見たいレースを選択してください。",
             view=RaceSelectView(venue),
             ephemeral=True
@@ -322,3 +320,4 @@ if __name__ == "__main__":
     keep_alive()
     token = os.environ.get("DISCORD_TOKEN")
     bot.run(token)
+
