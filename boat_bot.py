@@ -125,7 +125,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         if df is None: return None
         for col in df.columns:
             clean_col = df[col].astype(str).str.strip().str.split('.').str[0].str.lstrip("0")
-            clean_target = str(code).strip().str.split('.')[0].lstrip("0")
+            clean_target = str(code).strip().split('.')[0].lstrip("0")
             matched = df[clean_col == clean_target]
             if len(matched) > 0:
                 print(f"[DEBUG] Matched by column '{col}' with code '{code}' (Rows: {len(matched)})")
