@@ -76,7 +76,6 @@ models = None
 player_course_stats = None
 venue_wind_kimarite = None
 player_fav_kimarite = None
-player_col_name = "選手名"
 
 try:
     loaded_package = joblib.load(MODEL_FILENAME)
@@ -85,7 +84,6 @@ try:
         player_course_stats = loaded_package.get("player_course_stats")
         venue_wind_kimarite = loaded_package.get("venue_wind_kimarite")
         player_fav_kimarite = loaded_package.get("player_fav_kimarite")
-        player_col_name = loaded_package.get("player_col", "選手名")
         print("モデルと集計データの読み込みに成功しました。")
     else:
         models = loaded_package
@@ -107,8 +105,8 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     expected_features = models["rank_1"].feature_name()
     day_part = day_str.split("-")[2] if "-" in day_str else day_str
     
-    # CSV取得
-    prog_path = f"data/programs/{year}/{month}/{day_part}.csv"
+    # 正しいリポジトリのパス構造に修正
+    prog_path = f"data/programs/race_cards/{year}/{month}/{day_part}.csv"
     sui_path = f"data/previews/sui/{year}/{month}/{day_part}.csv"
     orig_path = f"data/previews/original_exhibition/{year}/{month}/{day_part}.csv"
     
@@ -118,18 +116,19 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     
     r_str = str(r_num).zfill(2)
     venue_s = str(venue_code).zfill(2)
-    target_code = f"{year}{month}{day_part}{venue_s}{r_str}"
+    target_code = str(int(f"{year}{month}{day_part}{venue_s}{r_str}"))
 
     def extract_target_row(df):
         if df is None or df.empty:
             return pd.Series()
-        if "レースコード" in df.columns:
-            matched = df[df["レースコード"].astype(str) == str(target_code)]
-            if not matched.empty:
-                return matched.iloc[0]
         for col in df.columns:
-            if "レース" in col:
-                matched = df[df[col].astype(str).str.contains(r_str) & df[col].astype(str).str.contains(venue_s)]
+            if any(k in col.lower() for k in ["レースコード", "rcd", "code", "r_code", "id"]):
+                matched = df[df[col].astype(str).str.strip().str.lstrip("0") == target_code.lstrip("0")]
+                if not matched.empty:
+                    return matched.iloc[0]
+        for col in df.columns:
+            if any(k in col.lower() for k in ["レース", "rcd", "code"]):
+                matched = df[df[col].astype(str).str.contains(venue_s) & df[col].astype(str).str.contains(r_str)]
                 if not matched.empty:
                     return matched.iloc[0]
         return df.iloc[0] if len(df) > 0 else pd.Series()
@@ -138,66 +137,105 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     sui_row = extract_target_row(df_sui)
     orig_row = extract_target_row(df_orig)
 
+    def get_val(row, boat_num, field_names, default=0.0):
+        if row is None or row.empty:
+            return default
+        if isinstance(field_names, str):
+            field_names = [field_names]
+            
+        prefixes = [
+            f"艇{boat_num}_", f"{boat_num}_", f"艇{boat_num}", f"{boat_num}", 
+            f"boat{boat_num}_", f"b{boat_num}_", f"p{boat_num}_", f"player{boat_num}_"
+        ]
+        suffixes = [
+            f"_{boat_num}", f"艇{boat_num}", f"{boat_num}"
+        ]
+        
+        row_keys = {str(k).strip(): k for k in row.index}
+        
+        for fn in field_names:
+            if fn in row_keys:
+                val = row[row_keys[fn]]
+                if pd.notna(val) and str(val).strip() != "":
+                    return val
+            for p in prefixes:
+                for candidate in [f"{p}{fn}", f"{fn}{p}"]:
+                    if candidate in row_keys:
+                        val = row[row_keys[candidate]]
+                        if pd.notna(val) and str(val).strip() != "":
+                            return val
+            for s in suffixes:
+                candidate = f"{fn}{s}"
+                if candidate in row_keys:
+                    val = row[row_keys[candidate]]
+                    if pd.notna(val) and str(val).strip() != "":
+                        return val
+            for rk_str, orig_k in row_keys.items():
+                if str(boat_num) in rk_str and fn in rk_str:
+                    val = row[orig_k]
+                    if pd.notna(val) and str(val).strip() != "":
+                        return val
+        return default
+
     combined_rows = []
     
     for boat_num in range(1, 7):
-        p = f"艇{boat_num}_"
-        
         row_dict = {
             "レース場": float(venue_code) if str(venue_code).isdigit() else 0.0,
             "艇番": float(boat_num),
             "枠番": float(boat_num),
             
-            "風速(m)": float(sui_row.get("風速(m)", 0.0) or 0.0),
-            "風向": float(sui_row.get("風向", 0.0) or 0.0),
-            "波の高さ(cm)": float(sui_row.get("波の高さ(cm)", 0.0) or 0.0),
-            "天候": float(sui_row.get("天候", 0.0) or 0.0),
-            "気温(℃)": float(sui_row.get("気温(℃)", 0.0) or 0.0),
-            "水温(℃)": float(sui_row.get("水温(℃)", 0.0) or 0.0),
+            "風速(m)": float(get_val(sui_row, boat_num, ["風速(m)", "風速", "wind_speed"], 0.0) or 0.0),
+            "風向": float(get_val(sui_row, boat_num, ["風向", "wind_dir"], 0.0) or 0.0),
+            "波の高さ(cm)": float(get_val(sui_row, boat_num, ["波の高さ(cm)", "波高", "wave"], 0.0) or 0.0),
+            "天候": float(get_val(sui_row, boat_num, ["天候", "weather"], 0.0) or 0.0),
+            "気温(℃)": float(get_val(sui_row, boat_num, ["気温(℃)", "気温", "air_temp"], 0.0) or 0.0),
+            "水温(℃)": float(get_val(sui_row, boat_num, ["水温(℃)", "水温", "water_temp"], 0.0) or 0.0),
             
-            "全国勝率": float(prog_row.get(f"{p}全国勝率", 0.0) or 0.0),
-            "全国2連対率": float(prog_row.get(f"{p}全国2連対率", 0.0) or 0.0),
-            "全国3連対率": float(prog_row.get(f"{p}全国3連対率", 0.0) or 0.0),
-            "当地勝率": float(prog_row.get(f"{p}当地勝率", 0.0) or 0.0),
-            "当地2連対率": float(prog_row.get(f"{p}当地2連対率", 0.0) or 0.0),
-            "当地3連対率": float(prog_row.get(f"{p}当地3連対率", 0.0) or 0.0),
-            "モーター2連率": float(prog_row.get(f"{p}モーター2連率", 0.0) or 0.0),
-            "モーター3連率": float(prog_row.get(f"{p}モーター3連率", 0.0) or 0.0),
-            "ボート2連率": float(prog_row.get(f"{p}ボート2連率", 0.0) or 0.0),
-            "ボート3連率": float(prog_row.get(f"{p}ボート3連率", 0.0) or 0.0),
-            "全国平均ST": float(prog_row.get(f"{p}全国平均ST", 0.15) or 0.15),
-            "F本数": float(prog_row.get(f"{p}F本数", 0.0) or 0.0),
-            "L本数": float(prog_row.get(f"{p}L本数", 0.0) or 0.0),
-            "年齢": float(prog_row.get(f"{p}年齢", 0.0) or 0.0),
-            "級別": str(prog_row.get(f"{p}級別", "B1")),
-            "選手名": str(prog_row.get(f"{p}選手名", f"選手{boat_num}")),
-            "登録番号": prog_row.get(f"{p}登録番号", 0),
+            "全国勝率": float(get_val(prog_row, boat_num, ["全国勝率", "勝率", "national_win_rate"], 0.0) or 0.0),
+            "全国2連対率": float(get_val(prog_row, boat_num, ["全国2連対率", "2連対率", "national_2ren"], 0.0) or 0.0),
+            "全国3連対率": float(get_val(prog_row, boat_num, ["全国3連対率", "3連対率", "national_3ren"], 0.0) or 0.0),
+            "当地勝率": float(get_val(prog_row, boat_num, ["当地勝率", "local_win_rate"], 0.0) or 0.0),
+            "当地2連対率": float(get_val(prog_row, boat_num, ["当地2連対率", "local_2ren"], 0.0) or 0.0),
+            "当地3連対率": float(get_val(prog_row, boat_num, ["当地3連対率", "local_3ren"], 0.0) or 0.0),
+            "モーター2連率": float(get_val(prog_row, boat_num, ["モーター2連率", "モータ2連率", "motor_2ren"], 0.0) or 0.0),
+            "モーター3連率": float(get_val(prog_row, boat_num, ["モーター3連率", "モータ3連率", "motor_3ren"], 0.0) or 0.0),
+            "ボート2連率": float(get_val(prog_row, boat_num, ["ボート2連率", "boat_2ren"], 0.0) or 0.0),
+            "ボート3連率": float(get_val(prog_row, boat_num, ["ボート3連率", "boat_3ren"], 0.0) or 0.0),
+            "全国平均ST": float(get_val(prog_row, boat_num, ["全国平均ST", "平均ST", "st", "avg_st"], 0.15) or 0.15),
+            "F本数": float(get_val(prog_row, boat_num, ["F本数", "f_count"], 0.0) or 0.0),
+            "L本数": float(get_val(prog_row, boat_num, ["L本数", "l_count"], 0.0) or 0.0),
+            "年齢": float(get_val(prog_row, boat_num, ["年齢", "age"], 0.0) or 0.0),
+            "級別": str(get_val(prog_row, boat_num, ["級別", "class"], "B1")),
+            "選手名": str(get_val(prog_row, boat_num, ["選手名", "name", "player"], f"選手{boat_num}")),
+            "登録番号": get_val(prog_row, boat_num, ["登録番号", "id", "reg_no"], 0),
         }
         
-        v1 = orig_row.get(f"{p}値1", 0.0)
-        v2 = orig_row.get(f"{p}値2", 0.0)
-        v3 = orig_row.get(f"{p}値3", 0.0)
-        item1 = str(orig_row.get("計測項目1", ""))
-        item2 = str(orig_row.get("計測項目2", ""))
-        item3 = str(orig_row.get("計測項目3", ""))
+        v1 = get_val(orig_row, boat_num, ["値1", "ex_val1", "val1", "評価1"], 0.0)
+        v2 = get_val(orig_row, boat_num, ["値2", "ex_val2", "val2", "評価2"], 0.0)
+        v3 = get_val(orig_row, boat_num, ["値3", "ex_val3", "val3", "評価3"], 0.0)
+        item1 = str(get_val(orig_row, boat_num, ["計測項目1", "item1"], ""))
+        item2 = str(get_val(orig_row, boat_num, ["計測項目2", "item2"], ""))
+        item3 = str(get_val(orig_row, boat_num, ["計測項目3", "item3"], ""))
         
-        row_dict["回り足"] = 0.0
-        row_dict["直線"] = 0.0
-        row_dict["一周タイム"] = 0.0
-        row_dict["半周タイム"] = 0.0
+        row_dict["回り足"] = float(get_val(orig_row, boat_num, ["回り足", "まわり足", "turn"], 0.0) or 0.0)
+        row_dict["直線"] = float(get_val(orig_row, boat_num, ["直線", "straight"], 0.0) or 0.0)
+        row_dict["一周タイム"] = float(get_val(orig_row, boat_num, ["一周タイム", "lap1"], 0.0) or 0.0)
+        row_dict["半周タイム"] = float(get_val(orig_row, boat_num, ["半周タイム", "lap0.5"], 0.0) or 0.0)
         
         for item, val in zip([item1, item2, item3], [v1, v2, v3]):
             try:
                 val_f = float(val)
             except:
                 val_f = 0.0
-            if "まわり足" in item or "回り足" in item:
+            item_str = str(item)
+            if "まわり足" in item_str or "回り足" in item_str:
                 row_dict["回り足"] = val_f
-            elif "直線" in item:
+            elif "直線" in item_str:
                 row_dict["直線"] = val_f
-            elif "一周" in item:
+            elif "一周" in item_str:
                 row_dict["一周タイム"] = val_f
-            elif "半周" in item:
+            elif "半周" in item_str:
                 row_dict["半周タイム"] = val_f
 
         combined_rows.append(row_dict)
