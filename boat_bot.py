@@ -77,7 +77,7 @@ try:
     if "rank_1" in models:
         expected_features = models["rank_1"].feature_name()
         print(f"--- モデル特徴量数: {len(expected_features)} ---")
-        print(f"--- 特徴量一覧: {expected_features} ---")
+        print(f"--- 特徴量一覧: {expected_features} ---", flush=True)
 except Exception as e:
     models = None
     print(f"モデルの読み込みに失敗しました: {e}")
@@ -150,9 +150,9 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     X_input = df_input_row.reindex(columns=expected_features, fill_value=0.0)
 
-    # --- 【デバッグ】実際にモデルに渡されている特徴量の値を表示 ---
-    print(f"=== [DEBUG VALUES] {venue} {r_num}R ===")
-    print(X_input.to_dict(orient='records')[0])
+    # --- 【デバッグ】実際にモデルに渡されている特徴量をDiscord画面上に表示する ---
+    debug_dict = X_input.to_dict(orient='records')[0]
+    summary_text += f"\n🔍 **[DEBUG 特徴量確認]**\n```json\n{str(debug_dict)[:900]}\n```\n"
 
     # 推論実行
     prob_matrix = {}
