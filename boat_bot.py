@@ -3,6 +3,7 @@ from datetime import datetime, time, timezone, timedelta
 import io
 import os
 import threading
+import traceback
 from flask import Flask
 import discord
 from discord.ext import commands, tasks
@@ -274,8 +275,9 @@ class RaceSelect(discord.ui.Select):
                 for i in range(0, len(result_text), 2000):
                     await interaction.followup.send(content=result_text[i:i+2000], ephemeral=True)
         except Exception as e:
-            print(f"Error: {e}")
-            await interaction.followup.send(content="⚠️ エラーが発生しました。", ephemeral=True)
+            print("--- 詳細なエラー内容 ---")
+            traceback.print_exc()
+            await interaction.followup.send(content=f"⚠️ エラーが発生しました: {e}", ephemeral=True)
 
 class RaceSelectView(discord.ui.View):
     def __init__(self, venue):
