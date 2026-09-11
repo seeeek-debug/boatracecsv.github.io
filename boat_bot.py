@@ -163,7 +163,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         boat_num = i + 1
         name = f"艇{boat_num}"
         
-        # 選手名の取得（出走表から）
         for col, val in card_row.items():
             if f"艇{boat_num}" in col and ("選手名" in col or "氏名" in col):
                 if pd.notna(val):
@@ -183,13 +182,28 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     top_1st = max(boat_data, key=lambda x: x['p1']) if boat_data else {"boat": 1, "p1": 0}
     top_2nd = max(boat_data, key=lambda x: x['p2']) if boat_data else {"boat": 2, "p2": 0}
 
-    # 展開予想タグ
-    if boat_data and boat_data[0]['p1'] >= 38.0:
+    # --- 展開予想の判定（すべての分岐を完全に復元） ---
+    if len(boat_data) >= 1 and boat_data[0]['p1'] >= 38.0:
         tactical_tag = "🛡️ 【イン鉄壁・逃げ本線】 1号艇が抜群の信頼度で逃走"
         kimarite = "逃げ (1-2, 1-3)"
     elif len(boat_data) >= 2 and boat_data[1]['p1'] >= 20.0 and boat_data[1]['p1'] > boat_data[0]['p1']:
         tactical_tag = "💡 【2号艇の差し抜け】 2コースから鋭く差し込む"
         kimarite = "差し (2-1, 2-3)"
+    elif len(boat_data) >= 2 and boat_data[1]['p1'] >= 23.0:
+        tactical_tag = "⚡ 【2号艇まくり展開】 伸び足を活かしてインを襲う"
+        kimarite = "まくり (2-3, 2-4)"
+    elif len(boat_data) >= 3 and boat_data[2]['p1'] >= 18.0:
+        tactical_tag = "🌊 【3号艇のセンター強襲】 自在に攻めて主導権を握る"
+        kimarite = "まくり差し / まくり (3-1, 3-2)"
+    elif len(boat_data) >= 6 and (boat_data[5]['p1'] >= 15.0 or boat_data[4]['p1'] >= 12.0 or boat_data[3]['p1'] >= 10.0):
+        out_candidates = boat_data[3:]
+        best_out = max(out_candidates, key=lambda x: x['p1'])
+        if best_out['boat'] == 4:
+            tactical_tag = "🔥 【4号艇のカド一撃・まくり展開】 助走の踏み込みから絞りマイの展開を作る"
+            kimarite = "まくり / まくり差し (4-1, 4-5)"
+        else:
+            tactical_tag = f"🎯 【{best_out['boat']}号艇の外マイ・まくり差し】 展開の隙を突く鋭い仕掛け"
+            kimarite = f"まくり差し / 差し ({best_out['boat']}-1, {best_out['boat']}-2)"
     else:
         tactical_tag = "⚔️ 【混戦・差し手モツレ】 互いの攻防から手堅く潰す展開"
         kimarite = "差し / 差し継ぎ"
@@ -229,8 +243,9 @@ class RaceSelect(discord.ui.Select):
         super().__init__(placeholder="👇 分析するレースを選択してください...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        # タイムアウトを防ぐため即座に defer する
-        await interaction.response.defer(ephemeral=True)
+        # まず最初に「ちょっと待ってな」の合図メッセージを送信する
+        await interaction.response.send_message(content="⏳ データを取得してAI分析中やで！ちょっと待ってな...", ephemeral=True)
+        
         try:
             venue = self.venue
             venue_code = VENUE_MAPPING.get(venue, "01")
@@ -251,14 +266,20 @@ class RaceSelect(discord.ui.Select):
                 r_num = int(val)
                 result_text = calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num)
 
+            # 最初に出した「ちょっと待ってな」のメッセージを編集して結果を表示する
             if len(result_text) <= 2000:
-                await interaction.followup.send(content=result_text, ephemeral=True)
+                await interaction.edit_original_response(content=result_text)
             else:
-                for i in range(0, len(result_text), 2000):
+                # 2000文字を超える場合は最初のメッセージを書き換えた上で、残りを followup で送る
+                await interaction.edit_original_response(content=result_text[:2000])
+                for i in range(2000, len(result_text), 2000):
                     await interaction.followup.send(content=result_text[i:i+2000], ephemeral=True)
         except Exception as e:
             traceback.print_exc()
-            await interaction.followup.send(content=f"⚠️ エラーが発生しました: {e}", ephemeral=True)
+            try:
+                await interaction.edit_original_response(content=f"⚠️ エラーが発生しました: {e}")
+            except:
+                await interaction.followup.send(content=f"⚠️ エラーが発生しました: {e}", ephemeral=True)
 
 class RaceSelectView(discord.ui.View):
     def __init__(self, venue):
