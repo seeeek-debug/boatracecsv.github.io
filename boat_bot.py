@@ -75,7 +75,7 @@ try:
     models = joblib.load(MODEL_FILENAME)
     print(f"モデル '{MODEL_FILENAME}' の読み込みに成功しました。")
     if "rank_1" in models:
-        print(f"--- モデルが要求する特徴量（最初の5個）: {models['rank_1'].feature_name()[:5]} ---")
+        print(f"--- モデルが要求する特徴量数: {len(models['rank_1'].feature_name())} ---")
 except Exception as e:
     models = None
     print(f"モデルの読み込みに失敗しました: {e}")
@@ -99,32 +99,42 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     if df_cards is None:
         return summary_text + " ⚠️ 注意: 出走表データが取得できませんでした。"
 
-    def filter_race_data(df, venue_c, r_n):
+    def extract_race_dataframe(df, venue_c, r_n):
         if df is None: return None
-        for col in df.columns:
-            matched = df[df[col].astype(str).str.contains(str(venue_c)) & df[col].astype(str).str.contains(str(r_n))]
-            if len(matched) > 0:
-                return matched.iloc[0:1].copy()
+        matched_rows = []
+        for idx, row in df.iterrows():
+            row_str = " ".join(row.astype(str).values)
+            if str(venue_c) in row_str and str(r_n) in row_str:
+                matched_rows.append(row)
+        if matched_rows:
+            return pd.DataFrame(matched_rows)
         return None
 
-    df_c_row = filter_race_data(df_cards, venue_code, r_num)
-    df_sui_row = filter_race_data(df_sui, venue_code, r_num)
-    df_orig_row = filter_race_data(df_orig, venue_code, r_num)
+    df_c_race = extract_race_dataframe(df_cards, venue_code, r_num)
+    df_sui_race = extract_race_dataframe(df_sui, venue_code, r_num)
+    df_orig_race = extract_race_dataframe(df_orig, venue_code, r_num)
 
-    if df_c_row is None or len(df_c_row) == 0:
+    if df_c_race is None or len(df_c_race) == 0:
         return summary_text + " ⚠️ 注意: 対象レースのデータが見つかりません。"
 
-    # 横持ちデータ（1レース1行）を結合して構築
+    # 全6艇分のデータを横持ち（1行）に正しく結合する処理
     combined_row = {}
-    for df_r in [df_c_row, df_sui_row, df_orig_row]:
+    
+    def merge_df_to_combined(df_r, prefix=""):
         if df_r is not None and len(df_r) > 0:
+            for i, row in enumerate(df_r.itertuples(index=False), 1):
+                for col_name, val in zip(df_r.columns, row):
+                    combined_row[f"{prefix}艇{i}_{col_name}"] = val
+            # そのままの列名も保持
             for col in df_r.columns:
-                combined_row[col] = df_r[col].values[0]
+                if col not in combined_row:
+                    combined_row[col] = df_r[col].values[0]
+
+    merge_df_to_combined(df_c_race, "c_")
+    merge_df_to_combined(df_sui_race, "s_")
+    merge_df_to_combined(df_orig_race, "o_")
 
     df_input_row = pd.DataFrame([combined_row])
-
-    # デバッグ用：取得できたカラム名の一部をログに出力
-    print(f"--- 取得したCSVの列名（最初の5個）: {list(df_input_row.columns)[:5]} ---")
 
     player_cols = [col for col in df_input_row.columns if "選手コード" in col or "登録番号" in col]
     for col in player_cols:
@@ -133,10 +143,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     for col in df_input_row.columns:
         if col not in player_cols and not df_input_row[col].dtype.name.startswith('cat'):
             df_input_row[col] = pd.to_numeric(df_input_row[col], errors='coerce')
-
-    # 特徴量が正しくマッピングされているか確認するため、足りないカラムや一致率をチェック
-    matched_features = [f for f in expected_features if f in df_input_row.columns]
-    print(f"✨ モデルの特徴量との一致数: {len(matched_features)} / {len(expected_features)}")
 
     X_input = df_input_row.reindex(columns=expected_features, fill_value=0.0)
 
@@ -152,11 +158,12 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         boat_num = i + 1
         
         name = f"艇{boat_num}"
-        for col in df_c_row.columns:
-            if f"艇{boat_num}" in col and "選手名" in col:
-                val = df_c_row[col].values[0]
-                if pd.notna(val):
-                    name = str(val)
+        # 出走表から選手名を取得
+        for col in df_c_race.columns:
+            if "選手名" in col:
+                vals = df_c_race[col].values
+                if len(vals) > i and pd.notna(vals[i]):
+                    name = str(vals[i])
                 break
 
         arr_1 = prob_matrix.get(1, np.zeros(6))
