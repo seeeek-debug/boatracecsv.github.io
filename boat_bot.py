@@ -59,13 +59,18 @@ def fetch_github_csv(file_path):
     if file_path in CSV_CACHE:
         return CSV_CACHE[file_path]
     uri = f"{GITHUB_RAW_BASE}{file_path}"
+    print(f"[DEBUG] Fetching CSV: {uri}")
     try:
         res = requests.get(uri, timeout=10)
+        print(f"[DEBUG] Status Code for {file_path}: {res.status_code}")
         if res.status_code == 200:
             df = pd.read_csv(io.StringIO(res.text), dtype=str)
             df.columns = df.columns.str.strip()
             CSV_CACHE[file_path] = df
+            print(f"[DEBUG] Success loading {file_path}, rows: {len(df)}")
             return df
+        else:
+            print(f"[DEBUG] Failed to fetch {file_path} (Status: {res.status_code})")
     except Exception as e:
         print(f"CSV Fetch Error ({file_path}): {e}")
     return None
@@ -109,19 +114,21 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     df_orig = fetch_github_csv(orig_path)
 
     if df_cards is None:
-        return summary_text + " ⚠️ エラー: 出走表データが取得できませんでした。"
+        return summary_text + f" ⚠️ エラー: 出走表データが取得できませんでした ({race_card_path})。"
 
     r_str = str(r_num).zfill(2)
     venue_s = str(venue_code).zfill(2)
     target_race_code = f"{year}{month}{day_part}{venue_s}{r_str}"
+    print(f"[DEBUG] Target Race Code: {target_race_code}")
 
     def get_matched_row(df, code):
         if df is None: return None
         for col in df.columns:
             clean_col = df[col].astype(str).str.strip().str.split('.').str[0].str.lstrip("0")
-            clean_target = str(code).strip().split('.')[0].lstrip("0")
+            clean_target = str(code).strip().str.split('.')[0].lstrip("0")
             matched = df[clean_col == clean_target]
             if len(matched) > 0:
+                print(f"[DEBUG] Matched by column '{col}' with code '{code}' (Rows: {len(matched)})")
                 return matched.iloc[0:1].copy()
         return None
 
@@ -134,24 +141,30 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     base_info = {}
     for col in df_c_row.columns:
-        if not col.startswith("艇"):
+        if not col.startswith("艇") and not (col[0].isdigit() and "_" in col):
             base_info[col] = df_c_row[col].values[0]
 
     for df_r in [df_s_row, df_o_row]:
         if df_r is not None:
             for c in df_r.columns:
-                if not c.startswith("艇"):
+                if not c.startswith("艇") and not (c[0].isdigit() and "_" in c):
                     base_info[c] = df_r[c].values[0]
 
     vertical_rows = []
     for i in range(1, 7):
         row_data = base_info.copy()
         row_data["枠番"] = i
+        
         for df_r in [df_c_row, df_s_row, df_o_row]:
             if df_r is not None:
                 for col in df_r.columns:
                     if col.startswith(f"艇{i}_"):
-                        row_data[col.replace(f"艇{i}_", "")] = df_r[col].values[0]
+                        clean_key = col.replace(f"艇{i}_", "")
+                        row_data[clean_key] = df_r[col].values[0]
+                    elif col.startswith(f"{i}_"):
+                        clean_key = col.replace(f"{i}_", "")
+                        row_data[clean_key] = df_r[col].values[0]
+                        
         vertical_rows.append(row_data)
 
     df_target = pd.DataFrame(vertical_rows)
