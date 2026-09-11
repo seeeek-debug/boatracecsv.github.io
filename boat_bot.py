@@ -31,7 +31,7 @@ def keep_alive():
 
 # --- Discordボット設定 ---
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/seeeek-debug/boatracecsv.github.io/main/"
-NOTIFICATION_CHANNEL_ID = 1546632999624511610  # ←必要に応じて変更
+NOTIFICATION_CHANNEL_ID = 1546632999624511610
 
 JST = timezone(timedelta(hours=9))
 
@@ -59,12 +59,16 @@ def fetch_github_csv(file_path):
     if file_path in CSV_CACHE:
         return CSV_CACHE[file_path]
     url = f"{GITHUB_RAW_BASE}{file_path}"
+    print(f"[DEBUG] Fetching CSV from: {url}")
     try:
         res = requests.get(url)
         if res.status_code == 200:
             df = pd.read_csv(io.StringIO(res.text))
+            print(f"[DEBUG] Success fetching {file_path}. Shape: {df.shape}, Columns: {list(df.columns)[:5]}...")
             CSV_CACHE[file_path] = df
             return df
+        else:
+            print(f"[DEBUG] Failed to fetch {file_path}. Status code: {res.status_code}")
     except Exception as e:
         print(f"CSV Fetch Error ({file_path}): {e}")
     return None
@@ -76,12 +80,14 @@ try:
     print(f"モデル '{MODEL_FILENAME}' の読み込みに成功しました。")
     if "rank_1" in models:
         print(f"--- モデルが要求する特徴量数: {len(models['rank_1'].feature_name())} ---")
+        print(f"--- 特徴量サンプル (先頭5個): {models['rank_1'].feature_name()[:5]} ---")
 except Exception as e:
     models = None
     print(f"モデルの読み込みに失敗しました: {e}")
 
 def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num):
     summary_text = f"🎯 **{venue}場 {r_num}R** のAIレース分析・展開予想 ({day_str})\n"
+    print(f"\n[ANALYSIS START] === {venue}場 {r_num}R (Date: {day_str}) ===")
 
     if models is None:
         return summary_text + " ⚠️ エラー: 予測モデルが読み込まれていません。"
@@ -92,6 +98,8 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         return summary_text + " ⚠️ エラー: モデル内に rank_1 が見つかりません。"
 
     day_part = day_str.split('-')[2] if '-' in day_str else day_str
+    
+    # 各種CSVの取得
     df_cards = fetch_github_csv(f"data/programs/race_cards/{year}/{month}/{day_part}.csv")
     df_sui = fetch_github_csv(f"data/previews/sui/{year}/{month}/{day_part}.csv")
     df_orig = fetch_github_csv(f"data/previews/original_exhibition/{year}/{month}/{day_part}.csv")
@@ -99,23 +107,27 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     if df_cards is None:
         return summary_text + " ⚠️ 注意: 出走表データが取得できませんでした。"
 
-    # 【高速化・正確化】横持ちCSVからレースコードで一発ピンポイント抽出
-    def extract_race_dataframe(df, venue_c, r_n):
-        if df is None or len(df) == 0: return None
+    # 【重要デバッグ】レースデータの抽出関数
+    def extract_race_dataframe(df, venue_c, r_n, name=""):
+        if df is None or len(df) == 0:
+            print(f"[DEBUG-{name}] DataFrame is None or Empty")
+            return None
         try:
-            # レース番号を確実に2桁にゼロ埋め (例: 4R -> "04")
             r_str = str(r_n).zfill(2)
             venue_str = str(venue_c).zfill(2)
             target_race_code = f"{year}{month}{day_part}{venue_str}{r_str}"
+            print(f"[DEBUG-{name}] Looking for target_race_code: {target_race_code}")
             
             if 'レースコード' in df.columns:
                 df_filtered = df[df['レースコード'].astype(str) == target_race_code]
+                print(f"[DEBUG-{name}] Matched by 'レースコード': {len(df_filtered)} rows found.")
                 if len(df_filtered) > 0:
                     return df_filtered
 
-            # フォールバック (レース場コード と レース回 / R 列での絞り込み)
+            # フォールバック検索
             venue_col = 'レース場コード' if 'レース場コード' in df.columns else ('レース場' if 'レース場' in df.columns else None)
             r_col = 'レース回' if 'レース回' in df.columns else ('R' if 'R' in df.columns else None)
+            print(f"[DEBUG-{name}] Fallback search columns -> venue_col: {venue_col}, r_col: {r_col}")
 
             if venue_col and r_col:
                 r_variants = [str(r_n), r_str, f"{r_n}R", f"{r_str}R"]
@@ -123,20 +135,23 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
                     (df[venue_col].astype(str).str.zfill(2) == venue_str) & 
                     (df[r_col].astype(str).isin(r_variants))
                 ]
+                print(f"[DEBUG-{name}] Matched by fallback: {len(df_filtered)} rows found.")
                 if len(df_filtered) > 0:
                     return df_filtered
+            else:
+                print(f"[DEBUG-{name}] Neither 'レースコード' nor fallback columns matched. Returning first row as test (or None).")
         except Exception as e:
-            print(f"抽出エラー: {e}")
+            print(f"[DEBUG-{name}]抽出エラー: {e}")
         return None
 
-    df_c_race = extract_race_dataframe(df_cards, venue_code, r_num)
-    df_sui_race = extract_race_dataframe(df_sui, venue_code, r_num)
-    df_orig_race = extract_race_dataframe(df_orig, venue_code, r_num)
+    df_c_race = extract_race_dataframe(df_cards, venue_code, r_num, "Cards")
+    df_sui_race = extract_race_dataframe(df_sui, venue_code, r_num, "Sui")
+    df_orig_race = extract_race_dataframe(df_orig, venue_code, r_num, "Orig")
 
     if df_c_race is None or len(df_c_race) == 0:
         return summary_text + " ⚠️ 注意: 対象レースのデータが見つかりません。"
 
-    # --- 横持ちデータのマージ処理 ---
+    # --- データのマージ ---
     combined_row = {}
     
     def merge_df_to_combined(df_r, prefix=""):
@@ -148,6 +163,8 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     merge_df_to_combined(df_c_race, "c_")
     merge_df_to_combined(df_sui_race, "s_")
     merge_df_to_combined(df_orig_race, "o_")
+
+    print(f"[DEBUG] combined_row generated. Total columns: {len(combined_row)}")
 
     df_input_row = pd.DataFrame([combined_row])
 
@@ -171,6 +188,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     # 4. モデルが要求する特徴量に完全一致させる
     X_input = df_input_row.reindex(columns=expected_features, fill_value=0.0)
+    print(f"[DEBUG] X_input shape: {X_input.shape}, Non-zero features count: (X_input != 0).sum().sum()")
 
     prob_matrix = {}
     for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"]):
@@ -184,19 +202,13 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         boat_num = i + 1
         name = f"艇{boat_num}"
         
-        # 横持ちデータの各艇の選手名を取得 (例: c_艇1_選手名、c_選手名 など)
+        # 選手名の取得
         for col in df_c_race.columns:
             if f"艇{boat_num}" in col and ("選手名" in col or "氏名" in col):
                 val = df_c_race[col].values[0]
                 if pd.notna(val):
                     name = str(val)
                 break
-        # もし上記で見つからなければ、単体の「選手名」列から位置で取得を試みる
-        if name == f"艇{boat_num}":
-            for col in df_c_race.columns:
-                if col == "選手名" or col == "c_選手名":
-                    # 横持ちCSVの構造によっては配列になっている場合もあるので安全に取得
-                    pass
 
         arr_1 = prob_matrix.get(1, np.zeros(6))
         arr_2 = prob_matrix.get(2, np.zeros(6))
@@ -340,26 +352,10 @@ class VenueSelectView(discord.ui.View):
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user.name}')
-
     try:
         bot.add_view(VenueSelectView())
     except Exception as e:
         print(f"Error adding view: {e}")
-
-    try:
-        channel_id = int(NOTIFICATION_CHANNEL_ID)
-        channel = bot.get_channel(channel_id)
-        if channel is None:
-            channel = await bot.fetch_channel(channel_id)
-
-        if channel:
-            await channel.send(
-                content="🤖 **【AIレース分析・展開メニュー】**\n👇 下のメニューからいつでも会場を選択して予測を実行できます！",
-                view=VenueSelectView()
-            )
-            print("初期メニューの自動送信に成功しました！")
-    except Exception as e:
-        print(f"自動送信エラー (無視して動作に影響はありません): {e}")
 
 @bot.command(name="setup")
 async def setup_menu(ctx):
