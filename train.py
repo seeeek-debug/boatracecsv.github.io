@@ -18,11 +18,8 @@ def load_csv_safely(path):
     return None
 
 def get_target_files(result_files):
-    """
-    2026年3月1日から現在までのデータを自動で取得・更新する
-    """
     start_date = datetime(2026, 3, 1)
-    current_date = datetime.now()  # 実行時の現在時刻を上限として自動反映
+    current_date = datetime.now()
     
     target_files = []
     for f in result_files:
@@ -52,7 +49,6 @@ def get_target_files(result_files):
             pass
             
     if not target_files:
-        print("パスからの日付抽出ができなかったため、すべてのファイルを採用します。")
         target_files = result_files
         
     print(f"2026年3月1日以降の対象ファイル数: {len(target_files)}件")
@@ -198,6 +194,11 @@ def train_model():
     for col in feature_cols:
         if col not in ["レース場", "風向", "天候"]:
             df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
+
+    # 文字列のまま残るレース場・風向・天候をLightGBM用のカテゴリ型に変換
+    for col in ["レース場", "風向", "天候"]:
+        if col in df_train.columns:
+            df_train[col] = df_train[col].astype('category')
 
     targets = ["res_1着_艇番", "res_2着_艇番", "res_3着_艇番"]
     for t in targets:
