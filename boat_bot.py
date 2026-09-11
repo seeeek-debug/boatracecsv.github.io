@@ -99,16 +99,31 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     if df_cards is None:
         return summary_text + " ⚠️ 注意: 出走表データが取得できませんでした。"
 
+    # 【高速化】CSVの「レースコード」や「レース場コード」「レース回」を使ってピンポイント抽出
     def extract_race_dataframe(df, venue_c, r_n):
-        if df is None: return None
-        matched_rows = []
-        for idx, row in df.iterrows():
-            # 【修正】安全にすべての要素を文字列に変換して結合
-            row_str = "".join([str(val) for val in row.values])
-            if str(venue_c) in row_str and str(r_n) in row_str:
-                matched_rows.append(row)
-        if matched_rows:
-            return pd.DataFrame(matched_rows)
+        if df is None or len(df) == 0: return None
+        try:
+            # 1. レースコード (例: 202609110201) を直接構築して検索
+            target_race_code = f"{year}{month}{day_part}{str(venue_c).zfill(2)}{str(r_n).zfill(2)}"
+            if 'レースコード' in df.columns:
+                df_filtered = df[df['レースコード'].astype(str) == target_race_code]
+                if len(df_filtered) > 0:
+                    return df_filtered
+
+            # 2. レース場コード と レース回 列での絞り込み
+            venue_col = 'レース場コード' if 'レース場コード' in df.columns else ('レース場' if 'レース場' in df.columns else None)
+            r_col = 'レース回' if 'レース回' in df.columns else ('R' if 'R' in df.columns else None)
+
+            if venue_col and r_col:
+                r_str_variants = [str(r_n), f"{r_n}R", f"0{r_n}R" if r_n < 10 else f"{r_n}R"]
+                df_filtered = df[
+                    (df[venue_col].astype(str).str.zfill(2) == str(venue_c).zfill(2)) & 
+                    (df[r_col].astype(str).isin(r_str_variants))
+                ]
+                if len(df_filtered) > 0:
+                    return df_filtered
+        except Exception as e:
+            print(f"抽出エラー: {e}")
         return None
 
     df_c_race = extract_race_dataframe(df_cards, venue_code, r_num)
