@@ -66,7 +66,7 @@ def train_model():
             player_col = col
             break
 
-    # --- ★ 1. 過去レースから「選手別のコース実績・平均ST」を自動集計 ---
+    # 過去レースから「選手別のコース実績・平均ST」を自動集計
     player_course_stats = None
     if player_col and "枠番" in df_train.columns:
         print("過去レースの積み重ねから選手別の実績を計算中...")
@@ -92,7 +92,7 @@ def train_model():
             })
             df_train = pd.merge(df_train, player_course_stats, on=[player_col, "枠番"], how="left")
 
-    # --- ★ 2. 「決まり手」の高度な特徴量化 ---
+    # 「決まり手」の高度な特徴量化
     kimarite_col = None
     for col in ["決まり手", "決まり手 (逃げ・まくり等)"]:
         if col in df_train.columns:
@@ -119,7 +119,6 @@ def train_model():
     if player_col:
         df_train[player_col] = df_train[player_col].astype('category')
 
-    # 特徴量リスト
     target_features = [
         "レース場",
         "風速(m)",
@@ -208,9 +207,6 @@ def train_model():
 
         models[f"rank_{i}"] = model
 
-    # ====================================================
-    # 🔥 【ここに追加】学習したモデルと集計データをまとめて保存する
-    # ====================================================
     saved_package = {
         "models": models,
         "player_course_stats": player_course_stats,
