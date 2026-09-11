@@ -105,7 +105,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     expected_features = models["rank_1"].feature_name()
     day_part = day_str.split("-")[2] if "-" in day_str else day_str
     
-    # 正しいリポジトリのパス構造に修正
     prog_path = f"data/programs/race_cards/{year}/{month}/{day_part}.csv"
     sui_path = f"data/previews/sui/{year}/{month}/{day_part}.csv"
     orig_path = f"data/previews/original_exhibition/{year}/{month}/{day_part}.csv"
@@ -116,21 +115,46 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     
     r_str = str(r_num).zfill(2)
     venue_s = str(venue_code).zfill(2)
-    target_code = str(int(f"{year}{month}{day_part}{venue_s}{r_str}"))
+    target_code = f"{year}{month}{day_part}{venue_s}{r_str}"
 
     def extract_target_row(df):
         if df is None or df.empty:
             return pd.Series()
+        
+        # 1. レースコード系カラムでの完全一致検索（小数点や型揺れを完全修復）
         for col in df.columns:
             if any(k in col.lower() for k in ["レースコード", "rcd", "code", "r_code", "id"]):
-                matched = df[df[col].astype(str).str.strip().str.lstrip("0") == target_code.lstrip("0")]
+                clean_series = df[col].astype(str).str.strip().str.split('.').str[0].str.lstrip("0")
+                target_clean = str(target_code).strip().split('.')[0].lstrip("0")
+                matched = df[clean_series == target_clean]
                 if not matched.empty:
                     return matched.iloc[0]
+
+        # 2. 会場コードとレース番号の個別カラムでの一致検索
+        venue_col = None
+        r_col = None
+        for col in df.columns:
+            col_l = col.lower()
+            if any(k in col_l for k in ["場", "venue", "jyo", "jcd"]):
+                venue_col = col
+            if any(k in col_l for k in ["r", "レース", "race_num", "round"]):
+                r_col = col
+                
+        if venue_col and r_col:
+            matched = df[
+                (df[venue_col].astype(str).str.strip().str.zfill(2) == str(venue_code).zfill(2)) & 
+                (df[r_col].astype(str).str.strip().str.zfill(2) == str(r_num).zfill(2))
+            ]
+            if not matched.empty:
+                return matched.iloc[0]
+
+        # 3. 文字列の部分一致検索
         for col in df.columns:
             if any(k in col.lower() for k in ["レース", "rcd", "code"]):
                 matched = df[df[col].astype(str).str.contains(venue_s) & df[col].astype(str).str.contains(r_str)]
                 if not matched.empty:
                     return matched.iloc[0]
+                    
         return df.iloc[0] if len(df) > 0 else pd.Series()
 
     prog_row = extract_target_row(df_cards)
