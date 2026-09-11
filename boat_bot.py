@@ -77,6 +77,7 @@ try:
     if "rank_1" in models:
         expected_features = models["rank_1"].feature_name()
         print(f"--- モデル特徴量数: {len(expected_features)} ---")
+        print(f"--- 特徴量の例 (最初の5個): {expected_features[:5]} ---")
 except Exception as e:
     models = None
     print(f"モデルの読み込みに失敗しました: {e}")
@@ -150,6 +151,10 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
             df_input_row[col] = pd.to_numeric(df_input_row[col], errors='coerce')
 
     X_input = df_input_row.reindex(columns=expected_features, fill_value=0.0)
+
+    # --- 【デバッグ用】モデルに渡すデータが空になっていないかチェック ---
+    non_zero_count = (X_input != 0).sum().sum()
+    print(f"--- [DEBUG] {venue} {r_num}R --- 有効な特徴量数: {non_zero_count} / {len(expected_features)}")
 
     # 推論実行
     prob_matrix = {}
@@ -287,7 +292,7 @@ class VenueSelect(discord.ui.Select):
             min_values=1, 
             max_values=1, 
             options=options,
-            custom_id="persistent_venue_select"  # ← ここに固有のIDを設定！
+            custom_id="persistent_venue_select"
         )
 
     async def callback(self, interaction: discord.Interaction):
