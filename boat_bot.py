@@ -98,26 +98,30 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     if df_cards is None:
         return summary_text + "⚠️ 注意: 出走表データが取得できませんでした。"
 
-    target_race_code = f"{year}{month}{day_part}{venue_code}{str(r_num).zfill(2)}"
+    # --- 会場コードとレース番号で確実にデータを絞り込む ---
+    df_c_row = None
+    df_sui_row = None
+    df_orig_row = None
 
-    def get_matched_row(df, code):
+    # 各CSVから該当するレース場とレース番号の行を抽出する関数
+    def filter_race_data(df, venue_c, r_n):
         if df is None: return None
+        # 会場コードとレース番号の列を探してフィルタリング
         for col in df.columns:
-            matched = df[df[col].astype(str).str.strip() == str(code)]
+            # 列の値の中に venue_code と r_n が両方含まれる行を探す
+            matched = df[df[col].astype(str).str.contains(str(venue_c)) & df[col].astype(str).str.contains(str(r_n))]
             if len(matched) > 0:
                 return matched.iloc[0:1].copy()
         return None
 
-    df_c_row = get_matched_row(df_cards, target_race_code)
-    if df_c_row is None or len(df_c_row) == 0:
-        col_r_num = next((col for col in df_cards.columns if "レース" in col or "race" in col), None)
-        if col_r_num:
-            matched = df_cards[df_cards[col_r_num].astype(str).str.contains(str(r_num))]
-            if not matched.empty:
-                df_c_row = matched.iloc[0:1].copy()
+    # 各データからピンポイントで抽出
+    df_c_row = filter_race_data(df_cards, venue_code, r_num)
+    df_sui_row = filter_race_data(df_sui, venue_code, r_num)
+    df_orig_row = filter_race_data(df_orig, venue_code, r_num)
 
     if df_c_row is None or len(df_c_row) == 0:
         return summary_text + "⚠️ 注意: 対象レースのデータが見つかりませんでした。"
+
 
     df_s_row = get_matched_row(df_sui, target_race_code)
     df_o_row = get_matched_row(df_orig, target_race_code)
