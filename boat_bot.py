@@ -282,10 +282,15 @@ class RaceSelectView(discord.ui.View):
 class VenueSelect(discord.ui.Select):
     def __init__(self):
         options = [discord.SelectOption(label=v, description=f"{v} のレースを選択") for v in VENUES]
-        super().__init__(placeholder="🏟️ 会場を選択してください...", min_values=1, max_values=1, options=options)
+        super().__init__(
+            placeholder="🏟️ 会場を選択してください...", 
+            min_values=1, 
+            max_values=1, 
+            options=options,
+            custom_id="persistent_venue_select"  # ← ここに固有のIDを設定！
+        )
 
     async def callback(self, interaction: discord.Interaction):
-        # 会場選択時も即座に defer する
         await interaction.response.defer(ephemeral=True)
         
         venue = self.values[0]
