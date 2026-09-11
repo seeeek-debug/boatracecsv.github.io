@@ -132,7 +132,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
                     return matched.iloc[0].to_dict()
         return None
 
-    # 学習時と同じ横持ち仕様でデータを結合
     card_row = get_matched_row(df_cards, target_race_code)
     if not card_row:
         return summary_text + f" ⚠️ エラー: レースコード '{target_race_code}' が出走表に見つかりませんでした。"
@@ -147,7 +146,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     df_pred = pd.DataFrame([combined_row])
 
-    # 学習時と同じ選手ごとの得意決まり手特徴量を付与
     if player_fav_kimarite:
         for i in range(1, 7):
             p_col_candidates = [f"艇{i}_選手名", f"{i}号艇_選手名", f"選手名_{i}", f"選手{i}_名前"]
@@ -170,7 +168,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         if col in df_pred.columns:
             df_pred[col] = df_pred[col].astype('category')
 
-    # モデルが必要とする特徴量列に揃える
     X_input = df_pred.reindex(columns=expected_features, fill_value=0.0)
     for col in expected_features:
         if col in ["レース場", "風向", "天候"] and col in X_input.columns:
@@ -189,12 +186,26 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     
     for i in range(6):
         boat_num = i + 1
-        p_name_candidates = [f"艇{boat_num}_選手名", f"{boat_num}号艇_選手名", f"選手名_{boat_num}"]
+        
+        # 選手名の取得候補
+        p_name_candidates = [f"艇{boat_num}_選手名", f"{boat_num}号艇_選手名", f"選手名_{boat_num}", f"選手{boat_num}_名前", f"選手名{boat_num}"]
         name = f"選手{boat_num}"
         for c in p_name_candidates:
             if c in df_pred.columns and pd.notna(df_pred.iloc[0].get(c)):
-                name = str(df_pred.iloc[0].get(c)).strip()
-                break
+                val = str(df_pred.iloc[0].get(c)).strip()
+                if val:
+                    name = val
+                    break
+
+        # 級別の取得候補 (A1, A2, B1, B2など)
+        p_class_candidates = [f"艇{boat_num}_級別", f"{boat_num}号艇_級別", f"級別_{boat_num}", f"選手{boat_num}_級別", f"艇{boat_num}_級", f"級_{boat_num}"]
+        p_class = ""
+        for c in p_class_candidates:
+            if c in df_pred.columns and pd.notna(df_pred.iloc[0].get(c)):
+                val = str(df_pred.iloc[0].get(c)).strip()
+                if val:
+                    p_class = val
+                    break
         
         arr_1 = prob_matrix.get(1, np.zeros(6))
         arr_2 = prob_matrix.get(2, np.zeros(6))
@@ -204,8 +215,10 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         p2 = float(arr_2[i]) * 100 if len(arr_2) > i else 0.0
         p3 = float(arr_3[i]) * 100 if len(arr_3) > i else 0.0
         
-        boat_data.append({"boat": boat_num, "name": name, "p1": p1, "p2": p2, "p3": p3})
-        summary_text += f"• **{boat_num}号艇** {name} -> 1着: **{p1:.1f}%** | 2着: **{p2:.1f}%**\n"
+        boat_data.append({"boat": boat_num, "name": name, "class": p_class, "p1": p1, "p2": p2, "p3": p3})
+        
+        class_str = f" ({p_class})" if p_class else ""
+        summary_text += f"• **{boat_num}号艇** {name}{class_str} -> 1着: **{p1:.1f}%** | 2着: **{p2:.1f}%**\n"
 
     if not boat_data:
         return summary_text + " ⚠️ エラー: 艇データが取得できませんでした。"
@@ -245,9 +258,12 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         for rank, (combo, score) in enumerate(trifecta_scores[:5], 1):
             summary_text += f"{rank}. **{combo[0]} - {combo[1]} - {combo[2]}** (スコア: {score:.4f})\n"
 
+    top_1_class_str = f" ({top_1st['class']})" if top_1st['class'] else ""
+    top_2_class_str = f" ({top_2nd['class']})" if top_2nd['class'] else ""
+
     summary_text += f"\n--- 【レース展開の考察】 ---\n"
-    summary_text += f"• 軸推奨: **{top_1st['boat']}号艇 {top_1st['name']}** (1着トップ: {top_1st['p1']:.1f}%)\n"
-    summary_text += f"• 相手候補: **{top_2nd['boat']}号艇 {top_2nd['name']}** (2番手力: {top_2nd['p2']:.1f}%)\n"
+    summary_text += f"• 軸推奨: **{top_1st['boat']}号艇 {top_1st['name']}{top_1_class_str}** (1着トップ: {top_1st['p1']:.1f}%)\n"
+    summary_text += f"• 相手候補: **{top_2nd['boat']}号艇 {top_2nd['name']}{top_2_class_str}** (2番手力: {top_2nd['p2']:.1f}%)\n"
 
     return summary_text
 
@@ -335,4 +351,3 @@ if __name__ == "__main__":
     keep_alive()
     token = os.environ.get("DISCORD_TOKEN")
     bot.run(token)
-
