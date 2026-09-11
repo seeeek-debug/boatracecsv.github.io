@@ -30,7 +30,7 @@ def keep_alive():
 
 # --- Discordボット設定 ---
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/seeeek-debug/boatracecsv.github.io/main/"
-NOTIFICATION_CHANNEL_ID = 1546632999624511610  # ←ここを正しいIDに変更！
+NOTIFICATION_CHANNEL_ID = 1546632999624511610  # ←必要に応じて変更
 
 JST = timezone(timedelta(hours=9))
 
@@ -42,12 +42,10 @@ VENUES = [
 ]
 
 VENUE_MAPPING = {
-    "桐生": "01", "戸田": "02", "江戸川": "03", "平和島": "04",
-    "多摩川": "05", "浜名湖": "06", "蒲郡": "07", "常滑": "08",
-    "津": "09", "三国": "10", "びわこ": "11", "住之江": "12",
-    "尼崎": "13", "鳴門": "14", "丸亀": "15", "児島": "16",
-    "宮島": "17", "徳山": "18", "下関": "19", "若松": "20",
-    "芦屋": "21", "福岡": "22", "唐津": "23", "大村": "24"
+    "桐生": "01", "戸田": "02", "江戸川": "03", "平和島": "04", "多摩川": "05", "浜名湖": "06",
+    "蒲郡": "07", "常滑": "08", "津": "09", "三国": "10", "びわこ": "11", "住之江": "12",
+    "尼崎": "13", "鳴門": "14", "丸亀": "15", "児島": "16", "宮島": "17", "徳山": "18",
+    "下関": "19", "若松": "20", "芦屋": "21", "福岡": "22", "唐津": "23", "大村": "24"
 }
 
 intents = discord.Intents.default()
@@ -79,126 +77,6 @@ except Exception as e:
     models = None
     print(f"モデルの読み込みに失敗しました: {e}")
 
-def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num):
-    try:
-        summary_text = f"🎯 **{venue}場 {r_num}R** のAIレース分析・展開予想..."
-    
-    if models is None:
-        return summary_text
-
-    if "rank_1" in models:
-        expected_features = models["rank_1"].feature_name()
-
-    day_part = day_str.split('-')[2] if '-' in day_str else day_str
-    df_cards = fetch_github_csv(f"data/programs/race_cards/{year}/{month}/{day_part}.csv")
-    df_sui = fetch_github_csv(f"data/previews/sui/{year}/{month}/{day_part}.csv")
-    df_orig = fetch_github_csv(f"data/previews/original_exhibition/{year}/{month}/{day_part}.csv")
-
-    if df_cards is None:
-        return summary_text + "⚠️ 注意: 出走表データが取得できませんでした。"
-
-    # --- 会場コードとレース番号で確実にデータを絞り込む ---
-    df_c_row = None
-    df_sui_row = None
-    df_orig_row = None
-
-    # 各CSVから該当するレース場とレース番号の行を抽出する関数
-    def filter_race_data(df, venue_c, r_n):
-        if df is None: return None
-        # 会場コードとレース番号の列を探してフィルタリング
-        for col in df.columns:
-            # 列の値の中に venue_code と r_n が両方含まれる行を探す
-            matched = df[df[col].astype(str).str.contains(str(venue_c)) & df[col].astype(str).str.contains(str(r_n))]
-            if len(matched) > 0:
-                return matched.iloc[0:1].copy()
-        return None
-
-    # 各データからピンポイントで抽出
-    df_c_row = filter_race_data(df_cards, venue_code, r_num)
-    df_sui_row = filter_race_data(df_sui, venue_code, r_num)
-    df_orig_row = filter_race_data(df_orig, venue_code, r_num)
-
-    if df_c_row is None or len(df_c_row) == 0:
-        return summary_text + "⚠️ 注意: 対象レースのデータが見つかりませんでした。"
-
-
-    df_s_row = get_matched_row(df_sui, target_race_code)
-    df_o_row = get_matched_row(df_orig, target_race_code)
-
-    base_info = {}
-    for col in df_c_row.columns:
-        if not col.startswith("艇"):
-            base_info[col] = df_c_row[col].values[0]
-
-    for df_r in [df_s_row, df_o_row]:
-        if df_r is not None:
-            for c in df_r.columns:
-                if not c.startswith("艇"):
-                    base_info[c] = df_r[c].values[0]
-
-    vertical_rows = []
-    for i in range(1, 7):
-        row_data = base_info.copy()
-        row_data["枠番"] = i
-        for df_r in [df_c_row, df_s_row, df_o_row]:
-            if df_r is not None:
-                for col in df_r.columns:
-                    if col.startswith(f"艇{i}_"):
-                        row_data[col.replace(f"艇{i}_", "")] = df_r[col].values[0]
-        vertical_rows.append(row_data)
-
-    df_target = pd.DataFrame(vertical_rows)
-
-    if "級別" in df_target.columns:
-        rank_map = {'A1': 4, 'A2': 3, 'B1': 2, 'B2': 1}
-        df_target["級別"] = df_target["級別"].map(rank_map)
-
-    player_col = next((col for col in ["選手コード", "登録番号"] if col in df_target.columns), None)
-    if player_col:
-        df_target[player_col] = df_target[player_col].astype('category').cat.codes
-
-    for col in df_target.columns:
-        if col not in [player_col, "選手名", "支部", "出身地"]:
-            df_target[col] = pd.to_numeric(df_target[col], errors='coerce')
-
-    print("--- 実際に作られたデータの列名 ---")
-    print(df_target.columns.tolist())
-    
-    X_input = df_target.reindex(columns=expected_features, fill_value=0.0)
-
-    prob_matrix = {}
-    for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"], 1):
-        if rank_name in models:
-            model = models[rank_name]
-            preds_per_boat = []
-            for idx, row in X_input.iterrows():
-                p = model.predict(row.values.reshape(1, -1))[0]
-                preds_per_boat.append(p)
-            prob_matrix[rank_idx] = np.array(preds_per_boat)
-
-    boat_data = []
-    for i in range(6):
-        boat_num = i + 1
-        name = df_target.loc[i, "選手名"] if "選手名" in df_target.columns else "不明"
-        p1 = prob_matrix.get(1, np.zeros((6, 6)))[i][i] * 100 if 1 in prob_matrix else 0.0
-        p2 = prob_matrix.get(2, np.zeros((6, 6)))[i][i] * 100 if 2 in prob_matrix else 0.0
-        p3 = prob_matrix.get(3, np.zeros((6, 6)))[i][i] * 100 if 3 in prob_matrix else 0.0
-        
-        boat_data.append({"boat": boat_num, "name": name, "p1": p1, "p2": p2, "p3": p3})
-
-    top_1st = max(boat_data, key=lambda x: x['p1']) if boat_data else {"boat": 1, "p1": 0}
-    top_2nd = max(boat_data, key=lambda x: x['p2']) if boat_data else {"boat": 2, "p2": 0}
-
-    # === 展開予測の判定（1号艇からアウト勢まで・展開を作る攻めを網羅） ===
-    
-def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num):
-    try:
-        summary_text = f"🎯 **{venue}場 {r_num}R** のAIレース分析・展開予想 ({year}-{month}-{day_str})\n"
-
-        if models is None:
-            return summary_text + " ⚠️ エラー: 予測モデルが読み込まれていません。"
-
-        if "rank_1" in models:
 def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num):
     summary_text = f"🎯 **{venue}場 {r_num}R** のAIレース分析・展開予想 ({year}-{month}-{day_str})\n"
 
@@ -358,16 +236,14 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     return summary_text
 
-
 # --- 競走セレクトメニューの定義 ---
 class RaceSelect(discord.ui.Select):
     def __init__(self, venue):
         self.venue = venue
-        options = [discord.SelectOption(label="🌟 全レース一括表示 (1R～12R)", value="all")]
+        options = [discord.SelectOption(label="⭐ 全レース一括予想 (1R～12R)", value="all")]
         for i in range(1, 13):
-            options.append(discord.SelectOption(label=f"{i}レース ({i}R)", value=str(i)))
-
-        super().__init__(placeholder="🎯 分析するレースを選択してください...", min_values=1, max_values=1, options=options)
+            options.append(discord.SelectOption(label=f"🎯 {i}レース ({i}R)", value=str(i)))
+        super().__init__(placeholder="👇 分析するレースを選択してください...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -382,11 +258,11 @@ class RaceSelect(discord.ui.Select):
             day_str = target_date.strftime("%Y-%m-%d")
 
             if val == "all":
-                all_summaries = [f"📢 **{venue}場** 全12レースAI予測・展開予想一覧\n"]
+                all_summaries = [f"📊 **{venue}場** 全12レースAI予測・展開予想一覧\n"]
                 for r_num in range(1, 13):
                     res_text = calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num)
                     all_summaries.append(res_text + "\n" + "="*30 + "\n")
-                
+
                 result_text = "\n".join(all_summaries)
             else:
                 r_num = int(val)
@@ -428,35 +304,39 @@ class VenueSelectView(discord.ui.View):
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user.name}")
-    
+    print(f'Logged in as {bot.user.name}')
+
     try:
         bot.add_view(VenueSelectView())
     except Exception as e:
         print(f"Error adding view: {e}")
-    
+
     # 起動時に自動で指定チャンネルへメニューを送信・常設する処理
     try:
         channel_id = int(NOTIFICATION_CHANNEL_ID)
         channel = bot.get_channel(channel_id)
         if channel is None:
             channel = await bot.fetch_channel(channel_id)
-            
+
         if channel:
             await channel.send(
-                "🤖 **【AIレース分析・展開メニュー】**\n👇下のメニューからいつでも会場を選択して予測を実行できます！", 
+                content="🤖 **【AIレース分析・展開メニュー】**\n👇 下のメニューからいつでも会場を選択して予測を実行できます！",
                 view=VenueSelectView()
             )
             print("初期メニューの自動送信に成功しました！")
     except Exception as e:
-        print(f"自動送信エラー（無視しても動作に影響はありません）: {e}")
+        print(f"自動送信エラー (無視して動作に影響はありません): {e}")
 
 @bot.command(name="setup")
 async def setup_menu(ctx):
     await ctx.message.delete()
-    await ctx.send("🤖 **【AIレース分析・展開メニュー】**\n👇下のメニューからいつでも会場を選択して予測を実行できます！", view=VenueSelectView())
+    await ctx.send(
+        content="🤖 **【AIレース分析・展開メニュー】**\n👇 下のメニューからいつでも会場を選択して予測を実行できます！",
+        view=VenueSelectView()
+    )
 
 if __name__ == "__main__":
     keep_alive()
     token = os.environ.get("DISCORD_TOKEN")
     bot.run(token)
+
