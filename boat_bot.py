@@ -176,12 +176,9 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
             model = models[rank_name]
             preds_per_boat = []
             for idx, row in X_input.iterrows():
-                pred_val = model.predict(row.values.reshape(1, -1))[0]
-                # 配列やスカラーに関わらず確実にfloatのスカラー値にする
-                if hasattr(pred_val, "item"):
-                    p = float(pred_val.item())
-                else:
-                    p = float(pred_val)
+                pred_val = model.predict(row.values.reshape(1, -1))
+                flat_val = np.ravel(pred_val)
+                p = float(flat_val[0]) if len(flat_val) > 0 else 0.0
                 preds_per_boat.append(p)
             prob_matrix[rank_idx] = np.array(preds_per_boat)
 
