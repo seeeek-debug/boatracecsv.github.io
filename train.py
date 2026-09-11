@@ -5,7 +5,7 @@ import numpy as np
 import lightgbm as lgb
 from sklearn.model_selection import train_test_split
 import joblib
-from datetime import datetime, timedelta
+from datetime import datetime
 
 def load_csv_safely(path):
     if os.path.exists(path):
@@ -19,16 +19,14 @@ def load_csv_safely(path):
 
 def get_target_files(result_files):
     """
-    現在（2026年9月12日）から見て「過去半年間」のファイルだけを抽出する
+    2026年3月1日から現在までのデータを自動で取得・更新する
     """
-    current_date = datetime(2026, 9, 12)
-    six_months_ago = current_date - timedelta(days=180)
+    start_date = datetime(2026, 3, 1)
+    current_date = datetime.now()  # 実行時の現在時刻を上限として自動反映
     
     target_files = []
     for f in result_files:
-        # ファイルパスやファイル名から日付（YYYY, MM, DD）を推測して判定
         try:
-            # パスの中に含まれる4桁の年、2桁の月をチェック
             parts = f.replace("\\", "/").split("/")
             file_year, file_month, file_day = None, None, None
             
@@ -41,25 +39,23 @@ def get_target_files(result_files):
                     elif file_month and not file_day:
                         file_day = int(part)
             
-            # ファイル名自体が日付けの場合（例: 05.csv など）
             filename = os.path.splitext(os.path.basename(f))[0]
             if len(filename) == 2 and filename.isdigit() and file_year and file_month:
                 file_day = int(filename)
 
             if file_year and file_month:
                 file_date = datetime(file_year, file_month, file_day if file_day else 1)
-                if six_months_ago <= file_date <= current_date:
+                if start_date <= file_date <= current_date:
                     target_files.append(f)
                     continue
         except Exception:
             pass
             
-    # もしパスからうまく抽出できなかった場合は、直近のファイル群を安全のためフォールバックとして採用
     if not target_files:
-        print("パスからの日付抽出ができなかったため、直近のファイルを採用します。")
-        target_files = sorted(result_files)[-180:]
+        print("パスからの日付抽出ができなかったため、すべてのファイルを採用します。")
+        target_files = result_files
         
-    print(f"過去半年分の対象ファイル数: {len(target_files)}件")
+    print(f"2026年3月1日以降の対象ファイル数: {len(target_files)}件")
     return target_files
 
 def build_player_kimarite_stats():
@@ -68,7 +64,6 @@ def build_player_kimarite_stats():
     if not result_files:
         result_files = glob.glob("data/**/*.csv", recursive=True)
 
-    # 決まり手集計も過去半年のデータに合わせる
     target_files = get_target_files(result_files)
 
     dfs = []
@@ -101,7 +96,7 @@ def build_player_kimarite_stats():
     return player_stats
 
 def load_and_merge_training_data():
-    print("過去半年の横持ちファイルの読み込みと結合を開始します...")
+    print("横持ちファイルの読み込みと結合を開始します...")
     
     result_files = glob.glob("data/results/**/*.csv", recursive=True)
     if not result_files:
