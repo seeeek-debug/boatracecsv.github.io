@@ -1,158 +1,137 @@
+import os
+import glob
 import pandas as pd
-import joblib
 import numpy as np
-import itertools
+import lightgbm as lgb
+import joblib
 
-def predict_race():
-    model_filename = "boatrace_lgb_model.pkl"
-    try:
-        models = joblib.load(model_filename)
-        print(f"モデル '{model_filename}' の読み込みに成功しました。")
-    except Exception as e:
-        print(f"モデルの読み込みに失敗しました: {e}")
-        return
+def load_prediction_data():
+    print("推論用データの読み込みを開始します...")
+    result_files = glob.glob("data/results/**/*.csv", recursive=True)
+    if not result_files:
+        result_files = glob.glob("data/**/*.csv", recursive=True)
 
-    if "rank_1" in models:
-        expected_features = models["rank_1"].feature_name()
-    else:
-        print("エラー: モデル内に rank_1 が見つかりません。")
-        return
-
-    target_race_code = "202609092010"
-    
-    year = target_race_code[:4]
-    month = target_race_code[4:6]
-    day = target_race_code[6:8]
-
-    race_card_path = f"data/programs/race_cards/{year}/{month}/{day}.csv"
-    sui_path = f"data/previews/sui/{year}/{month}/{day}.csv"
-    orig_path = f"data/previews/original_exhibition/{year}/{month}/{day}.csv"
-
-    def load_csv_safe(path):
-        try:
-            df = pd.read_csv(path, dtype=str)
-            df.columns = df.columns.str.strip()
-            return df
-        except Exception:
-            return None
-
-    df_cards = load_csv_safe(race_card_path)
-    df_sui = load_csv_safe(sui_path)
-    df_orig = load_csv_safe(orig_path)
-
-    if df_cards is None:
-        print("エラー: 出走表データが取得できませんでした。")
-        return
-
-    def get_matched_row(df, code):
-        if df is None: return None
-        for col in df.columns:
-            matched = df[df[col].str.strip() == str(code)]
-            if len(matched) > 0:
-                return matched.iloc[0:1].copy()
+    if not result_files:
+        print("エラー: 推論用データファイルが見つかりません。")
         return None
 
-    df_c_row = get_matched_row(df_cards, target_race_code)
-    if df_c_row is None or len(df_c_row) == 0:
-        print(f"エラー: レースコード '{target_race_code}' が出走表に見つかりませんでした。")
+    # 最新のファイル、または直近の対象ファイルを選択
+    target_file = sorted(result_files)[-1]
+    print(f"対象ファイル: {target_file}")
+
+    try:
+        df = pd.read_csv(target_file)
+        df.columns = df.columns.str.strip()
+        return df
+    except Exception as e:
+        print(f"ファイル読み込みエラー ({target_file}): {e}")
+        return None
+
+def predict_races():
+    model_path = "boatrace_lgb_model.pkl"
+    if not os.path.exists(model_path):
+        print(f"エラー: モデルファイル '{model_path}' が見つかりません。先に学習スクリプトを実行してください。")
         return
 
-    df_s_row = get_matched_row(df_sui, target_race_code)
-    df_o_row = get_matched_row(df_orig, target_race_code)
+    print("学習済みモデルと集計データをロードしています...")
+    package = joblib.load(model_path)
+    models = package["models"]
+    venue_wind_kimarite = package["venue_wind_kimarite"]
 
-    base_info = {}
-    for col in df_c_row.columns:
-        if not col.startswith("艇"):
-            base_info[col] = df_c_row[col].values[0]
+    df = load_prediction_data()
+    if df is None or len(df) == 0:
+        print("有効な推論データがありません。")
+        return
 
-    for df_r in [df_s_row, df_o_row]:
-        if df_r is not None:
-            for c in df_r.columns:
-                if not c.startswith("艇"):
-                    base_info[c] = df_r[c].values[0]
+    # 学習時と同じ決まり手のエンコード・集計ロジック
+    kimarite_col = None
+    for col in ["決まり手", "決まり手 (逃げ・まくり等)"]:
+        if col in df.columns:
+            kimarite_col = col
+            break
 
-    vertical_rows = []
-    for i in range(1, 7):
-        row_data = base_info.copy()
-        row_data["枠番"] = i
-        for df_r in [df_c_row, df_s_row, df_o_row]:
-            if df_r is not None:
-                for col in df_r.columns:
-                    if col.startswith(f"艇{i}_"):
-                        row_data[col.replace(f"艇{i}_", "")] = df_r[col].values[0]
-        vertical_rows.append(row_data)
+    if kimarite_col and kimarite_col in df.columns:
+        df["決まり手_コード"] = df[kimarite_col].astype('category')
+    else:
+        df["決まり手_コード"] = pd.Categorical([np.nan] * len(df))
 
-    df_target = pd.DataFrame(vertical_rows)
+    if venue_wind_kimarite is not None and "レース場" in df.columns and "風向" in df.columns:
+        df = pd.merge(df, venue_wind_kimarite, on=["レース場", "風向"], how="left")
+    else:
+        df["場_風別_決まり手確率"] = np.nan
 
-    if "級別" in df_target.columns:
-        rank_map = {'A1': 4, 'A2': 3, 'B1': 2, 'B2': 1}
-        df_target["級別"] = df_target["級別"].map(rank_map)
+    # 学習時と完全に一致させた特徴量リスト
+    target_features = [
+        "レース場",
+        "風速(m)",
+        "波の高さ(cm)",
+        "水温(℃)",
+        "気温(℃)",
+        "風向",
+        "天候",
+        "1コース_スタートタイミング",
+        "2コース_スタートタイミング",
+        "3コース_スタートタイミング",
+        "4コース_スタートタイミング",
+        "5コース_スタートタイミング",
+        "6コース_スタートタイミング",
+        "場_風別_決まり手確率",
+        "決まり手_コード"
+    ]
 
-    player_col = next((col for col in ["選手コード", "登録番号"] if col in df_target.columns), None)
-    if player_col:
-        df_target[player_col] = df_target[player_col].astype('category').cat.codes
+    features = [col for col in target_features if col in df.columns]
+    print(f"使用する特徴量: {features}")
 
-    for col in df_target.columns:
-        if col not in [player_col, "選手名", "支部", "出身地"]:
-            df_target[col] = pd.to_numeric(df_target[col], errors='coerce')
+    # 数値変換
+    for col in features:
+        if col not in ["決まり手_コード", "レース場", "風向", "天候"]:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    X_input = df_target.reindex(columns=expected_features, fill_value=0.0)
+    # 特徴量の欠損値補完（学習時と同様の安全性確保）
+    for col in features:
+        if col not in ["決まり手_コード", "レース場", "風向", "天候"] and pd.api.types.is_numeric_dtype(df[col]):
+            df[col] = df[col].fillna(0)
 
-    # 各着順の確率マトリクスを格納 (index: 艇番1〜6, value: 確率配列)
-    prob_matrix = {}
-    for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"], 1):
-        if rank_name in models:
-            model = models[rank_name]
-            # 各艇ごとの予測確率を取得
-            preds_per_boat = []
-            for idx, row in X_input.iterrows():
-                p = model.predict(row.values.reshape(1, -1))[0]
-                preds_per_boat.append(p)
-            prob_matrix[rank_idx] = np.array(preds_per_boat)
+    X = df[features]
 
-    # 各艇ごとの1〜3着率を整理して表示
-    print(f"\n--- 【各艇の着順確率一覧】 ---")
-    boat_data = []
-    for i in range(6):
-        boat_num = i + 1
-        name = df_target.loc[i, "選手名"] if "選手名" in df_target.columns else "不明"
-        p1 = prob_matrix.get(1, np.zeros((6, 6)))[i][i] * 100 if 1 in prob_matrix else 0.0
-        p2 = prob_matrix.get(2, np.zeros((6, 6)))[i][i] * 100 if 2 in prob_matrix else 0.0
-        p3 = prob_matrix.get(3, np.zeros((6, 6)))[i][i] * 100 if 3 in prob_matrix else 0.0
-        
-        # モデルの出力構造（各艇に対する確率分布）に合わせた取得
-        # ※もし model.predict が「その艇が各着順になる確率」を返す場合はインデックスを調整
-        boat_data.append({"boat": boat_num, "name": name, "p1": p1, "p2": p2, "p3": p3})
-        print(gh := f"  {boat_num}号艇 ({name}) -> 1着率: {p1:.1f}% | 2着率: {p2:.1f}% | 3着率: {p3:.1f}%")
+    print("1着〜3着の予測を実行中...")
+    for i in range(1, 4):
+        rank_key = f"rank_{i}"
+        if rank_key in models:
+            model = models[rank_key]
+            # 多クラス分類の確率を出力 (shape: [n_samples, 6])
+            probs = model.predict(X)
+            # 最も確率の高い艇番（0〜5 なので +1 して 1〜6艇番に変換）
+            pred_tban = np.argmax(probs, axis=1) + 1
+            df[f"予測_{i}着"] = pred_tban
+            df[f"予測_{i}着_確率"] = np.max(probs, axis=1)
 
-    # 3連単の買い目計算（1着・2着・3着の確率を掛け合わせてスコア化）
-    print(f"\n--- 【3連単 予想買い目（上位5点）】 ---")
-    trifecta_scores = []
+    # 出力列の整理
+    race_id_col = "レースコード" if "レースコード" in df.columns else (df.columns[0] if len(df.columns) > 0 else None)
     
-    # 簡易的に各モデルの確率表から上位の組み合わせを算出
-    # (実際のマトリクスの形状に合わせてスコアリング)
-    if 1 in prob_matrix and 2 in prob_matrix and 3 in prob_matrix:
-        m1 = prob_matrix[1]
-        m2 = prob_matrix[2]
-        m3 = prob_matrix[3]
-        
-        for c1, c2, c3 in itertools.permutations(range(6), 3):
-            # c1: 1着の艇index, c2: 2着の艇index, c3: 3着の艇index
-            score = m1[c1][c1] * m2[c2][c2] * m3[c3][c3]
-            trifecta_scores.append(((c1+1, c2+1, c3+1), score))
-            
-        trifecta_scores.sort(key=lambda x: x[1], reverse=True)
-        
-        for rank, (combo, score) in enumerate(trifecta_scores[:5], 1):
-            print(f"  {rank}点目: {combo[0]} - {combo[1]} - {combo[2]} (期待度スコア: {score:.4f})")
+    output_cols = []
+    if race_id_col:
+        output_cols.append(race_id_col)
+    if "レース場" in df.columns:
+        output_cols.append("レース場")
+    if "レース回" in df.columns:
+        output_cols.append("レース回")
 
-    # レース展開の予想
-    print(f"\n--- 【レース展開の考察】 ---")
-    top_1st = max(boat_data, key=lambda x: x['p1'])
-    top_2nd = max(boat_data, key=lambda x: x['p2'])
-    print(f"  - イン優勢度および総合力から、{top_1st['boat']}号艇({top_1st['name']})軸のレース展開が濃厚。")
-    print(f"  - 2着争いには機力と着率の良い {top_2nd['boat']}号艇({top_2nd['name']})が絡んでくる展開を推奨。")
+    output_cols.extend([
+        "予測_1着", "予測_1着_確率", 
+        "予測_2着", "予測_2着_確率", 
+        "予測_3着", "予測_3着_確率"
+    ])
+    
+    existing_output_cols = [c for c in output_cols if c in df.columns]
+
+    print("\n=== 予測結果サンプル ===")
+    print(df[existing_output_cols].head(10))
+
+    output_filename = "boatrace_prediction_results.csv"
+    df[existing_output_cols].to_csv(output_filename, index=False, encoding="utf-8-sig")
+    print(f"\nすべての予測結果を '{output_filename}' に保存しました。")
 
 if __name__ == "__main__":
-    predict_race()
+    predict_races()
 
