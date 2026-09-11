@@ -154,9 +154,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         if col not in [player_col, "選手名", "支部", "出身地"]:
             df_target[col] = pd.to_numeric(df_target[col], errors='coerce')
 
-    print("--- 実際に作られたデータの列名 ---")
-    print(df_target.columns.tolist())
-
     X_input = df_target.reindex(columns=expected_features, fill_value=0.0)
 
     prob_matrix = {}
@@ -173,9 +170,9 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     for i in range(6):
         boat_num = i + 1
         name = df_target.loc[i, "選手名"] if "選手名" in df_target.columns else f"艇{boat_num}"
-        p1 = prob_matrix.get(1, np.zeros((6, 6)))[i] * 100 if 1 in prob_matrix else 0
-        p2 = prob_matrix.get(2, np.zeros((6, 6)))[i] * 100 if 2 in prob_matrix else 0
-        p3 = prob_matrix.get(3, np.zeros((6, 6)))[i] * 100 if 3 in prob_matrix else 0
+        p1 = float(prob_matrix.get(1, np.zeros(6))[i]) * 100 if 1 in prob_matrix else 0.0
+        p2 = float(prob_matrix.get(2, np.zeros(6))[i]) * 100 if 2 in prob_matrix else 0.0
+        p3 = float(prob_matrix.get(3, np.zeros(6))[i]) * 100 if 3 in prob_matrix else 0.0
         boat_data.append({"boat": boat_num, "name": name, "p1": p1, "p2": p2, "p3": p3})
 
     top_1st = max(boat_data, key=lambda x: x['p1']) if boat_data else {"boat": 1, "p1": 0}
@@ -222,7 +219,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         m3 = prob_matrix[3]
 
         for c1, c2, c3 in itertools.permutations(range(6), 3):
-            score = m1[c1][c1] * m2[c2][c2] * m3[c3][c3]
+            score = float(m1[c1]) * float(m2[c2]) * float(m3[c3])
             trifecta_scores.append(((c1+1, c2+1, c3+1), score))
 
         trifecta_scores.sort(key=lambda x: x[1], reverse=True)
@@ -313,7 +310,6 @@ async def on_ready():
     except Exception as e:
         print(f"Error adding view: {e}")
 
-    # 起動時に自動で指定チャンネルへメニューを送信・常設する処理
     try:
         channel_id = int(NOTIFICATION_CHANNEL_ID)
         channel = bot.get_channel(channel_id)
