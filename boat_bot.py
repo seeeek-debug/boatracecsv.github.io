@@ -74,6 +74,8 @@ MODEL_FILENAME = "boatrace_lgb_model.pkl"
 try:
     models = joblib.load(MODEL_FILENAME)
     print(f"モデル '{MODEL_FILENAME}' の読み込みに成功しました。")
+    if "rank_1" in models:
+        print(f"--- モデルが要求する特徴量（最初の5個）: {models['rank_1'].feature_name()[:5]} ---")
 except Exception as e:
     models = None
     print(f"モデルの読み込みに失敗しました: {e}")
@@ -121,6 +123,9 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     df_input_row = pd.DataFrame([combined_row])
 
+    # デバッグ用：取得できたカラム名の一部をログに出力
+    print(f"--- 取得したCSVの列名（最初の5個）: {list(df_input_row.columns)[:5]} ---")
+
     player_cols = [col for col in df_input_row.columns if "選手コード" in col or "登録番号" in col]
     for col in player_cols:
         df_input_row[col] = df_input_row[col].astype('category')
@@ -128,6 +133,10 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     for col in df_input_row.columns:
         if col not in player_cols and not df_input_row[col].dtype.name.startswith('cat'):
             df_input_row[col] = pd.to_numeric(df_input_row[col], errors='coerce')
+
+    # 特徴量が正しくマッピングされているか確認するため、足りないカラムや一致率をチェック
+    matched_features = [f for f in expected_features if f in df_input_row.columns]
+    print(f"✨ モデルの特徴量との一致数: {len(matched_features)} / {len(expected_features)}")
 
     X_input = df_input_row.reindex(columns=expected_features, fill_value=0.0)
 
