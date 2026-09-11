@@ -62,32 +62,27 @@ def fetch_github_csv(file_path):
     try:
         res = requests.get(uri, timeout=10)
         if res.status_code == 200:
-            df = pd.read_csv(io.StringIO(res.text))
+            df = pd.read_csv(io.StringIO(res.text), dtype=str)
+            df.columns = df.columns.str.strip()
             CSV_CACHE[file_path] = df
             return df
     except Exception as e:
         print(f"CSV Fetch Error ({file_path}): {e}")
     return None
 
-# --- モデルと集計データの読み込み ---
+# --- モデルの読み込み ---
 MODEL_FILENAME = "boatrace_lgb_model.pkl"
 loaded_package = None
 models = None
-player_course_stats = None
-venue_wind_kimarite = None
-player_fav_kimarite = None
 
 try:
     loaded_package = joblib.load(MODEL_FILENAME)
     if isinstance(loaded_package, dict) and "models" in loaded_package:
         models = loaded_package["models"]
-        player_course_stats = loaded_package.get("player_course_stats")
-        venue_wind_kimarite = loaded_package.get("venue_wind_kimarite")
-        player_fav_kimarite = loaded_package.get("player_fav_kimarite")
-        print("モデルと集計データの読み込みに成功しました。")
+        print("モデルの読み込みに成功しました。")
     else:
         models = loaded_package
-        print("モデル単体として読み込みました（集計データなし）。")
+        print("モデル単体として読み込みました。")
         
     if models and "rank_1" in models:
         expected_features = models["rank_1"].feature_name()
@@ -105,196 +100,93 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     expected_features = models["rank_1"].feature_name()
     day_part = day_str.split("-")[2] if "-" in day_str else day_str
     
-    prog_path = f"data/programs/race_cards/{year}/{month}/{day_part}.csv"
+    race_card_path = f"data/programs/race_cards/{year}/{month}/{day_part}.csv"
     sui_path = f"data/previews/sui/{year}/{month}/{day_part}.csv"
     orig_path = f"data/previews/original_exhibition/{year}/{month}/{day_part}.csv"
     
-    df_cards = fetch_github_csv(prog_path)
+    df_cards = fetch_github_csv(race_card_path)
     df_sui = fetch_github_csv(sui_path)
     df_orig = fetch_github_csv(orig_path)
-    
+
+    if df_cards is None:
+        return summary_text + " ⚠️ エラー: 出走表データが取得できませんでした。"
+
     r_str = str(r_num).zfill(2)
     venue_s = str(venue_code).zfill(2)
-    target_code = f"{year}{month}{day_part}{venue_s}{r_str}"
+    target_race_code = f"{year}{month}{day_part}{venue_s}{r_str}"
 
-    def extract_target_row(df):
-        if df is None or df.empty:
-            return pd.Series()
-        
-        # 1. レースコード系カラムでの完全一致検索（小数点や型揺れを完全修復）
+    def get_matched_row(df, code):
+        if df is None: return None
         for col in df.columns:
-            if any(k in col.lower() for k in ["レースコード", "rcd", "code", "r_code", "id"]):
-                clean_series = df[col].astype(str).str.strip().str.split('.').str[0].str.lstrip("0")
-                target_clean = str(target_code).strip().split('.')[0].lstrip("0")
-                matched = df[clean_series == target_clean]
-                if not matched.empty:
-                    return matched.iloc[0]
+            clean_col = df[col].astype(str).str.strip().str.split('.').str[0].str.lstrip("0")
+            clean_target = str(code).strip().split('.')[0].lstrip("0")
+            matched = df[clean_col == clean_target]
+            if len(matched) > 0:
+                return matched.iloc[0:1].copy()
+        return None
 
-        # 2. 会場コードとレース番号の個別カラムでの一致検索
-        venue_col = None
-        r_col = None
-        for col in df.columns:
-            col_l = col.lower()
-            if any(k in col_l for k in ["場", "venue", "jyo", "jcd"]):
-                venue_col = col
-            if any(k in col_l for k in ["r", "レース", "race_num", "round"]):
-                r_col = col
-                
-        if venue_col and r_col:
-            matched = df[
-                (df[venue_col].astype(str).str.strip().str.zfill(2) == str(venue_code).zfill(2)) & 
-                (df[r_col].astype(str).str.strip().str.zfill(2) == str(r_num).zfill(2))
-            ]
-            if not matched.empty:
-                return matched.iloc[0]
+    df_c_row = get_matched_row(df_cards, target_race_code)
+    if df_c_row is None or len(df_c_row) == 0:
+        return summary_text + f" ⚠️ エラー: レースコード '{target_race_code}' が出走表に見つかりませんでした。"
 
-        # 3. 文字列の部分一致検索
-        for col in df.columns:
-            if any(k in col.lower() for k in ["レース", "rcd", "code"]):
-                matched = df[df[col].astype(str).str.contains(venue_s) & df[col].astype(str).str.contains(r_str)]
-                if not matched.empty:
-                    return matched.iloc[0]
-                    
-        return df.iloc[0] if len(df) > 0 else pd.Series()
+    df_s_row = get_matched_row(df_sui, target_race_code)
+    df_o_row = get_matched_row(df_orig, target_race_code)
 
-    prog_row = extract_target_row(df_cards)
-    sui_row = extract_target_row(df_sui)
-    orig_row = extract_target_row(df_orig)
+    base_info = {}
+    for col in df_c_row.columns:
+        if not col.startswith("艇"):
+            base_info[col] = df_c_row[col].values[0]
 
-    def get_val(row, boat_num, field_names, default=0.0):
-        if row is None or row.empty:
-            return default
-        if isinstance(field_names, str):
-            field_names = [field_names]
-            
-        prefixes = [
-            f"艇{boat_num}_", f"{boat_num}_", f"艇{boat_num}", f"{boat_num}", 
-            f"boat{boat_num}_", f"b{boat_num}_", f"p{boat_num}_", f"player{boat_num}_"
-        ]
-        suffixes = [
-            f"_{boat_num}", f"艇{boat_num}", f"{boat_num}"
-        ]
-        
-        row_keys = {str(k).strip(): k for k in row.index}
-        
-        for fn in field_names:
-            if fn in row_keys:
-                val = row[row_keys[fn]]
-                if pd.notna(val) and str(val).strip() != "":
-                    return val
-            for p in prefixes:
-                for candidate in [f"{p}{fn}", f"{fn}{p}"]:
-                    if candidate in row_keys:
-                        val = row[row_keys[candidate]]
-                        if pd.notna(val) and str(val).strip() != "":
-                            return val
-            for s in suffixes:
-                candidate = f"{fn}{s}"
-                if candidate in row_keys:
-                    val = row[row_keys[candidate]]
-                    if pd.notna(val) and str(val).strip() != "":
-                        return val
-            for rk_str, orig_k in row_keys.items():
-                if str(boat_num) in rk_str and fn in rk_str:
-                    val = row[orig_k]
-                    if pd.notna(val) and str(val).strip() != "":
-                        return val
-        return default
+    for df_r in [df_s_row, df_o_row]:
+        if df_r is not None:
+            for c in df_r.columns:
+                if not c.startswith("艇"):
+                    base_info[c] = df_r[c].values[0]
 
-    combined_rows = []
-    
-    for boat_num in range(1, 7):
-        row_dict = {
-            "レース場": float(venue_code) if str(venue_code).isdigit() else 0.0,
-            "艇番": float(boat_num),
-            "枠番": float(boat_num),
-            
-            "風速(m)": float(get_val(sui_row, boat_num, ["風速(m)", "風速", "wind_speed"], 0.0) or 0.0),
-            "風向": float(get_val(sui_row, boat_num, ["風向", "wind_dir"], 0.0) or 0.0),
-            "波の高さ(cm)": float(get_val(sui_row, boat_num, ["波の高さ(cm)", "波高", "wave"], 0.0) or 0.0),
-            "天候": float(get_val(sui_row, boat_num, ["天候", "weather"], 0.0) or 0.0),
-            "気温(℃)": float(get_val(sui_row, boat_num, ["気温(℃)", "気温", "air_temp"], 0.0) or 0.0),
-            "水温(℃)": float(get_val(sui_row, boat_num, ["水温(℃)", "水温", "water_temp"], 0.0) or 0.0),
-            
-            "全国勝率": float(get_val(prog_row, boat_num, ["全国勝率", "勝率", "national_win_rate"], 0.0) or 0.0),
-            "全国2連対率": float(get_val(prog_row, boat_num, ["全国2連対率", "2連対率", "national_2ren"], 0.0) or 0.0),
-            "全国3連対率": float(get_val(prog_row, boat_num, ["全国3連対率", "3連対率", "national_3ren"], 0.0) or 0.0),
-            "当地勝率": float(get_val(prog_row, boat_num, ["当地勝率", "local_win_rate"], 0.0) or 0.0),
-            "当地2連対率": float(get_val(prog_row, boat_num, ["当地2連対率", "local_2ren"], 0.0) or 0.0),
-            "当地3連対率": float(get_val(prog_row, boat_num, ["当地3連対率", "local_3ren"], 0.0) or 0.0),
-            "モーター2連率": float(get_val(prog_row, boat_num, ["モーター2連率", "モータ2連率", "motor_2ren"], 0.0) or 0.0),
-            "モーター3連率": float(get_val(prog_row, boat_num, ["モーター3連率", "モータ3連率", "motor_3ren"], 0.0) or 0.0),
-            "ボート2連率": float(get_val(prog_row, boat_num, ["ボート2連率", "boat_2ren"], 0.0) or 0.0),
-            "ボート3連率": float(get_val(prog_row, boat_num, ["ボート3連率", "boat_3ren"], 0.0) or 0.0),
-            "全国平均ST": float(get_val(prog_row, boat_num, ["全国平均ST", "平均ST", "st", "avg_st"], 0.15) or 0.15),
-            "F本数": float(get_val(prog_row, boat_num, ["F本数", "f_count"], 0.0) or 0.0),
-            "L本数": float(get_val(prog_row, boat_num, ["L本数", "l_count"], 0.0) or 0.0),
-            "年齢": float(get_val(prog_row, boat_num, ["年齢", "age"], 0.0) or 0.0),
-            "級別": str(get_val(prog_row, boat_num, ["級別", "class"], "B1")),
-            "選手名": str(get_val(prog_row, boat_num, ["選手名", "name", "player"], f"選手{boat_num}")),
-            "登録番号": get_val(prog_row, boat_num, ["登録番号", "id", "reg_no"], 0),
-        }
-        
-        v1 = get_val(orig_row, boat_num, ["値1", "ex_val1", "val1", "評価1"], 0.0)
-        v2 = get_val(orig_row, boat_num, ["値2", "ex_val2", "val2", "評価2"], 0.0)
-        v3 = get_val(orig_row, boat_num, ["値3", "ex_val3", "val3", "評価3"], 0.0)
-        item1 = str(get_val(orig_row, boat_num, ["計測項目1", "item1"], ""))
-        item2 = str(get_val(orig_row, boat_num, ["計測項目2", "item2"], ""))
-        item3 = str(get_val(orig_row, boat_num, ["計測項目3", "item3"], ""))
-        
-        row_dict["回り足"] = float(get_val(orig_row, boat_num, ["回り足", "まわり足", "turn"], 0.0) or 0.0)
-        row_dict["直線"] = float(get_val(orig_row, boat_num, ["直線", "straight"], 0.0) or 0.0)
-        row_dict["一周タイム"] = float(get_val(orig_row, boat_num, ["一周タイム", "lap1"], 0.0) or 0.0)
-        row_dict["半周タイム"] = float(get_val(orig_row, boat_num, ["半周タイム", "lap0.5"], 0.0) or 0.0)
-        
-        for item, val in zip([item1, item2, item3], [v1, v2, v3]):
-            try:
-                val_f = float(val)
-            except:
-                val_f = 0.0
-            item_str = str(item)
-            if "まわり足" in item_str or "回り足" in item_str:
-                row_dict["回り足"] = val_f
-            elif "直線" in item_str:
-                row_dict["直線"] = val_f
-            elif "一周" in item_str:
-                row_dict["一周タイム"] = val_f
-            elif "半周" in item_str:
-                row_dict["半周タイム"] = val_f
+    vertical_rows = []
+    for i in range(1, 7):
+        row_data = base_info.copy()
+        row_data["枠番"] = i
+        for df_r in [df_c_row, df_s_row, df_o_row]:
+            if df_r is not None:
+                for col in df_r.columns:
+                    if col.startswith(f"艇{i}_"):
+                        row_data[col.replace(f"艇{i}_", "")] = df_r[col].values[0]
+        vertical_rows.append(row_data)
 
-        combined_rows.append(row_dict)
+    df_target = pd.DataFrame(vertical_rows)
 
-    df_input = pd.DataFrame(combined_rows)
-    
-    rank_map = {"A1": 4, "A2": 3, "B1": 2, "B2": 1}
-    if "級別" in df_input.columns:
-        df_input["級別"] = df_input["級別"].map(rank_map).fillna(2)
+    if "級別" in df_target.columns:
+        rank_map = {'A1': 4, 'A2': 3, 'B1': 2, 'B2': 1}
+        df_target["級別"] = df_target["級別"].map(rank_map)
 
-    if player_course_stats is not None and "選手名" in df_input.columns and "枠番" in df_input.columns:
-        df_input = pd.merge(df_input, player_course_stats, on=["選手名", "枠番"], how="left")
-    if venue_wind_kimarite is not None and "レース場" in df_input.columns and "風向" in df_input.columns:
-        df_input = pd.merge(df_input, venue_wind_kimarite, on=["レース場", "風向"], how="left")
-    if player_fav_kimarite is not None and "選手名" in df_input.columns:
-        df_input = pd.merge(df_input, player_fav_kimarite, on=["選手名"], how="left")
+    player_col = next((col for col in ["選手コード", "登録番号"] if col in df_target.columns), None)
+    if player_col:
+        df_target[player_col] = df_target[player_col].astype('category').cat.codes
 
-    for col in df_input.columns:
-        if not df_input[col].dtype.name.startswith("cat") and col != "選手名":
-            df_input[col] = pd.to_numeric(df_input[col], errors="coerce")
+    for col in df_target.columns:
+        if col not in [player_col, "選手名", "支部", "出身地"]:
+            df_target[col] = pd.to_numeric(df_target[col], errors='coerce')
 
-    X_input = df_input.reindex(columns=expected_features, fill_value=0.0)
+    X_input = df_target.reindex(columns=expected_features, fill_value=0.0)
 
     prob_matrix = {}
-    for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"]):
+    for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"], 1):
         if rank_name in models:
-            pred_val = models[rank_name].predict(X_input)
-            prob_matrix[rank_idx + 1] = np.ravel(pred_val)
+            model = models[rank_name]
+            preds_per_boat = []
+            for idx, row in X_input.iterrows():
+                p = model.predict(row.values.reshape(1, -1))[0]
+                preds_per_boat.append(p)
+            prob_matrix[rank_idx] = np.array(preds_per_boat)
 
     boat_data = []
-    for i in range(len(df_input)):
+    summary_text += f"\n--- 【各艇の着順確率一覧】 ---\n"
+    for i in range(6):
         boat_num = i + 1
-        row_d = df_input.iloc[i]
-        name = str(row_d.get("選手名", f"選手{boat_num}"))
+        name = str(df_target.loc[i, "選手名"]) if "選手名" in df_target.columns and pd.notna(df_target.loc[i, "選手名"]) else f"選手{boat_num}"
         
+        # モデルの出力に応じた確率取得
         arr_1 = prob_matrix.get(1, np.zeros(6))
         arr_2 = prob_matrix.get(2, np.zeros(6))
         arr_3 = prob_matrix.get(3, np.zeros(6))
@@ -304,6 +196,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         p3 = float(arr_3[i]) * 100 if len(arr_3) > i else 0.0
         
         boat_data.append({"boat": boat_num, "name": name, "p1": p1, "p2": p2, "p3": p3})
+        summary_text += f"• **{boat_num}号艇** {name} -> 1着: **{p1:.1f}%** | 2着: **{p2:.1f}%**\n"
 
     if not boat_data:
         return summary_text + " ⚠️ エラー: 艇データが取得できませんでした。"
@@ -311,37 +204,25 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     top_1st = max(boat_data, key=lambda x: x['p1'])
     top_2nd = max(boat_data, key=lambda x: x['p2'])
 
-    if len(boat_data) >= 1 and boat_data[0]['p1'] >= 38.0:
+    if top_1st['boat'] == 1 and top_1st['p1'] >= 40.0:
         tactical_tag = "🛡️ 【イン鉄壁・逃げ本線】 1号艇が抜群の信頼度で逃走"
         kimarite = "逃げ (1-2, 1-3)"
-    elif len(boat_data) >= 2 and boat_data[1]['p1'] >= 20.0 and boat_data[1]['p1'] > boat_data[0]['p1']:
+    elif top_1st['boat'] == 2:
         tactical_tag = "💡 【2号艇の差し抜け】 2コースから鋭く差し込む"
         kimarite = "差し (2-1, 2-3)"
-    elif len(boat_data) >= 2 and boat_data[1]['p1'] >= 23.0:
-        tactical_tag = "⚡ 【2号艇まくり展開】 伸び足を活かしてインを襲う"
-        kimarite = "まくり (2-3, 2-4)"
-    elif len(boat_data) >= 3 and boat_data[2]['p1'] >= 18.0:
+    elif top_1st['boat'] == 3:
         tactical_tag = "🌊 【3号艇のセンター強襲】 自在に攻めて主導権を握る"
         kimarite = "まくり差し / まくり (3-1, 3-2)"
-    elif len(boat_data) >= 6 and (boat_data[5]['p1'] >= 15.0 or boat_data[4]['p1'] >= 12.0 or boat_data[3]['p1'] >= 10.0):
-        out_candidates = boat_data[3:]
-        best_out = max(out_candidates, key=lambda x: x['p1'])
-        if best_out['boat'] == 4:
-            tactical_tag = "🔥 【4号艇のカド一撃・まくり展開】 助走の踏み込みから絞りマイの展開を作る"
-            kimarite = "まくり / まくり差し (4-1, 4-5)"
-        else:
-            tactical_tag = f"🎯 【{best_out['boat']}号艇の外マイ・まくり差し】 展開の隙を突く鋭い仕掛け"
-            kimarite = f"まくり差し / 差し ({best_out['boat']}-1, {best_out['boat']}-2)"
+    elif top_1st['boat'] >= 4:
+        tactical_tag = f"🔥 【{top_1st['boat']}号艇の展開突き・強襲】 外枠から一撃を狙う"
+        kimarite = f"まくり差し / 差し ({top_1st['boat']}-1, {top_1st['boat']}-2)"
     else:
         tactical_tag = "⚔️ 【混戦・差し手モツレ】 互いの攻防から手堅く潰す展開"
         kimarite = "差し / 差し継ぎ"
 
-    summary_text += f"\n--- 【展開予想】 ---\n{tactical_tag}\n"
-    summary_text += f"🎯 **推奨決まり手**: {kimarite}\n"
-
-    summary_text += f"\n--- 【各艇の着順確率一覧】 ---\n"
-    for bd in boat_data:
-        summary_text += f"• **{bd['boat']}号艇** {bd['name']} -> 1着: **{bd['p1']:.1f}%** | 2着: **{bd['p2']:.1f}%**\n"
+    summary_text = f"🤖 **{venue}** {r_num}RのAIレース分析・局面予想 ({day_str})\n" \
+                   f"\n--- 【展開予想】 ---\n{tactical_tag}\n" \
+                   f"🎯 **推奨決まり手**: {kimarite}\n" + summary_text[summary_text.find("--- 【各艇の着順"): ]
 
     summary_text += f"\n--- 【3連単 予想買い目 (上位5点)】 ---\n"
     trifecta_scores = []
