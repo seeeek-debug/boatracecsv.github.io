@@ -183,21 +183,43 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     top_1st = max(boat_data, key=lambda x: x['p1']) if boat_data else {"boat": 1, "p1": 0}
     top_2nd = max(boat_data, key=lambda x: x['p2']) if boat_data else {"boat": 2, "p2": 0}
 
-    # 展開予想の判定（「2の直まくり」条件を含む）
-    if len(boat_data) >= 2 and (boat_data[1]['p1'] >= 22.0 or (boat_data[1]['p1'] > boat_data[0]['p1'] and boat_data[1]['p1'] >= 18.0)):
-        tactical_tag = "🚀 【2号艇の直まくり強襲】2号艇がインを叩くまくり展開"
-        kimarite = "まくり (2-3, 2-4)"
-    elif top_1st['boat'] == 1 and top_1st['p1'] >= 45.0:
-        tactical_tag = "🔒 【イン鉄壁・逃げ本線】1号艇の逃げ切りが最有力"
+    # === 展開予測の判定（1号艇からアウト勢まで・展開を作る攻めを網羅） ===
+    
+    # 1. 【1号艇主軸】イン逃げ・堅実展開
+    if len(boat_data) >= 1 and boat_data[0]['p1'] >= 38.0:
+        tactical_tag = "🛡️ 【イン鉄壁・逃げ本線】 1号艇が抜群の信頼度で逃走"
         kimarite = "逃げ (1-2, 1-3)"
-    elif top_2nd['boat'] == 2 and top_2nd['p2'] >= 30.0:
-        tactical_tag = "🔥 【2号艇の差し抜け警戒】2号艇の出足・差しに要注目"
+        
+    # 2. 【2号艇主軸】2コースからの差し
+    elif len(boat_data) >= 2 and boat_data[1]['p1'] >= 20.0 and boat_data[1]['p1'] > boat_data[0]['p1']:
+        tactical_tag = "💡 【2号艇の差し抜け】 2コースから鋭く差し込む"
         kimarite = "差し (2-1, 2-3)"
-    elif top_1st['boat'] >= 3:
-        tactical_tag = "⚡️ 【外枠・センターの自在攻め】波乱の展開に警戒"
-        kimarite = "まくり / まくり差し"
+        
+    # 3. 【2号艇主軸】2号艇のまくり
+    elif len(boat_data) >= 2 and boat_data[1]['p1'] >= 25.0:
+        tactical_tag = "🚀 【2号艇のまくり強襲】 伸び足を活かしてインを狙う"
+        kimarite = "まくり (2-3, 2-4)"
+        
+    # 4. 【3号艇主軸】センターからのまくり・まくり差し
+    elif len(boat_data) >= 3 and boat_data[2]['p1'] >= 18.0:
+        tactical_tag = "⚡ 【3号艇のセンター強襲】 自在に攻めて主導権を握る"
+        kimarite = "まくり差し / まくり (3-1, 3-2)"
+        
+    # 5. 【アウト勢主軸】カドまくり・展開を作る攻め
+    elif len(boat_data) >= 6 and (boat_data[3]['p1'] >= 15.0 or boat_data[4]['p1'] >= 12.0 or boat_data[5]['p1'] >= 10.0):
+        out_candidates = boat_data[3:]
+        best_out = max(out_candidates, key=lambda x: x['p1'])
+        
+        if best_out['boat'] == 4:
+            tactical_tag = f"💥 【4号艇のカド一撃・まくり展開】 抜群の踏み込みから絞りマイの展開を作る"
+            kimarite = "まくり / まくり差し (4-1, 4-5)"
+        else:
+            tactical_tag = f"🌊 【{best_out['boat']}号艇の外マイ・まくり差し】 展開の隙を突く鋭い仕掛け"
+            kimarite = f"まくり差し / 差し ({best_out['boat']}-1, {best_out['boat']}-2)"
+        
+    # 6. その他・大混戦
     else:
-        tactical_tag = "🌪️ 【混戦もつれ】軸堅いが相手は手広くいきたい一戦"
+        tactical_tag = "⚔️ 【混戦・差し手モツレ】 互いの攻防から手堅く流す展開"
         kimarite = "差し / 流し推奨"
 
     summary_text += f"\n💡 **展開予想**: {tactical_tag}\n"
