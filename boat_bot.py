@@ -176,7 +176,12 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
             model = models[rank_name]
             preds_per_boat = []
             for idx, row in X_input.iterrows():
-                p = model.predict(row.values.reshape(1, -1))[0]
+                pred_val = model.predict(row.values.reshape(1, -1))[0]
+                # 配列やスカラーに関わらず確実にfloatのスカラー値にする
+                if hasattr(pred_val, "item"):
+                    p = float(pred_val.item())
+                else:
+                    p = float(pred_val)
                 preds_per_boat.append(p)
             prob_matrix[rank_idx] = np.array(preds_per_boat)
 
@@ -186,7 +191,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         boat_num = i + 1
         name = str(df_target.loc[i, "選手名"]) if "選手名" in df_target.columns and pd.notna(df_target.loc[i, "選手名"]) else f"選手{boat_num}"
         
-        # モデルの出力に応じた確率取得
         arr_1 = prob_matrix.get(1, np.zeros(6))
         arr_2 = prob_matrix.get(2, np.zeros(6))
         arr_3 = prob_matrix.get(3, np.zeros(6))
