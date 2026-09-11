@@ -85,12 +85,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     
     if models is None:
         return summary_text
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return summary_text + f" ⚠️ エラーが発生しました: {e}"
-
-    
 
     if "rank_1" in models:
         expected_features = models["rank_1"].feature_name()
@@ -263,6 +257,10 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         summary_text += f"• 相手候補: **{top_2nd['boat']}号艇 ({top_2nd['name']})**（2着有力: {top_2nd['p2']:.1f}%）\n"
 
     return summary_text
+except Exception as e:
+    import traceback
+    traceback.print_exc()
+    return summary_text + f" ⚠️ エラーが発生しました: {e}"
 
 # --- 競走セレクトメニューの定義 ---
 class RaceSelect(discord.ui.Select):
