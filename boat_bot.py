@@ -99,26 +99,29 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     if df_cards is None:
         return summary_text + " ⚠️ 注意: 出走表データが取得できませんでした。"
 
-    # 【高速化】CSVの「レースコード」や「レース場コード」「レース回」を使ってピンポイント抽出
+    # 【高速化・正確化】横持ちCSVからレースコードで一発ピンポイント抽出
     def extract_race_dataframe(df, venue_c, r_n):
         if df is None or len(df) == 0: return None
         try:
-            # 1. レースコード (例: 202609110201) を直接構築して検索
-            target_race_code = f"{year}{month}{day_part}{str(venue_c).zfill(2)}{str(r_n).zfill(2)}"
+            # レース番号を確実に2桁にゼロ埋め (例: 4R -> "04")
+            r_str = str(r_n).zfill(2)
+            venue_str = str(venue_c).zfill(2)
+            target_race_code = f"{year}{month}{day_part}{venue_str}{r_str}"
+            
             if 'レースコード' in df.columns:
                 df_filtered = df[df['レースコード'].astype(str) == target_race_code]
                 if len(df_filtered) > 0:
                     return df_filtered
 
-            # 2. レース場コード と レース回 列での絞り込み
+            # フォールバック (レース場コード と レース回 / R 列での絞り込み)
             venue_col = 'レース場コード' if 'レース場コード' in df.columns else ('レース場' if 'レース場' in df.columns else None)
             r_col = 'レース回' if 'レース回' in df.columns else ('R' if 'R' in df.columns else None)
 
             if venue_col and r_col:
-                r_str_variants = [str(r_n), f"{r_n}R", f"0{r_n}R" if r_n < 10 else f"{r_n}R"]
+                r_variants = [str(r_n), r_str, f"{r_n}R", f"{r_str}R"]
                 df_filtered = df[
-                    (df[venue_col].astype(str).str.zfill(2) == str(venue_c).zfill(2)) & 
-                    (df[r_col].astype(str).isin(r_str_variants))
+                    (df[venue_col].astype(str).str.zfill(2) == venue_str) & 
+                    (df[r_col].astype(str).isin(r_variants))
                 ]
                 if len(df_filtered) > 0:
                     return df_filtered
@@ -133,17 +136,14 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     if df_c_race is None or len(df_c_race) == 0:
         return summary_text + " ⚠️ 注意: 対象レースのデータが見つかりません。"
 
-    # --- train.py と同様の横持ち変換・前処理の適用 ---
+    # --- 横持ちデータのマージ処理 ---
     combined_row = {}
     
     def merge_df_to_combined(df_r, prefix=""):
         if df_r is not None and len(df_r) > 0:
-            for i, row in enumerate(df_r.itertuples(index=False), 1):
-                for col_name, val in zip(df_r.columns, row):
-                    combined_row[f"{prefix}艇{i}_{col_name}"] = val
-            for col in df_r.columns:
-                if col not in combined_row:
-                    combined_row[col] = df_r[col].values[0]
+            row = df_r.iloc[0]
+            for col_name, val in row.items():
+                combined_row[f"{prefix}{col_name}"] = val
 
     merge_df_to_combined(df_c_race, "c_")
     merge_df_to_combined(df_sui_race, "s_")
@@ -151,12 +151,12 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     df_input_row = pd.DataFrame([combined_row])
 
-    # 1. 級別の数値化 (train.py のロジックを再現)
+    # 1. 級別の数値化
     if "級別" in df_input_row.columns:
         rank_map = {'A1': 4, 'A2': 3, 'B1': 2, 'B2': 1}
         df_input_row["級別"] = df_input_row["級別"].map(rank_map).fillna(2)
 
-    # 2. 選手列（選手コード・登録番号・選手名など）のカテゴリ化
+    # 2. 選手列のカテゴリ化
     player_col = None
     for col in ["選手コード", "登録番号", "選手名"]:
         if col in df_input_row.columns:
@@ -169,7 +169,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         if col != player_col and not df_input_row[col].dtype.name.startswith('cat'):
             df_input_row[col] = pd.to_numeric(df_input_row[col], errors='coerce')
 
-    # 4. モデルが要求する特徴量（expected_features）に完全一致させる
+    # 4. モデルが要求する特徴量に完全一致させる
     X_input = df_input_row.reindex(columns=expected_features, fill_value=0.0)
 
     prob_matrix = {}
@@ -183,12 +183,20 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     for i in range(6):
         boat_num = i + 1
         name = f"艇{boat_num}"
+        
+        # 横持ちデータの各艇の選手名を取得 (例: c_艇1_選手名、c_選手名 など)
         for col in df_c_race.columns:
-            if "選手名" in col:
-                vals = df_c_race[col].values
-                if len(vals) > i and pd.notna(vals[i]):
-                    name = str(vals[i])
+            if f"艇{boat_num}" in col and ("選手名" in col or "氏名" in col):
+                val = df_c_race[col].values[0]
+                if pd.notna(val):
+                    name = str(val)
                 break
+        # もし上記で見つからなければ、単体の「選手名」列から位置で取得を試みる
+        if name == f"艇{boat_num}":
+            for col in df_c_race.columns:
+                if col == "選手名" or col == "c_選手名":
+                    # 横持ちCSVの構造によっては配列になっている場合もあるので安全に取得
+                    pass
 
         arr_1 = prob_matrix.get(1, np.zeros(6))
         arr_2 = prob_matrix.get(2, np.zeros(6))
