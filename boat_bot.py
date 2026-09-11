@@ -103,7 +103,8 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         if df is None: return None
         matched_rows = []
         for idx, row in df.iterrows():
-            row_str = " ".join(row.astype(str).values)
+            # 【修正】安全にすべての要素を文字列に変換して結合
+            row_str = "".join([str(val) for val in row.values])
             if str(venue_c) in row_str and str(r_n) in row_str:
                 matched_rows.append(row)
         if matched_rows:
@@ -155,12 +156,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     # 4. モデルが要求する特徴量（expected_features）に完全一致させる
     X_input = df_input_row.reindex(columns=expected_features, fill_value=0.0)
-    
-    # カテゴリカル変数の型調整
-    for col in X_input.columns:
-        if expected_features and col in expected_features:
-            # モデルがカテゴリ型を要求している場合はカテゴリに合わせる
-            pass
 
     prob_matrix = {}
     for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"]):
