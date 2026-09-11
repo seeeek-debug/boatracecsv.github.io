@@ -182,7 +182,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     top_1st = max(boat_data, key=lambda x: x['p1']) if boat_data else {"boat": 1, "p1": 0}
     top_2nd = max(boat_data, key=lambda x: x['p2']) if boat_data else {"boat": 2, "p2": 0}
 
-    # --- 展開予想の判定（すべての分岐を完全に復元） ---
+    # --- 展開予想の判定（すべての分岐を完全に網羅） ---
     if len(boat_data) >= 1 and boat_data[0]['p1'] >= 38.0:
         tactical_tag = "🛡️ 【イン鉄壁・逃げ本線】 1号艇が抜群の信頼度で逃走"
         kimarite = "逃げ (1-2, 1-3)"
@@ -243,9 +243,12 @@ class RaceSelect(discord.ui.Select):
         super().__init__(placeholder="👇 分析するレースを選択してください...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        # まず最初に「ちょっと待ってな」の合図メッセージを送信する
-        await interaction.response.send_message(content="⏳ データを取得してAI分析中やで！ちょっと待ってな...", ephemeral=True)
+        # 1. 最優先で defer を実行してDiscordからのタイムアウトを完全に回避する
+        await interaction.response.defer(ephemeral=True)
         
+        # 2. 処理中メッセージを followup で送信
+        await interaction.followup.send(content="⏳ データを取得してAI分析中やで！ちょっと待ってな...", ephemeral=True)
+
         try:
             venue = self.venue
             venue_code = VENUE_MAPPING.get(venue, "01")
@@ -266,20 +269,15 @@ class RaceSelect(discord.ui.Select):
                 r_num = int(val)
                 result_text = calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num)
 
-            # 最初に出した「ちょっと待ってな」のメッセージを編集して結果を表示する
+            # 3. 結果を分割して送信
             if len(result_text) <= 2000:
-                await interaction.edit_original_response(content=result_text)
+                await interaction.followup.send(content=result_text, ephemeral=True)
             else:
-                # 2000文字を超える場合は最初のメッセージを書き換えた上で、残りを followup で送る
-                await interaction.edit_original_response(content=result_text[:2000])
-                for i in range(2000, len(result_text), 2000):
+                for i in range(0, len(result_text), 2000):
                     await interaction.followup.send(content=result_text[i:i+2000], ephemeral=True)
         except Exception as e:
             traceback.print_exc()
-            try:
-                await interaction.edit_original_response(content=f"⚠️ エラーが発生しました: {e}")
-            except:
-                await interaction.followup.send(content=f"⚠️ エラーが発生しました: {e}", ephemeral=True)
+            await interaction.followup.send(content=f"⚠️ エラーが発生しました: {e}", ephemeral=True)
 
 class RaceSelectView(discord.ui.View):
     def __init__(self, venue):
@@ -324,4 +322,3 @@ if __name__ == "__main__":
     keep_alive()
     token = os.environ.get("DISCORD_TOKEN")
     bot.run(token)
-
