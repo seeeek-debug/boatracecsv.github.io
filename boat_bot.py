@@ -80,10 +80,17 @@ except Exception as e:
     print(f"モデルの読み込みに失敗しました: {e}")
 
 def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num):
-    summary_text = f"📢 **{venue}場 {r_num}R** のAIレース分析・展開予想 ({year}-{month}-{day_str})\n"
+    try:
+        summary_text = f"🎯 **{venue}場 {r_num}R** のAIレース分析・展開予想..."
     
     if models is None:
-        return summary_text + "⚠️ エラー: 予測モデルが読み込まれていません。"
+        return summary_text
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return summary_text + f" ⚠️ エラーが発生しました: {e}"
+
+    
 
     if "rank_1" in models:
         expected_features = models["rank_1"].feature_name()
