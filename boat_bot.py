@@ -79,7 +79,7 @@ except Exception as e:
     print(f"モデルの読み込みに失敗しました: {e}")
 
 def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num):
-    summary_text = f"🎯 **{venue}場 {r_num}R** のAIレース分析・展開予想 ({year}-{month}-{day_str})\n"
+    summary_text = f"🎯 **{venue}場 {r_num}R** のAIレース分析・展開予想 ({day_str})\n"
 
     if models is None:
         return summary_text + " ⚠️ エラー: 予測モデルが読み込まれていません。"
@@ -97,7 +97,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     if df_cards is None:
         return summary_text + " ⚠️ 注意: 出走表データが取得できませんでした。"
 
-    # 各CSVから該当するレース場とレース番号の行を抽出する関数
     def filter_race_data(df, venue_c, r_n):
         if df is None: return None
         for col in df.columns:
@@ -113,73 +112,52 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     if df_c_row is None or len(df_c_row) == 0:
         return summary_text + " ⚠️ 注意: 対象レースのデータが見つかりません。"
 
-    target_race_code = f"{venue_code}{str(r_num).zfill(2)}"
-    f_s_row = get_matched_row(df_sui, target_race_code) if 'get_matched_row' in globals() else df_sui_row
-    f_o_row = get_matched_row(df_orig, target_race_code) if 'get_matched_row' in globals() else df_orig_row
+    # 横持ちデータ（1レース1行）を結合して構築
+    combined_row = {}
+    for df_r in [df_c_row, df_sui_row, df_orig_row]:
+        if df_r is not None and len(df_r) > 0:
+            for col in df_r.columns:
+                combined_row[col] = df_r[col].values[0]
 
-    base_info = {}
-    for col in df_c_row.columns:
-        if not col.startswith("艇"):
-            base_info[col] = df_c_row[col].values[0]
+    df_input_row = pd.DataFrame([combined_row])
 
-    for df_r in [f_s_row, f_o_row]:
-        if df_r is not None:
-            for c in df_r.columns:
-                if not c.startswith("艇"):
-                    base_info[c] = df_r[c].values[0]
+    player_cols = [col for col in df_input_row.columns if "選手コード" in col or "登録番号" in col]
+    for col in player_cols:
+        df_input_row[col] = df_input_row[col].astype('category')
 
-    vertical_rows = []
-    for i in range(1, 7):
-        boat_num = i
-        row_data = base_info.copy()
-        row_data["枠番"] = i
-        for df_r in [df_c_row, f_s_row, f_o_row]:
-            if df_r is not None:
-                for col in df_r.columns:
-                    if col.startswith(f"艇{i}_"):
-                        row_data[col.replace(f"艇{i}_", "")] = df_r[col].values[0]
-        vertical_rows.append(row_data)
+    for col in df_input_row.columns:
+        if col not in player_cols and not df_input_row[col].dtype.name.startswith('cat'):
+            df_input_row[col] = pd.to_numeric(df_input_row[col], errors='coerce')
 
-    df_target = pd.DataFrame(vertical_rows)
-
-    if "級別" in df_target.columns:
-        rank_map = {'A1': 4, 'A2': 3, 'B1': 2, 'B2': 1}
-        df_target["級別"] = df_target["級別"].map(rank_map)
-
-    player_col = next((col for col in ["選手コード", "登録番号"] if col in df_target.columns), None)
-    if player_col:
-        df_target[player_col] = df_target[player_col].astype('category')
-
-    for col in df_target.columns:
-        if col not in [player_col, "選手名", "支部", "出身地"]:
-            df_target[col] = pd.to_numeric(df_target[col], errors='coerce')
-
-    X_input = df_target.reindex(columns=expected_features, fill_value=0.0)
+    X_input = df_input_row.reindex(columns=expected_features, fill_value=0.0)
 
     prob_matrix = {}
     for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"]):
         if rank_name in models:
             model = models[rank_name]
-            preds_per_boat = []
-            for idx, row in X_input.iterrows():
-                pred_val = model.predict(row.values.reshape(1, -1))
-                p = float(np.ravel(pred_val)[0])
-                preds_per_boat.append(p)
-            prob_matrix[rank_idx + 1] = np.array(preds_per_boat, dtype=float)
+            pred_val = model.predict(X_input)
+            prob_matrix[rank_idx + 1] = np.ravel(pred_val)
 
     boat_data = []
     for i in range(6):
         boat_num = i + 1
-        name = df_target.loc[i, "選手名"] if "選手名" in df_target.columns else f"艇{boat_num}"
         
+        name = f"艇{boat_num}"
+        for col in df_c_row.columns:
+            if f"艇{boat_num}" in col and "選手名" in col:
+                val = df_c_row[col].values[0]
+                if pd.notna(val):
+                    name = str(val)
+                break
+
         arr_1 = prob_matrix.get(1, np.zeros(6))
         arr_2 = prob_matrix.get(2, np.zeros(6))
         arr_3 = prob_matrix.get(3, np.zeros(6))
-        
-        p1 = float(np.ravel(arr_1)[i]) * 100 if 1 in prob_matrix else 0.0
-        p2 = float(np.ravel(arr_2)[i]) * 100 if 2 in prob_matrix else 0.0
-        p3 = float(np.ravel(arr_3)[i]) * 100 if 3 in prob_matrix else 0.0
-        
+
+        p1 = float(arr_1[i]) * 100 if len(arr_1) > i else 0.0
+        p2 = float(arr_2[i]) * 100 if len(arr_2) > i else 0.0
+        p3 = float(arr_3[i]) * 100 if len(arr_3) > i else 0.0
+
         boat_data.append({"boat": boat_num, "name": name, "p1": p1, "p2": p2, "p3": p3})
 
     top_1st = max(boat_data, key=lambda x: x['p1']) if boat_data else {"boat": 1, "p1": 0}
@@ -193,7 +171,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         tactical_tag = "💡 【2号艇の差し抜け】 2コースから鋭く差し込む"
         kimarite = "差し (2-1, 2-3)"
     elif len(boat_data) >= 2 and boat_data[1]['p1'] >= 23.0:
-        tactical_tag = "⚡ 【2号艇まくり演技】 伸び足を活かしてインを襲う"
+        tactical_tag = "⚡ 【2号艇まくり展開】 伸び足を活かしてインを襲う"
         kimarite = "まくり (2-3, 2-4)"
     elif len(boat_data) >= 3 and boat_data[2]['p1'] >= 18.0:
         tactical_tag = "🌊 【3号艇のセンター強襲】 自在に攻めて主導権を握る"
@@ -226,7 +204,10 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         m3 = np.ravel(prob_matrix[3])
 
         for c1, c2, c3 in itertools.permutations(range(6), 3):
-            score = float(m1[c1]) * float(m2[c2]) * float(m3[c3])
+            s1 = float(m1[c1]) if len(m1) > c1 else 0.0
+            s2 = float(m2[c2]) if len(m2) > c2 else 0.0
+            s3 = float(m3[c3]) if len(m3) > c3 else 0.0
+            score = s1 * s2 * s3
             trifecta_scores.append(((c1+1, c2+1, c3+1), score))
 
         trifecta_scores.sort(key=lambda x: x[1], reverse=True)
