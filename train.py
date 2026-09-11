@@ -18,16 +18,12 @@ def load_and_merge_data():
 
     target_files = []
     for file in result_files:
-        if "2026/01" in file or "2026/02" in file:
-            continue
         if "2025" in file or "2024" in file:
             continue
-        if "2026/" in file or "2026-" in file or any(f"2026{y}" in file for y in ["/03", "/04", "/05", "/06", "/07", "/08", "/09", "/10", "/11", "/12"]):
-            target_files.append(file)
-        elif "2026" in file:
+        if "2026" in file:
             target_files.append(file)
 
-    print(f"2026年3月以降の対象ファイル数: {len(target_files)}")
+    print(f"対象ファイル数: {len(target_files)}")
 
     if not target_files:
         target_files = sorted(result_files)[-50:]
@@ -55,44 +51,7 @@ def train_model():
         print("有効な学習データがありません。処理を中断します。")
         return
 
-    # 級別の数値化
-    if "級別" in df_train.columns:
-        rank_map = {'A1': 4, 'A2': 3, 'B1': 2, 'B2': 1}
-        df_train["級別"] = df_train["級別"].map(rank_map)
-
-    player_col = None
-    for col in ["選手コード", "登録番号", "選手名"]:
-        if col in df_train.columns:
-            player_col = col
-            break
-
-    # 過去レースから「選手別のコース実績・平均ST」を自動集計
-    player_course_stats = None
-    if player_col and "枠番" in df_train.columns:
-        print("過去レースの積み重ねから選手別の実績を計算中...")
-        if "着順" in df_train.columns:
-            df_train["is_win"] = (df_train["着順"] == 1).astype(int)
-        else:
-            df_train["is_win"] = 0
-
-        if "スタートタイミング" in df_train.columns:
-            df_train["スタートタイミング"] = pd.to_numeric(df_train["スタートタイミング"], errors='coerce')
-
-        agg_dict = {}
-        if "is_win" in df_train.columns:
-            agg_dict["is_win"] = "mean"
-        if "スタートタイミング" in df_train.columns:
-            agg_dict["スタートタイミング"] = "mean"
-
-        if agg_dict:
-            player_course_stats = df_train.groupby([player_col, "枠番"]).agg(agg_dict).reset_index()
-            player_course_stats = player_course_stats.rename(columns={
-                "is_win": "実績_コース別勝率",
-                "スタートタイミング": "実績_平均ST"
-            })
-            df_train = pd.merge(df_train, player_course_stats, on=[player_col, "枠番"], how="left")
-
-    # 「決まり手」の高度な特徴量化
+    # 決まり手の集計
     kimarite_col = None
     for col in ["決まり手", "決まり手 (逃げ・まくり等)"]:
         if col in df_train.columns:
@@ -100,8 +59,6 @@ def train_model():
             break
 
     venue_wind_kimarite = None
-    player_fav_kimarite = None
-
     if kimarite_col:
         print("決まり手をエンコード・集計しています...")
         df_train["決まり手_コード"] = df_train[kimarite_col].astype('category')
@@ -110,15 +67,7 @@ def train_model():
             venue_wind_kimarite = df_train.groupby(["レース場", "風向"]).size().reset_index(name="場_風別_決まり手確率")
             df_train = pd.merge(df_train, venue_wind_kimarite, on=["レース場", "風向"], how="left")
 
-        if player_col and "着順" in df_train.columns:
-            winners = df_train[df_train["着順"] == 1]
-            if len(winners) > 0 and kimarite_col in winners.columns:
-                player_fav_kimarite = winners.groupby([player_col, kimarite_col]).size().reset_index(name="選手別_得意決まり手率")
-                df_train = pd.merge(df_train, player_fav_kimarite, on=[player_col, kimarite_col], how="left")
-
-    if player_col:
-        df_train[player_col] = df_train[player_col].astype('category')
-
+    # 2026年リアルタイムCSV（横持ち）に存在する特徴量
     target_features = [
         "レース場",
         "風速(m)",
@@ -133,24 +82,9 @@ def train_model():
         "4コース_スタートタイミング",
         "5コース_スタートタイミング",
         "6コース_スタートタイミング",
-        "回り足",
-        "直線",
-        "一周タイム",
-        "半周タイム",
-        "級別",
-        "全国勝率",
-        "当地勝率",
-        "モーター2連率",
-        "ボート2連率",
-        "実績_コース別勝率",
-        "実績_平均ST",
-        "決まり手_コード",
         "場_風別_決まり手確率",
-        "選手別_得意決まり手率",
+        "決まり手_コード"
     ]
-
-    if player_col and player_col not in target_features:
-        target_features.append(player_col)
 
     features = [col for col in target_features if col in df_train.columns]
     print(f"実際に使用する特徴量: {features}")
@@ -161,14 +95,22 @@ def train_model():
     ]
     targets = [col for col in target_candidates if col in df_train.columns]
 
+    # 数値変換
     for col in features:
-        if col != player_col:
+        if col not in ["決まり手_コード", "レース場", "風向", "天候"]:
             df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
 
-    if len(df_train) > 100000:
-        df_train = df_train.sample(n=100000, random_state=42)
+    for col in targets:
+        df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
 
-    df_train = df_train.dropna(subset=targets + [c for c in features if c != player_col])
+    # ターゲット（1〜3着）が確実に存在するものだけに絞る（特徴量は多少の欠損を許容）
+    df_train = df_train.dropna(subset=targets)
+    
+    # 特徴量の欠損は中央値などで穴埋めしてデータが0行になるのを防ぐ
+    for col in features:
+        if col not in ["決まり手_コード", "レース場", "風向", "天候"] and pd.api.types.is_numeric_dtype(df_train[col]):
+            df_train[col] = df_train[col].fillna(df_train[col].median())
+
     print(f"有効データ数: {len(df_train)}行")
 
     if len(df_train) == 0:
@@ -178,7 +120,7 @@ def train_model():
     X = df_train[features]
     models = {}
 
-    for i, target_col in enumerate(targets, start=1):
+    for i, target_col in enumerate(targets[:3], start=1):
         print(f"--- {i}着の予測モデルを学習中 ({target_col}) ---")
         y = df_train[target_col].astype(int) - 1
 
@@ -209,10 +151,10 @@ def train_model():
 
     saved_package = {
         "models": models,
-        "player_course_stats": player_course_stats,
+        "player_course_stats": None,
         "venue_wind_kimarite": venue_wind_kimarite,
-        "player_fav_kimarite": player_fav_kimarite,
-        "player_col": player_col if player_col else "選手名"
+        "player_fav_kimarite": None,
+        "player_col": "選手名"
     }
 
     joblib.dump(saved_package, "boatrace_lgb_model.pkl")
