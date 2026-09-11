@@ -87,6 +87,11 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     if "rank_1" in models:
         expected_features = models["rank_1"].feature_name()
+        # --- デバッグ用に出力 ---
+        print("--- モデルが期待する特徴量 ---")
+        print(expected_features)
+        print("--- 実際に作られたデータの列名 ---")
+        print(df_target.columns.tolist())
     else:
         return summary_text + "⚠️ エラー: モデル内に rank_1 が見つかりません。"
 
@@ -162,6 +167,9 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         if col not in [player_col, "選手名", "支部", "出身地"]:
             df_target[col] = pd.to_numeric(df_target[col], errors='coerce')
 
+    print("--- 実際に作られたデータの列名 ---")
+    print(df_target.columns.tolist())
+    
     X_input = df_target.reindex(columns=expected_features, fill_value=0.0)
 
     prob_matrix = {}
