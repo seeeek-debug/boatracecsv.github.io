@@ -199,162 +199,165 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
             return summary_text + " ⚠️ エラー: 予測モデルが読み込まれていません。"
 
         if "rank_1" in models:
-            expected_features = models["rank_1"].feature_name()
-        else:
-            return summary_text + " ⚠️ エラー: モデル内に rank_1 が見つかりません。"
+def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num):
+    summary_text = f"🎯 **{venue}場 {r_num}R** のAIレース分析・展開予想 ({year}-{month}-{day_str})\n"
 
-        day_part = day_str.split('-')[2] if '-' in day_str else day_str
-        df_cards = fetch_github_csv(f"data/programs/race_cards/{year}/{month}/{day_part}.csv")
-        df_sui = fetch_github_csv(f"data/previews/sui/{year}/{month}/{day_part}.csv")
-        df_orig = fetch_github_csv(f"data/previews/original_exhibition/{year}/{month}/{day_part}.csv")
+    if models is None:
+        return summary_text + " ⚠️ エラー: 予測モデルが読み込まれていません。"
 
-        if df_cards is None:
-            return summary_text + " ⚠️ 注意: 出走表データが取得できませんでした。"
+    if "rank_1" in models:
+        expected_features = models["rank_1"].feature_name()
+    else:
+        return summary_text + " ⚠️ エラー: モデル内に rank_1 が見つかりません。"
 
-        # 各CSVから該当するレース場とレース番号の行を抽出する関数
-        def filter_race_data(df, venue_c, r_n):
-            if df is None: return None
-            for col in df.columns:
-                matched = df[df[col].astype(str).str.contains(str(venue_c)) & df[col].astype(str).str.contains(str(r_n))]
-                if len(matched) > 0:
-                    return matched.iloc[0:1].copy()
-            return None
+    day_part = day_str.split('-')[2] if '-' in day_str else day_str
+    df_cards = fetch_github_csv(f"data/programs/race_cards/{year}/{month}/{day_part}.csv")
+    df_sui = fetch_github_csv(f"data/previews/sui/{year}/{month}/{day_part}.csv")
+    df_orig = fetch_github_csv(f"data/previews/original_exhibition/{year}/{month}/{day_part}.csv")
 
-        df_c_row = filter_race_data(df_cards, venue_code, r_num)
-        df_sui_row = filter_race_data(df_sui, venue_code, r_num)
-        df_orig_row = filter_race_data(df_orig, venue_code, r_num)
+    if df_cards is None:
+        return summary_text + " ⚠️ 注意: 出走表データが取得できませんでした。"
 
-        if df_c_row is None or len(df_c_row) == 0:
-            return summary_text + " ⚠️ 注意: 対象レースのデータが見つかりません。"
+    # 各CSVから該当するレース場とレース番号の行を抽出する関数
+    def filter_race_data(df, venue_c, r_n):
+        if df is None: return None
+        for col in df.columns:
+            matched = df[df[col].astype(str).str.contains(str(venue_c)) & df[col].astype(str).str.contains(str(r_n))]
+            if len(matched) > 0:
+                return matched.iloc[0:1].copy()
+        return None
 
-        target_race_code = f"{venue_code}{str(r_num).zfill(2)}"
-        f_s_row = get_matched_row(df_sui, target_race_code) if 'get_matched_row' in globals() else df_sui_row
-        f_o_row = get_matched_row(df_orig, target_race_code) if 'get_matched_row' in globals() else df_orig_row
+    df_c_row = filter_race_data(df_cards, venue_code, r_num)
+    df_sui_row = filter_race_data(df_sui, venue_code, r_num)
+    df_orig_row = filter_race_data(df_orig, venue_code, r_num)
 
-        base_info = {}
-        for col in df_c_row.columns:
-            if not col.startswith("艇"):
-                base_info[col] = df_c_row[col].values[0]
+    if df_c_row is None or len(df_c_row) == 0:
+        return summary_text + " ⚠️ 注意: 対象レースのデータが見つかりません。"
 
-        for df_r in [f_s_row, f_o_row]:
+    target_race_code = f"{venue_code}{str(r_num).zfill(2)}"
+    f_s_row = get_matched_row(df_sui, target_race_code) if 'get_matched_row' in globals() else df_sui_row
+    f_o_row = get_matched_row(df_orig, target_race_code) if 'get_matched_row' in globals() else df_orig_row
+
+    base_info = {}
+    for col in df_c_row.columns:
+        if not col.startswith("艇"):
+            base_info[col] = df_c_row[col].values[0]
+
+    for df_r in [f_s_row, f_o_row]:
+        if df_r is not None:
+            for c in df_r.columns:
+                if not c.startswith("艇"):
+                    base_info[c] = df_r[c].values[0]
+
+    vertical_rows = []
+    for i in range(1, 7):
+        boat_num = i
+        row_data = base_info.copy()
+        row_data["枠番"] = i
+        for df_r in [df_c_row, f_s_row, f_o_row]:
             if df_r is not None:
-                for c in df_r.columns:
-                    if not c.startswith("艇"):
-                        base_info[c] = df_r[c].values[0]
+                for col in df_r.columns:
+                    if col.startswith(f"艇{i}_"):
+                        row_data[col.replace(f"艇{i}_", "")] = df_r[col].values[0]
+        vertical_rows.append(row_data)
 
-        vertical_rows = []
-        for i in range(1, 7):
-            boat_num = i
-            row_data = base_info.copy()
-            row_data["枠番"] = i
-            for df_r in [df_c_row, f_s_row, f_o_row]:
-                if df_r is not None:
-                    for col in df_r.columns:
-                        if col.startswith(f"艇{i}_"):
-                            row_data[col.replace(f"艇{i}_", "")] = df_r[col].values[0]
-            vertical_rows.append(row_data)
+    df_target = pd.DataFrame(vertical_rows)
 
-        df_target = pd.DataFrame(vertical_rows)
+    if "級別" in df_target.columns:
+        rank_map = {'A1': 4, 'A2': 3, 'B1': 2, 'B2': 1}
+        df_target["級別"] = df_target["級別"].map(rank_map)
 
-        if "級別" in df_target.columns:
-            rank_map = {'A1': 4, 'A2': 3, 'B1': 2, 'B2': 1}
-            df_target["級別"] = df_target["級別"].map(rank_map)
+    player_col = next((col for col in ["選手コード", "登録番号"] if col in df_target.columns), None)
+    if player_col:
+        df_target[player_col] = df_target[player_col].astype('category')
 
-        player_col = next((col for col in ["選手コード", "登録番号"] if col in df_target.columns), None)
-        if player_col:
-            df_target[player_col] = df_target[player_col].astype('category')
+    for col in df_target.columns:
+        if col not in [player_col, "選手名", "支部", "出身地"]:
+            df_target[col] = pd.to_numeric(df_target[col], errors='coerce')
 
-        for col in df_target.columns:
-            if col not in [player_col, "選手名", "支部", "出身地"]:
-                df_target[col] = pd.to_numeric(df_target[col], errors='coerce')
+    print("--- 実際に作られたデータの列名 ---")
+    print(df_target.columns.tolist())
 
-        print("--- 実際に作られたデータの列名 ---")
-        print(df_target.columns.tolist())
+    X_input = df_target.reindex(columns=expected_features, fill_value=0.0)
 
-        X_input = df_target.reindex(columns=expected_features, fill_value=0.0)
+    prob_matrix = {}
+    for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"]):
+        if rank_name in models:
+            model = models[rank_name]
+            preds_per_boat = []
+            for idx, row in X_input.iterrows():
+                p = model.predict(row.values.reshape(1, -1))[0]
+                preds_per_boat.append(p)
+            prob_matrix[rank_idx + 1] = np.array(preds_per_boat)
 
-        prob_matrix = {}
-        for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"]):
-            if rank_name in models:
-                model = models[rank_name]
-                preds_per_boat = []
-                for idx, row in X_input.iterrows():
-                    p = model.predict(row.values.reshape(1, -1))[0]
-                    preds_per_boat.append(p)
-                prob_matrix[rank_idx + 1] = np.array(preds_per_boat)
+    boat_data = []
+    for i in range(6):
+        boat_num = i + 1
+        name = df_target.loc[i, "選手名"] if "選手名" in df_target.columns else f"艇{boat_num}"
+        p1 = prob_matrix.get(1, np.zeros((6, 6)))[i] * 100 if 1 in prob_matrix else 0
+        p2 = prob_matrix.get(2, np.zeros((6, 6)))[i] * 100 if 2 in prob_matrix else 0
+        p3 = prob_matrix.get(3, np.zeros((6, 6)))[i] * 100 if 3 in prob_matrix else 0
+        boat_data.append({"boat": boat_num, "name": name, "p1": p1, "p2": p2, "p3": p3})
 
-        boat_data = []
-        for i in range(6):
-            boat_num = i + 1
-            name = df_target.loc[i, "選手名"] if "選手名" in df_target.columns else f"艇{boat_num}"
-            p1 = prob_matrix.get(1, np.zeros((6, 6)))[i] * 100 if 1 in prob_matrix else 0
-            p2 = prob_matrix.get(2, np.zeros((6, 6)))[i] * 100 if 2 in prob_matrix else 0
-            p3 = prob_matrix.get(3, np.zeros((6, 6)))[i] * 100 if 3 in prob_matrix else 0
-            boat_data.append({"boat": boat_num, "name": name, "p1": p1, "p2": p2, "p3": p3})
+    top_1st = max(boat_data, key=lambda x: x['p1']) if boat_data else {"boat": 1, "p1": 0}
+    top_2nd = max(boat_data, key=lambda x: x['p2']) if boat_data else {"boat": 2, "p2": 0}
 
-        top_1st = max(boat_data, key=lambda x: x['p1']) if boat_data else {"boat": 1, "p1": 0}
-        top_2nd = max(boat_data, key=lambda x: x['p2']) if boat_data else {"boat": 2, "p2": 0}
-
-        # --- 展開予測の判定 ---
-        if len(boat_data) >= 1 and boat_data[0]['p1'] >= 38.0:
-            tactical_tag = "🛡️ 【イン鉄壁・逃げ本線】 1号艇が抜群の信頼度で逃走"
-            kimarite = "逃げ (1-2, 1-3)"
-        elif len(boat_data) >= 2 and boat_data[1]['p1'] >= 20.0 and boat_data[1]['p1'] > boat_data[0]['p1']:
-            tactical_tag = "💡 【2号艇の差し抜け】 2コースから鋭く差し込む"
-            kimarite = "差し (2-1, 2-3)"
-        elif len(boat_data) >= 2 and boat_data[1]['p1'] >= 23.0:
-            tactical_tag = "⚡ 【2号艇まくり演技】 伸び足を活かしてインを襲う"
-            kimarite = "まくり (2-3, 2-4)"
-        elif len(boat_data) >= 3 and boat_data[2]['p1'] >= 18.0:
-            tactical_tag = "🌊 【3号艇のセンター強襲】 自在に攻めて主導権を握る"
-            kimarite = "まくり差し / まくり (3-1, 3-2)"
-        elif len(boat_data) >= 6 and (boat_data[5]['p1'] >= 15.0 or boat_data[4]['p1'] >= 12.0 or boat_data[3]['p1'] >= 10.0):
-            out_candidates = boat_data[3:]
-            best_out = max(out_candidates, key=lambda x: x['p1'])
-            if best_out['boat'] == 4:
-                tactical_tag = "🔥 【4号艇のカド一撃・まくり展開】 助走の踏み込みから絞りマイの展開を作る"
-                kimarite = "まくり / まくり差し (4-1, 4-5)"
-            else:
-                tactical_tag = f"🎯 【{best_out['boat']}号艇の外マイ・まくり差し】 展開の隙を突く鋭い仕掛け"
-                kimarite = f"まくり差し / 差し ({best_out['boat']}-1, {best_out['boat']}-2)"
+    # --- 展開予測の判定 ---
+    if len(boat_data) >= 1 and boat_data[0]['p1'] >= 38.0:
+        tactical_tag = "🛡️ 【イン鉄壁・逃げ本線】 1号艇が抜群の信頼度で逃走"
+        kimarite = "逃げ (1-2, 1-3)"
+    elif len(boat_data) >= 2 and boat_data[1]['p1'] >= 20.0 and boat_data[1]['p1'] > boat_data[0]['p1']:
+        tactical_tag = "💡 【2号艇の差し抜け】 2コースから鋭く差し込む"
+        kimarite = "差し (2-1, 2-3)"
+    elif len(boat_data) >= 2 and boat_data[1]['p1'] >= 23.0:
+        tactical_tag = "⚡ 【2号艇まくり演技】 伸び足を活かしてインを襲う"
+        kimarite = "まくり (2-3, 2-4)"
+    elif len(boat_data) >= 3 and boat_data[2]['p1'] >= 18.0:
+        tactical_tag = "🌊 【3号艇のセンター強襲】 自在に攻めて主導権を握る"
+        kimarite = "まくり差し / まくり (3-1, 3-2)"
+    elif len(boat_data) >= 6 and (boat_data[5]['p1'] >= 15.0 or boat_data[4]['p1'] >= 12.0 or boat_data[3]['p1'] >= 10.0):
+        out_candidates = boat_data[3:]
+        best_out = max(out_candidates, key=lambda x: x['p1'])
+        if best_out['boat'] == 4:
+            tactical_tag = "🔥 【4号艇のカド一撃・まくり展開】 助走の踏み込みから絞りマイの展開を作る"
+            kimarite = "まくり / まくり差し (4-1, 4-5)"
         else:
-            tactical_tag = "⚔️ 【混戦・差し手モツレ】 互いの攻防から手堅く潰す展開"
-            kimarite = "差し / 差し継ぎ"
+            tactical_tag = f"🎯 【{best_out['boat']}号艇の外マイ・まくり差し】 展開の隙を突く鋭い仕掛け"
+            kimarite = f"まくり差し / 差し ({best_out['boat']}-1, {best_out['boat']}-2)"
+    else:
+        tactical_tag = "⚔️ 【混戦・差し手モツレ】 互いの攻防から手堅く潰す展開"
+        kimarite = "差し / 差し継ぎ"
 
-        summary_text += f"\n--- 【展開予想】 ---\n{tactical_tag}\n"
-        summary_text += f"🎯 **推奨決まり手**: {kimarite}\n"
+    summary_text += f"\n--- 【展開予想】 ---\n{tactical_tag}\n"
+    summary_text += f"🎯 **推奨決まり手**: {kimarite}\n"
 
-        summary_text += f"\n--- 【各艇の着順確率一覧】 ---\n"
-        for bd in boat_data:
-            summary_text += f"• **{bd['boat']}号艇** {bd['name']} -> 1着: **{bd['p1']:.1f}%** | 2着: **{bd['p2']:.1f}%**\n"
+    summary_text += f"\n--- 【各艇の着順確率一覧】 ---\n"
+    for bd in boat_data:
+        summary_text += f"• **{bd['boat']}号艇** {bd['name']} -> 1着: **{bd['p1']:.1f}%** | 2着: **{bd['p2']:.1f}%**\n"
 
-        summary_text += f"\n--- 【3連単 予想買い目 (上位5点)】 ---\n"
-        trifecta_scores = []
-        if 1 in prob_matrix and 2 in prob_matrix and 3 in prob_matrix:
-            m1 = prob_matrix[1]
-            m2 = prob_matrix[2]
-            m3 = prob_matrix[3]
+    summary_text += f"\n--- 【3連単 予想買い目 (上位5点)】 ---\n"
+    trifecta_scores = []
+    if 1 in prob_matrix and 2 in prob_matrix and 3 in prob_matrix:
+        m1 = prob_matrix[1]
+        m2 = prob_matrix[2]
+        m3 = prob_matrix[3]
 
-            for c1, c2, c3 in itertools.permutations(range(6), 3):
-                score = m1[c1][c1] * m2[c2][c2] * m3[c3][c3]
-                trifecta_scores.append(((c1+1, c2+1, c3+1), score))
+        for c1, c2, c3 in itertools.permutations(range(6), 3):
+            score = m1[c1][c1] * m2[c2][c2] * m3[c3][c3]
+            trifecta_scores.append(((c1+1, c2+1, c3+1), score))
 
-            trifecta_scores.sort(key=lambda x: x[1], reverse=True)
+        trifecta_scores.sort(key=lambda x: x[1], reverse=True)
 
-            for rank, (combo, score) in enumerate(trifecta_scores[:5], 1):
-                summary_text += f"{rank}. **{combo[0]} - {combo[1]} - {combo[2]}** (スコア: {score:.4f})\n"
+        for rank, (combo, score) in enumerate(trifecta_scores[:5], 1):
+            summary_text += f"{rank}. **{combo[0]} - {combo[1]} - {combo[2]}** (スコア: {score:.4f})\n"
 
-        summary_text += f"\n--- 【レース展開の考察】 ---\n"
-        if boat_data:
-            summary_text += f"• 軸推奨: **{top_1st['boat']}号艇 {top_1st['name']}** (1着トップ: {top_1st['p1']:.1f}%)\n"
-            summary_text += f"• 相手候補: **{top_2nd['boat']}号艇 {top_2nd['name']}** (2番手力: {top_2nd['p2']:.1f}%)\n"
+    summary_text += f"\n--- 【レース展開の考察】 ---\n"
+    if boat_data:
+        summary_text += f"• 軸推奨: **{top_1st['boat']}号艇 {top_1st['name']}** (1着トップ: {top_1st['p1']:.1f}%)\n"
+        summary_text += f"• 相手候補: **{top_2nd['boat']}号艇 {top_2nd['name']}** (2番手力: {top_2nd['p2']:.1f}%)\n"
 
-        return summary_text
+    return summary_text
 
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return summary_text + f" ⚠️ エラーが発生しました: {e}"
 
 # --- 競走セレクトメニューの定義 ---
 class RaceSelect(discord.ui.Select):
