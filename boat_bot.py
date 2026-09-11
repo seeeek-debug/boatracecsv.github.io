@@ -117,7 +117,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     if df_c_race is None or len(df_c_race) == 0:
         return summary_text + " ⚠️ 注意: 対象レースのデータが見つかりません。"
 
-    # 全6艇分のデータを横持ち（1行）に正しく結合する処理
+    # --- train.py と同様の横持ち変換・前処理の適用 ---
     combined_row = {}
     
     def merge_df_to_combined(df_r, prefix=""):
@@ -125,7 +125,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
             for i, row in enumerate(df_r.itertuples(index=False), 1):
                 for col_name, val in zip(df_r.columns, row):
                     combined_row[f"{prefix}艇{i}_{col_name}"] = val
-            # そのままの列名も保持
             for col in df_r.columns:
                 if col not in combined_row:
                     combined_row[col] = df_r[col].values[0]
@@ -136,15 +135,32 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     df_input_row = pd.DataFrame([combined_row])
 
-    player_cols = [col for col in df_input_row.columns if "選手コード" in col or "登録番号" in col]
-    for col in player_cols:
-        df_input_row[col] = df_input_row[col].astype('category')
+    # 1. 級別の数値化 (train.py のロジックを再現)
+    if "級別" in df_input_row.columns:
+        rank_map = {'A1': 4, 'A2': 3, 'B1': 2, 'B2': 1}
+        df_input_row["級別"] = df_input_row["級別"].map(rank_map).fillna(2)
 
+    # 2. 選手列（選手コード・登録番号・選手名など）のカテゴリ化
+    player_col = None
+    for col in ["選手コード", "登録番号", "選手名"]:
+        if col in df_input_row.columns:
+            player_col = col
+            df_input_row[col] = df_input_row[col].astype('category')
+            break
+
+    # 3. 特徴量の数値化変換
     for col in df_input_row.columns:
-        if col not in player_cols and not df_input_row[col].dtype.name.startswith('cat'):
+        if col != player_col and not df_input_row[col].dtype.name.startswith('cat'):
             df_input_row[col] = pd.to_numeric(df_input_row[col], errors='coerce')
 
+    # 4. モデルが要求する特徴量（expected_features）に完全一致させる
     X_input = df_input_row.reindex(columns=expected_features, fill_value=0.0)
+    
+    # カテゴリカル変数の型調整
+    for col in X_input.columns:
+        if expected_features and col in expected_features:
+            # モデルがカテゴリ型を要求している場合はカテゴリに合わせる
+            pass
 
     prob_matrix = {}
     for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"]):
@@ -156,9 +172,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     boat_data = []
     for i in range(6):
         boat_num = i + 1
-        
         name = f"艇{boat_num}"
-        # 出走表から選手名を取得
         for col in df_c_race.columns:
             if "選手名" in col:
                 vals = df_c_race[col].values
