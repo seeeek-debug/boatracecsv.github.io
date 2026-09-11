@@ -87,13 +87,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     if "rank_1" in models:
         expected_features = models["rank_1"].feature_name()
-        # --- デバッグ用に出力 ---
-        print("--- モデルが期待する特徴量 ---")
-        print(expected_features)
-        print("--- 実際に作られたデータの列名 ---")
-        print(df_target.columns.tolist())
-    else:
-        return summary_text + "⚠️ エラー: モデル内に rank_1 が見つかりません。"
 
     day_part = day_str.split('-')[2] if '-' in day_str else day_str
     df_cards = fetch_github_csv(f"data/programs/race_cards/{year}/{month}/{day_part}.csv")
