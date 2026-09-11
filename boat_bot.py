@@ -64,7 +64,8 @@ def fetch_github_csv(file_path):
         res = requests.get(uri, timeout=10)
         print(f"[DEBUG] Status Code for {file_path}: {res.status_code}")
         if res.status_code == 200:
-            df = pd.read_csv(io.StringIO(res.text), dtype=str)
+            # utf-8-sigを指定してBOMを自動削除
+            df = pd.read_csv(io.StringIO(res.text), encoding="utf-8-sig", dtype=str)
             df.columns = df.columns.str.strip()
             CSV_CACHE[file_path] = df
             print(f"[DEBUG] Success loading {file_path}, rows: {len(df)}")
@@ -187,25 +188,35 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     for i in range(6):
         boat_num = i + 1
         
-        # 選手名の取得候補
-        p_name_candidates = [f"艇{boat_num}_選手名", f"{boat_num}号艇_選手名", f"選手名_{boat_num}", f"選手{boat_num}_名前", f"選手名{boat_num}"]
+        # 選手名の取得（完全一致と部分一致の両方に対応）
         name = f"選手{boat_num}"
-        for c in p_name_candidates:
-            if c in df_pred.columns and pd.notna(df_pred.iloc[0].get(c)):
-                val = str(df_pred.iloc[0].get(c)).strip()
-                if val:
+        for c in [f"艇{boat_num}_選手名", f"{boat_num}号艇_選手名", f"選手{boat_num}_名前"]:
+            if c in card_row and pd.notna(card_row[c]):
+                val = str(card_row[c]).strip()
+                if val and val != "nan":
                     name = val
                     break
+        if name == f"選手{boat_num}":
+            for col, val in card_row.items():
+                if f"艇{boat_num}" in col and ("選手名" in col or "名前" in col):
+                    if pd.notna(val) and str(val).strip() and str(val).strip() != "nan":
+                        name = str(val).strip()
+                        break
 
-        # 級別の取得候補 (A1, A2, B1, B2など)
-        p_class_candidates = [f"艇{boat_num}_級別", f"{boat_num}号艇_級別", f"級別_{boat_num}", f"選手{boat_num}_級別", f"艇{boat_num}_級", f"級_{boat_num}"]
+        # 級別の取得（完全一致と部分一致の両方に対応）
         p_class = ""
-        for c in p_class_candidates:
-            if c in df_pred.columns and pd.notna(df_pred.iloc[0].get(c)):
-                val = str(df_pred.iloc[0].get(c)).strip()
-                if val:
+        for c in [f"艇{boat_num}_級別", f"{boat_num}号艇_級別", f"選手{boat_num}_級別", f"艇{boat_num}_級"]:
+            if c in card_row and pd.notna(card_row[c]):
+                val = str(card_row[c]).strip()
+                if val and val != "nan":
                     p_class = val
                     break
+        if not p_class:
+            for col, val in card_row.items():
+                if f"艇{boat_num}" in col and "級" in col:
+                    if pd.notna(val) and str(val).strip() and str(val).strip() != "nan":
+                        p_class = str(val).strip()
+                        break
         
         arr_1 = prob_matrix.get(1, np.zeros(6))
         arr_2 = prob_matrix.get(2, np.zeros(6))
@@ -351,3 +362,4 @@ if __name__ == "__main__":
     keep_alive()
     token = os.environ.get("DISCORD_TOKEN")
     bot.run(token)
+
