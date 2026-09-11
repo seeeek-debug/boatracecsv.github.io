@@ -77,7 +77,7 @@ try:
     if "rank_1" in models:
         expected_features = models["rank_1"].feature_name()
         print(f"--- モデル特徴量数: {len(expected_features)} ---")
-        print(f"--- 特徴量の例 (最初の5個): {expected_features[:5]} ---")
+        print(f"--- 特徴量一覧: {expected_features} ---")
 except Exception as e:
     models = None
     print(f"モデルの読み込みに失敗しました: {e}")
@@ -133,7 +133,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     sui_row = extract_race_row(df_sui, venue_code, r_num) or {}
     orig_row = extract_race_row(df_orig, venue_code, r_num) or {}
 
-    # --- 【修正】プレフィックスをつけずにそのまま結合する ---
     combined_row = {}
     if orig_row: combined_row.update(orig_row)
     if sui_row: combined_row.update(sui_row)
@@ -141,7 +140,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     df_input_row = pd.DataFrame([combined_row])
 
-    # 特徴量の前処理 (学習時と合わせる)
     if "級別" in df_input_row.columns:
         rank_map = {'A1': 4, 'A2': 3, 'B1': 2, 'B2': 1}
         df_input_row["級別"] = df_input_row["級別"].map(rank_map).fillna(2)
@@ -152,9 +150,9 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     X_input = df_input_row.reindex(columns=expected_features, fill_value=0.0)
 
-    # 有効な特徴量数の確認
-    non_zero_count = (X_input != 0).sum().sum()
-    print(f"--- [DEBUG] {venue} {r_num}R --- 有効な特徴量数: {non_zero_count} / {len(expected_features)}")
+    # --- 【デバッグ】実際にモデルに渡されている特徴量の値を表示 ---
+    print(f"=== [DEBUG VALUES] {venue} {r_num}R ===")
+    print(X_input.to_dict(orient='records')[0])
 
     # 推論実行
     prob_matrix = {}
@@ -187,7 +185,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     top_1st = max(boat_data, key=lambda x: x['p1']) if boat_data else {"boat": 1, "p1": 0}
     top_2nd = max(boat_data, key=lambda x: x['p2']) if boat_data else {"boat": 2, "p2": 0}
 
-    # 展開予想の判定
     if len(boat_data) >= 1 and boat_data[0]['p1'] >= 38.0:
         tactical_tag = "🛡️ 【イン鉄壁・逃げ本線】 1号艇が抜群の信頼度で逃走"
         kimarite = "逃げ (1-2, 1-3)"
