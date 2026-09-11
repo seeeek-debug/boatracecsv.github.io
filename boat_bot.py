@@ -79,12 +79,15 @@ def fetch_github_csv(file_path):
 MODEL_FILENAME = "boatrace_lgb_model.pkl"
 loaded_package = None
 models = None
+player_fav_kimarite = None
+expected_features = []
 
 try:
     loaded_package = joblib.load(MODEL_FILENAME)
-    if isinstance(loaded_package, dict) and "models" in loaded_package:
-        models = loaded_package["models"]
-        print("モデルの読み込みに成功しました。")
+    if isinstance(loaded_package, dict):
+        models = loaded_package.get("models")
+        player_fav_kimarite = loaded_package.get("player_fav_kimarite")
+        print("パッケージ形式でモデルと決まり手データを読み込みました。")
     else:
         models = loaded_package
         print("モデル単体として読み込みました。")
@@ -102,7 +105,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     if models is None or "rank_1" not in models:
         return summary_text + " ⚠️ エラー: 予測モデルが読み込まれていません。"
 
-    expected_features = models["rank_1"].feature_name()
     day_part = day_str.split("-")[2] if "-" in day_str else day_str
     
     race_card_path = f"data/programs/race_cards/{year}/{month}/{day_part}.csv"
@@ -124,82 +126,75 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     def get_matched_row(df, code):
         if df is None: return None
         for col in df.columns:
-            clean_col = df[col].astype(str).str.strip().str.split('.').str[0].str.lstrip("0")
-            clean_target = str(code).strip().split('.')[0].lstrip("0")
-            matched = df[clean_col == clean_target]
-            if len(matched) > 0:
-                print(f"[DEBUG] Matched by column '{col}' with code '{code}' (Rows: {len(matched)})")
-                return matched.iloc[0:1].copy()
+            if "レースコード" in col or "code" in col.lower():
+                matched = df[df[col].astype(str).str.strip() == str(code)]
+                if len(matched) > 0:
+                    return matched.iloc[0].to_dict()
         return None
 
-    df_c_row = get_matched_row(df_cards, target_race_code)
-    if df_c_row is None or len(df_c_row) == 0:
+    # 学習時と同じ横持ち仕様でデータを結合
+    card_row = get_matched_row(df_cards, target_race_code)
+    if not card_row:
         return summary_text + f" ⚠️ エラー: レースコード '{target_race_code}' が出走表に見つかりませんでした。"
 
-    df_s_row = get_matched_row(df_sui, target_race_code)
-    df_o_row = get_matched_row(df_orig, target_race_code)
+    sui_row = get_matched_row(df_sui, target_race_code) or {}
+    orig_row = get_matched_row(df_orig, target_race_code) or {}
 
-    base_info = {}
-    for col in df_c_row.columns:
-        if not col.startswith("艇") and not (col[0].isdigit() and "_" in col):
-            base_info[col] = df_c_row[col].values[0]
+    combined_row = {}
+    combined_row.update(card_row)
+    combined_row.update(sui_row)
+    combined_row.update(orig_row)
 
-    for df_r in [df_s_row, df_o_row]:
-        if df_r is not None:
-            for c in df_r.columns:
-                if not c.startswith("艇") and not (c[0].isdigit() and "_" in c):
-                    base_info[c] = df_r[c].values[0]
+    df_pred = pd.DataFrame([combined_row])
 
-    vertical_rows = []
-    for i in range(1, 7):
-        row_data = base_info.copy()
-        row_data["枠番"] = i
-        
-        for df_r in [df_c_row, df_s_row, df_o_row]:
-            if df_r is not None:
-                for col in df_r.columns:
-                    if col.startswith(f"艇{i}_"):
-                        clean_key = col.replace(f"艇{i}_", "")
-                        row_data[clean_key] = df_r[col].values[0]
-                    elif col.startswith(f"{i}_"):
-                        clean_key = col.replace(f"{i}_", "")
-                        row_data[clean_key] = df_r[col].values[0]
-                        
-        vertical_rows.append(row_data)
+    # 学習時と同じ選手ごとの得意決まり手特徴量を付与
+    if player_fav_kimarite:
+        for i in range(1, 7):
+            p_col_candidates = [f"艇{i}_選手名", f"{i}号艇_選手名", f"選手名_{i}", f"選手{i}_名前"]
+            p_col = next((c for c in p_col_candidates if c in df_pred.columns), None)
+            
+            if p_col:
+                dummy_k_keys = list(next(iter(player_fav_kimarite.values())).keys()) if player_fav_kimarite else []
+                for k_name in dummy_k_keys:
+                    col_name = f"艇{i}_kimarite_{k_name}"
+                    p_val = str(df_pred.iloc[0].get(p_col, "")).strip()
+                    df_pred[col_name] = player_fav_kimarite.get(p_val, {}).get(k_name, 0.0)
 
-    df_target = pd.DataFrame(vertical_rows)
+    feature_cols = [col for col in df_pred.columns if not col.startswith("res_")]
+    
+    for col in feature_cols:
+        if col not in ["レース場", "風向", "天候"]:
+            df_pred[col] = pd.to_numeric(df_pred[col], errors='coerce')
 
-    if "級別" in df_target.columns:
-        rank_map = {'A1': 4, 'A2': 3, 'B1': 2, 'B2': 1}
-        df_target["級別"] = df_target["級別"].map(rank_map)
+    for col in ["レース場", "風向", "天候"]:
+        if col in df_pred.columns:
+            df_pred[col] = df_pred[col].astype('category')
 
-    player_col = next((col for col in ["選手コード", "登録番号"] if col in df_target.columns), None)
-    if player_col:
-        df_target[player_col] = df_target[player_col].astype('category').cat.codes
-
-    for col in df_target.columns:
-        if col not in [player_col, "選手名", "支部", "出身地"]:
-            df_target[col] = pd.to_numeric(df_target[col], errors='coerce')
-
-    X_input = df_target.reindex(columns=expected_features, fill_value=0.0)
+    # モデルが必要とする特徴量列に揃える
+    X_input = df_pred.reindex(columns=expected_features, fill_value=0.0)
+    for col in expected_features:
+        if col in ["レース場", "風向", "天候"] and col in X_input.columns:
+            X_input[col] = X_input[col].astype('category')
 
     prob_matrix = {}
     for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"], 1):
         if rank_name in models:
             model = models[rank_name]
-            preds_per_boat = []
-            for idx, row in X_input.iterrows():
-                pred_val = model.predict(row.values.reshape(1, -1))
-                flat_val = np.ravel(pred_val)
-                p = float(flat_val[0]) if len(flat_val) > 0 else 0.0
-                preds_per_boat.append(p)
-            prob_matrix[rank_idx] = np.array(preds_per_boat)
+            preds = model.predict(X_input)
+            if len(preds) > 0:
+                prob_matrix[rank_idx] = np.array(preds[0])
 
     boat_data = []
     summary_text += f"\n--- 【各艇の着順確率一覧】 ---\n"
+    
     for i in range(6):
         boat_num = i + 1
-        name = str(df_target.loc[i, "選手名"]) if "選手名" in df_target.columns and pd.notna(df_target.loc[i, "選手名"]) else f"選手{boat_num}"
+        p_name_candidates = [f"艇{boat_num}_選手名", f"{boat_num}号艇_選手名", f"選手名_{boat_num}"]
+        name = f"選手{boat_num}"
+        for c in p_name_candidates:
+            if c in df_pred.columns and pd.notna(df_pred.iloc[0].get(c)):
+                name = str(df_pred.iloc[0].get(c)).strip()
+                break
         
         arr_1 = prob_matrix.get(1, np.zeros(6))
         arr_2 = prob_matrix.get(2, np.zeros(6))
