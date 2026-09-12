@@ -245,7 +245,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     # 欠損値の穴埋め
     # 数値型の列だけに絞って穴埋めする
-for col in X_input.select_dtypes(include=[np.number]).columns:
+    for col in X_input.select_dtypes(include=[np.number]).columns:
     X_input[col] = X_input[col].fillna(0.0)
 
 
