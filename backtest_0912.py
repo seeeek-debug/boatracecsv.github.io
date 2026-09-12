@@ -1,14 +1,10 @@
-import io
 import os
-import requests
 import joblib
 import pandas as pd
 import numpy as np
 import itertools
-from datetime import datetime
 
 # --- 基本設定 ---
-GITHUB_RAW_BASE = "https://raw.githubusercontent.com/seeeek-debug/boatracecsv.github.io/main/"
 MODEL_FILENAME = "boatrace_lgb_model.pkl"
 TARGET_DATE = "2026-09-12"
 
@@ -35,26 +31,31 @@ VENUE_PREVIEW_CODE_MAP = {
 
 CSV_CACHE = {}
 
-def fetch_github_csv(file_path):
+def load_csv(file_path):
+    """リポジトリ内のファイルを直接読み込む"""
+    if not file_path:
+        return None
     if file_path in CSV_CACHE:
         return CSV_CACHE[file_path]
-    uri = f"{GITHUB_RAW_BASE}{file_path}"
-    try:
-        res = requests.get(uri, timeout=10)
-        if res.status_code == 200:
-            df = pd.read_csv(io.StringIO(res.text), encoding="utf-8-sig", dtype=str)
+    
+    if os.path.exists(file_path):
+        try:
+            df = pd.read_csv(file_path, encoding="utf-8-sig", dtype=str)
             df.columns = df.columns.str.strip()
             CSV_CACHE[file_path] = df
             return df
-    except Exception:
-        pass
+        except Exception:
+            pass
     return None
 
-def fetch_github_csv_with_fallback(p1, p2):
-    df = fetch_github_csv(p1)
-    if df is None and p2:
-        df = fetch_github_csv(p2)
-    return df
+def get_first_available(paths):
+    for p in paths:
+        if not p:
+            continue
+        df = load_csv(p)
+        if df is not None:
+            return df, p
+    return None, None
 
 def get_season(m):
     if m in [3, 4, 5]: return "春"
@@ -63,7 +64,11 @@ def get_season(m):
     else: return "冬"
 
 # --- 1. モデルおよび決まり手データのロード ---
-print("📦 モデルおよび環境データを読み込んでいます...")
+print("📦 ローカルからモデルおよび環境データを読み込んでいます...")
+if not os.path.exists(MODEL_FILENAME):
+    print(f"❌ エラー: モデルファイル '{MODEL_FILENAME}' が見つかりません。")
+    exit(1)
+
 loaded_package = joblib.load(MODEL_FILENAME)
 models = {}
 expected_features = []
@@ -91,7 +96,7 @@ if isinstance(loaded_package, dict):
         expected_features = models["rank_1"].feature_name()
 
 if not kimarite_prob_dict:
-    df_pair = fetch_github_csv("data/estimate/kimarite/tables/pair_table.csv")
+    df_pair = load_csv("data/estimate/kimarite/tables/pair_table.csv")
     if df_pair is not None:
         for _, row in df_pair.iterrows():
             k_type = str(row['セル']).strip()
@@ -109,37 +114,57 @@ print(f"\n🚀 {TARGET_DATE} の全レース検証を開始します...\n")
 total_races = 0
 hits = 0
 results_summary = []
+found_any_card = False
 
 for venue in VENUES:
     venue_s = VENUE_MAPPING[venue]
     prev_code = VENUE_PREVIEW_CODE_MAP.get(venue_s, "")
 
-    race_card_p1 = f"data/programs/race_cards/{year}/{month_str}/{day_str}.csv"
-    race_card_p2 = f"data/programs/race_cards/{year}/{month_raw}/{day_raw}.csv"
-    sui_p1 = f"data/previews/sui/{year}/{month_str}/{day_str}.csv"
-    sui_p2 = f"data/previews/sui/{year}/{month_raw}/{day_raw}.csv"
-    orig_p1 = f"data/previews/original_exhibition/{year}/{month_str}/{day_str}.csv"
-    orig_p2 = f"data/previews/original_exhibition/{year}/{month_raw}/{day_raw}.csv"
-    stt_p1 = f"data/previews/stt/{year}/{month_str}/{day_str}.csv"
-    stt_p2 = f"data/previews/stt/{year}/{month_raw}/{day_raw}.csv"
-    venue_preview_p1 = f"data/previews/{prev_code}/{year}/{month_str}/{day_str}.csv" if prev_code else ""
-    venue_preview_p2 = f"data/previews/{prev_code}/{year}/{month_raw}/{day_raw}.csv" if prev_code else ""
+    card_paths = [
+        f"data/programs/race_cards/{year}/{month_str}/{day_str}.csv",
+        f"data/programs/race_cards/{year}/{month_raw}/{day_raw}.csv",
+        f"data/race_cards/{year}/{month_str}/{day_str}.csv",
+        f"data/race_cards/{year}/{month_raw}/{day_raw}.csv"
+    ]
+    result_paths = [
+        f"data/results/{year}/{month_str}/{day_str}.csv",
+        f"data/results/{year}/{month_raw}/{day_raw}.csv",
+        f"data/results/{year}/{month_str}/{month_str}{day_str}.csv"
+    ]
+    sui_paths = [
+        f"data/previews/sui/{year}/{month_str}/{day_str}.csv",
+        f"data/previews/sui/{year}/{month_raw}/{day_raw}.csv"
+    ]
+    orig_paths = [
+        f"data/previews/original_exhibition/{year}/{month_str}/{day_str}.csv",
+        f"data/previews/original_exhibition/{year}/{month_raw}/{day_raw}.csv"
+    ]
+    stt_paths = [
+        f"data/previews/stt/{year}/{month_str}/{day_str}.csv",
+        f"data/previews/stt/{year}/{month_raw}/{day_raw}.csv"
+    ]
+    venue_preview_paths = [
+        f"data/previews/{prev_code}/{year}/{month_str}/{day_str}.csv" if prev_code else "",
+        f"data/previews/{prev_code}/{year}/{month_raw}/{day_raw}.csv" if prev_code else ""
+    ]
 
-    df_cards = fetch_github_csv_with_fallback(race_card_p1, race_card_p2)
+    df_cards, _ = get_first_available(card_paths)
     if df_cards is None:
         continue
+    found_any_card = True
 
-    df_sui = fetch_github_csv_with_fallback(sui_p1, sui_p2)
-    df_orig = fetch_github_csv_with_fallback(orig_p1, orig_p2)
-    df_stt = fetch_github_csv_with_fallback(stt_p1, stt_p2)
-    df_venue_preview = fetch_github_csv_with_fallback(venue_preview_p1, venue_preview_p2) if prev_code else None
+    df_results, _ = get_first_available(result_paths)
+    df_sui, _ = get_first_available(sui_paths)
+    df_orig, _ = get_first_available(orig_paths)
+    df_stt, _ = get_first_available(stt_paths)
+    df_venue_preview, _ = get_first_available(venue_preview_paths)
 
     if df_orig is not None:
         rename_dict = {f"艇{i}_値1": f"艇{i}_オリジナル一周タイム" for i in range(1, 7)}
         df_orig = df_orig.rename(columns=rename_dict)
 
-    df_course_win = fetch_github_csv("data/estimate/stadium/course_win_rate.csv")
-    df_season_win = fetch_github_csv("data/estimate/stadium/win_rate.csv")
+    df_course_win = load_csv("data/estimate/stadium/course_win_rate.csv")
+    df_season_win = load_csv("data/estimate/stadium/win_rate.csv")
 
     for r_num in range(1, 13):
         r_str = str(r_num).zfill(2)
@@ -147,10 +172,11 @@ for venue in VENUES:
 
         def get_matched_row(df, code):
             if df is None: return None
+            code_str = str(code).strip()
             for col in df.columns:
-                if "レースコード" in col or "code" in col.lower():
+                if any(k in col for k in ["レースコード", "race_code", "コード", "code"]):
                     col_vals = df[col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-                    matched = df[col_vals == str(code)]
+                    matched = df[col_vals == code_str]
                     if len(matched) > 0:
                         return matched.iloc[0].to_dict()
             return None
@@ -159,6 +185,7 @@ for venue in VENUES:
         if not card_row:
             continue
 
+        res_row = get_matched_row(df_results, target_race_code) or {}
         sui_row = get_matched_row(df_sui, target_race_code) or {}
         orig_row = get_matched_row(df_orig, target_race_code) or {}
         stt_row = get_matched_row(df_stt, target_race_code) or {}
@@ -166,6 +193,7 @@ for venue in VENUES:
 
         combined_row = {}
         combined_row.update(card_row)
+        combined_row.update(res_row)
         combined_row.update(sui_row)
         combined_row.update(orig_row)
         combined_row.update(stt_row)
@@ -250,13 +278,18 @@ for venue in VENUES:
         trifecta_scores.sort(key=lambda x: x[1], reverse=True)
         top5_bets = [x[0] for x in trifecta_scores[:5]]
 
-        # 実際の確定結果の取得 (res_1着, res_2着, res_3着 または res_3連単)
+        # 実際の確定結果の取得
         r1 = str(expanded_row.get("res_1着", "")).replace(".0", "").strip()
         r2 = str(expanded_row.get("res_2着", "")).replace(".0", "").strip()
         r3 = str(expanded_row.get("res_3着", "")).replace(".0", "").strip()
-        actual_result = f"{r1}-{r2}-{r3}" if (r1 and r2 and r3 and r1 != "nan") else str(expanded_row.get("res_3連単", "")).strip()
+        
+        actual_result = ""
+        if r1 and r2 and r3 and r1 != "nan" and r2 != "nan" and r3 != "nan":
+            actual_result = f"{r1}-{r2}-{r3}"
+        else:
+            actual_result = str(expanded_row.get("res_3連単", "")).replace(".0", "").strip()
 
-        if not actual_result or actual_result == "nan--":
+        if not actual_result or actual_result in ["nan--", "nan"]:
             continue
 
         total_races += 1
@@ -283,14 +316,19 @@ for venue in VENUES:
 print("==========================================================================")
 print(f" 📊 {TARGET_DATE} 全レース AI予想バックテスト結果")
 print("==========================================================================")
-for r in results_summary:
-    payout_info = f" | 払戻: {r['payout']}円" if "🎯" in r['status'] and r['payout'] != "-" else ""
-    print(f"[{r['race']}] 予想5点: [{r['bets']}] | 確定: {r['actual']} | {r['status']}{payout_info}")
 
-print("--------------------------------------------------------------------------")
-hit_rate = (hits / total_races * 100) if total_races > 0 else 0
-print(f"総検証レース数 : {total_races} R")
-print(f"的中数         : {hits} R")
-print(f"的中率         : {hit_rate:.1f} %")
-print("==========================================================================")
+if not found_any_card:
+    print(f"⚠️ 指定日 ({TARGET_DATE}) の出走表CSVが見つかりませんでした。")
+elif total_races == 0:
+    print(f"⚠️ レース結果データが見つかりませんでした。")
+else:
+    for r in results_summary:
+        payout_info = f" | 払戻: {r['payout']}円" if "🎯" in r['status'] and r['payout'] != "-" else ""
+        print(f"[{r['race']}] 予想5点: [{r['bets']}] | 確定: {r['actual']} | {r['status']}{payout_info}")
 
+    print("--------------------------------------------------------------------------")
+    hit_rate = (hits / total_races * 100) if total_races > 0 else 0
+    print(f"総検証レース数 : {total_races} R")
+    print(f"的中数         : {hits} R")
+    print(f"的中率         : {hit_rate:.1f} %")
+    print("==========================================================================")
