@@ -32,7 +32,6 @@ VENUE_PREVIEW_CODE_MAP = {
 CSV_CACHE = {}
 
 def load_csv(file_path):
-    """リポジトリ内のファイルを直接読み込む"""
     if not file_path:
         return None
     if file_path in CSV_CACHE:
@@ -126,7 +125,10 @@ for venue in VENUES:
         f"data/race_cards/{year}/{month_str}/{day_str}.csv",
         f"data/race_cards/{year}/{month_raw}/{day_raw}.csv"
     ]
+    # payouts 階層を含むファイルパスを追加
     result_paths = [
+        f"data/results/payouts/{year}/{month_str}/{day_str}.csv",
+        f"data/results/payouts/{year}/{month_raw}/{day_raw}.csv",
         f"data/results/{year}/{month_str}/{day_str}.csv",
         f"data/results/{year}/{month_raw}/{day_raw}.csv",
         f"data/results/{year}/{month_str}/{month_str}{day_str}.csv"
@@ -251,7 +253,6 @@ for venue in VENUES:
         for col in X_input.select_dtypes(include=[np.number]).columns:
             X_input[col] = X_input[col].fillna(0.0)
 
-        # 予測推論
         prob_matrix = {}
         for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"], 1):
             if rank_name in models and models[rank_name] is not None:
@@ -259,7 +260,6 @@ for venue in VENUES:
                 if len(preds) > 0:
                     prob_matrix[rank_idx] = np.array(preds[0])
 
-        # スコア計算・買い目抽出
         m1, m2, m3 = prob_matrix.get(1), prob_matrix.get(2), prob_matrix.get(3)
         if m1 is None or m2 is None or m3 is None:
             continue
@@ -278,7 +278,7 @@ for venue in VENUES:
         trifecta_scores.sort(key=lambda x: x[1], reverse=True)
         top5_bets = [x[0] for x in trifecta_scores[:5]]
 
-        # 実際の確定結果の取得
+        # 実際の確定結果・払戻金の取得（新しいCSVの列名 3連単_組番 に対応）
         r1 = str(expanded_row.get("res_1着", "")).replace(".0", "").strip()
         r2 = str(expanded_row.get("res_2着", "")).replace(".0", "").strip()
         r3 = str(expanded_row.get("res_3着", "")).replace(".0", "").strip()
@@ -287,7 +287,7 @@ for venue in VENUES:
         if r1 and r2 and r3 and r1 != "nan" and r2 != "nan" and r3 != "nan":
             actual_result = f"{r1}-{r2}-{r3}"
         else:
-            actual_result = str(expanded_row.get("res_3連単", "")).replace(".0", "").strip()
+            actual_result = str(expanded_row.get("3連単_組番", expanded_row.get("res_3連単", ""))).replace(".0", "").strip()
 
         if not actual_result or actual_result in ["nan--", "nan"]:
             continue
@@ -302,7 +302,7 @@ for venue in VENUES:
             rank_str = "❌ 不的中"
 
         race_label = f"{venue} {r_num}R"
-        payout = str(expanded_row.get("res_3連単払戻", expanded_row.get("res_払戻", "-"))).strip()
+        payout = str(expanded_row.get("3連単_払戻金", expanded_row.get("res_3連単払戻", expanded_row.get("res_払戻", "-")))).strip()
 
         results_summary.append({
             "race": race_label,
@@ -332,3 +332,4 @@ else:
     print(f"的中数         : {hits} R")
     print(f"的中率         : {hit_rate:.1f} %")
     print("==========================================================================")
+
