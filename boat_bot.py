@@ -63,6 +63,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 CSV_CACHE = {}
 
 def fetch_github_csv(file_path):
+    """GitHubからCSVを取得しキャッシュする（フォールバックパス対応）"""
     if file_path in CSV_CACHE:
         return CSV_CACHE[file_path]
     uri = f"{GITHUB_RAW_BASE}{file_path}"
@@ -77,32 +78,58 @@ def fetch_github_csv(file_path):
         print(f"CSV Fetch Error ({file_path}): {e}")
     return None
 
+def fetch_github_csv_with_fallback(primary_path, fallback_path):
+    df = fetch_github_csv(primary_path)
+    if df is None and fallback_path:
+        df = fetch_github_csv(fallback_path)
+    return df
+
 # --- モデルおよびデータの読み込み ---
 MODEL_FILENAME = "boatrace_lgb_model.pkl"
 loaded_package = None
-models = None
+models = {}
 player_fav_kimarite = None
 kimarite_prob_dict = {}
 expected_features = []
 
 try:
-    loaded_package = joblib.load(MODEL_FILENAME)
-    if isinstance(loaded_package, dict):
-        models = loaded_package.get("models")
-        player_fav_kimarite = loaded_package.get("player_fav_kimarite")
-        loaded_pair_table = loaded_package.get("pair_table")
-        if loaded_pair_table and isinstance(loaded_pair_table, dict):
-            kimarite_prob_dict = loaded_pair_table
-        print("パッケージ形式でモデルとデータを読み込みました。")
+    if os.path.exists(MODEL_FILENAME):
+        loaded_package = joblib.load(MODEL_FILENAME)
+        if isinstance(loaded_package, dict):
+            # モデルオブジェクトの展開（train.py の保存キー形式と従来の双方に対応）
+            if "model_1st" in loaded_package:
+                models["rank_1"] = loaded_package.get("model_1st")
+                models["rank_2"] = loaded_package.get("model_2nd")
+                models["rank_3"] = loaded_package.get("model_3rd")
+            elif "models" in loaded_package:
+                models = loaded_package.get("models")
+            elif "rank_1" in loaded_package:
+                models = loaded_package
+
+            player_fav_kimarite = loaded_package.get("player_fav_kimarite")
+            loaded_pair_table = loaded_package.get("pair_table")
+            if loaded_pair_table and isinstance(loaded_pair_table, dict):
+                kimarite_prob_dict = loaded_pair_table
+
+            # 特徴量リストの取得
+            if "feature_names" in loaded_package:
+                expected_features = loaded_package["feature_names"]
+            elif "rank_1" in models and hasattr(models["rank_1"], "feature_name"):
+                expected_features = models["rank_1"].feature_name()
+
+            print("パッケージ形式でモデルとデータを正常に読み込みました。")
+        else:
+            models = loaded_package
+            print("モデル単体として読み込みました。")
+
+        if "rank_1" in models and hasattr(models["rank_1"], "feature_name") and not expected_features:
+            expected_features = models["rank_1"].feature_name()
+
+        print(f"ロード済みモデル特徴量数: {len(expected_features)}")
     else:
-        models = loaded_package
-        print("モデル単体として読み込みました。")
-        
-    if models and "rank_1" in models:
-        expected_features = models["rank_1"].feature_name()
-        print(f"モデル特徴量数: {len(expected_features)}")
+        print(f"警告: モデルファイル '{MODEL_FILENAME}' が見つかりません。")
 except Exception as e:
-    models = None
+    models = {}
     print(f"モデルの読み込みに失敗しました: {e}")
 
 def load_kimarite_table_from_github():
@@ -133,41 +160,66 @@ def get_season(m):
 def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num):
     header_text = f"🤖 **{venue}** {r_num}RのAIレース分析・局面予想 ({day_str})\n"
 
-    if models is None or "rank_1" not in models:
+    if not models or "rank_1" not in models or models["rank_1"] is None:
         return header_text + " ⚠️ エラー: 予測モデルが読み込まれていません。"
 
     day_part = day_str.split("-")[2] if "-" in day_str else day_str
+    month_str = str(int(month)).zfill(2)
+    day_str_zf = str(int(day_part)).zfill(2)
+    month_raw = str(int(month))
+    day_raw = str(int(day_part))
+
     venue_s = str(venue_code).zfill(2)
     month_int = int(month)
-    
-    race_card_path = f"data/programs/race_cards/{year}/{month}/{day_part}.csv"
-    sui_path = f"data/previews/sui/{year}/{month}/{day_part}.csv"
-    orig_path = f"data/previews/original_exhibition/{year}/{month}/{day_part}.csv"
-    stt_path = f"data/previews/stt/{year}/{month}/{day_part}.csv"
-    
-    prev_code = VENUE_PREVIEW_CODE_MAP.get(venue_s, "")
-    venue_preview_path = f"data/previews/{prev_code}/{year}/{month}/{day_part}.csv" if prev_code else ""
 
-    df_cards = fetch_github_csv(race_card_path)
-    df_sui = fetch_github_csv(sui_path)
-    df_orig = fetch_github_csv(orig_path)
-    df_stt = fetch_github_csv(stt_path)
-    df_venue_preview = fetch_github_csv(venue_preview_path) if venue_preview_path else None
+    # ゼロ埋めパスと非ゼロ埋めパスの両方で取得を試行
+    race_card_p1 = f"data/programs/race_cards/{year}/{month_str}/{day_str_zf}.csv"
+    race_card_p2 = f"data/programs/race_cards/{year}/{month_raw}/{day_raw}.csv"
+    
+    sui_p1 = f"data/previews/sui/{year}/{month_str}/{day_str_zf}.csv"
+    sui_p2 = f"data/previews/sui/{year}/{month_raw}/{day_raw}.csv"
+
+    orig_p1 = f"data/previews/original_exhibition/{year}/{month_str}/{day_str_zf}.csv"
+    orig_p2 = f"data/previews/original_exhibition/{year}/{month_raw}/{day_raw}.csv"
+
+    stt_p1 = f"data/previews/stt/{year}/{month_str}/{day_str_zf}.csv"
+    stt_p2 = f"data/previews/stt/{year}/{month_raw}/{day_raw}.csv"
+
+    prev_code = VENUE_PREVIEW_CODE_MAP.get(venue_s, "")
+    venue_preview_p1 = f"data/previews/{prev_code}/{year}/{month_str}/{day_str_zf}.csv" if prev_code else ""
+    venue_preview_p2 = f"data/previews/{prev_code}/{year}/{month_raw}/{day_raw}.csv" if prev_code else ""
+
+    df_cards = fetch_github_csv_with_fallback(race_card_p1, race_card_p2)
+    df_sui = fetch_github_csv_with_fallback(sui_p1, sui_p2)
+    df_orig = fetch_github_csv_with_fallback(orig_p1, orig_p2)
+    df_stt = fetch_github_csv_with_fallback(stt_p1, stt_p2)
+    df_venue_preview = fetch_github_csv_with_fallback(venue_preview_p1, venue_preview_p2) if prev_code else None
+
+    # オリジナル展示データのカラム名を train.py と同じ標準形式へ変換
+    if df_orig is not None:
+        rename_dict = {}
+        for i in range(1, 7):
+            rename_dict[f"艇{i}_値1"] = f"艇{i}_オリジナル一周タイム"
+            rename_dict[f"艇{i}_値2"] = f"艇{i}_オリジナルまわり足タイム"
+            rename_dict[f"艇{i}_値3"] = f"艇{i}_オリジナル直線タイム"
+        df_orig = df_orig.rename(columns=rename_dict)
 
     df_course_win = fetch_github_csv("data/estimate/stadium/course_win_rate.csv")
     df_season_win = fetch_github_csv("data/estimate/stadium/win_rate.csv")
 
     if df_cards is None:
-        return header_text + f" ⚠️ エラー: 出走表データが取得できませんでした ({race_card_path})。"
+        return header_text + f" ⚠️ エラー: 出走表データが取得できませんでした。"
 
     r_str = str(r_num).zfill(2)
-    target_race_code = f"{year}{month}{day_part}{venue_s}{r_str}"
+    target_race_code = f"{year}{month_str}{day_str_zf}{venue_s}{r_str}"
 
     def get_matched_row(df, code):
         if df is None: return None
         for col in df.columns:
             if "レースコード" in col or "code" in col.lower():
-                matched = df[df[col].astype(str).str.strip() == str(code)]
+                # 小数点表記（.0）への対応
+                col_vals = df[col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+                matched = df[col_vals == str(code)]
                 if len(matched) > 0:
                     return matched.iloc[0].to_dict()
         return None
@@ -209,7 +261,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
                         combined_row[f"est_season_{k}"] = v
                 break
 
-    # カラム名の表記ブレ相互変換 (艇1_ <-> 1号艇_ <-> _1)
+    # カラム名の相互展開 (艇1_ <-> 1号艇_ <-> _1)
     expanded_row = dict(combined_row)
     for k, v in list(combined_row.items()):
         for b in range(1, 7):
@@ -251,6 +303,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         if col in df_pred.columns:
             df_pred[col] = df_pred[col].astype('category')
 
+    # モデルの期待する特徴量順へ変換
     X_input = df_pred.reindex(columns=expected_features, fill_value=0.0)
     for col in expected_features:
         if col in ["レース場", "風向", "天候"] and col in X_input.columns:
@@ -259,7 +312,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     for col in X_input.select_dtypes(include=[np.number]).columns:
         X_input[col] = X_input[col].fillna(0.0)
 
-    # データ検証用ログ計算＆コンソールデバッグ出力
+    # データ診断ログ
     total_feats = len(expected_features)
     zero_cols = X_input.columns[(X_input == 0.0).all()].tolist()
     zero_feats = len(zero_cols)
@@ -267,12 +320,10 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     print(f"--- [データ診断] レースコード: {target_race_code} ---")
     print(f"有効特徴量: {valid_feats} / ゼロ埋め: {zero_feats} (全{total_feats}個)")
-    if zero_cols:
-        print(f"ゼロ埋めされている特徴量 (先頭30個): {zero_cols[:30]}")
 
     prob_matrix = {}
     for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"], 1):
-        if rank_name in models:
+        if rank_name in models and models[rank_name] is not None:
             model = models[rank_name]
             preds = model.predict(X_input)
             if len(preds) > 0:
@@ -370,7 +421,8 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
             
             primary_kimarite = default_kimarite_map.get(b1, "差し")
             k_key = f"{primary_kimarite}_{c1_course}"
-            pair_prob = kimarite_prob_dict.get((k_key, c2_course, c3_course), 0.01)
+            pair_prob = kimarite_prob_dict.get((k_key, c2_course, c3_course),
+                        kimarite_prob_dict.get((primary_kimarite, c2_course, c3_course), 0.01))
             
             final_score = ai_base_score * (max(pair_prob, 0.001) ** 0.3)
             trifecta_scores.append(((b1, b2, b3), final_score))
@@ -411,20 +463,24 @@ class RaceSelect(discord.ui.Select):
             day_str = target_date.strftime("%Y-%m-%d")
 
             if val == "all":
-                all_summaries = [f"🤖 **{venue}** 全12レースAI予測・展開予想一覧"]
+                await interaction.followup.send(content=f"🤖 **{venue}** 全12レースのAI予想・展開解析を開始します...", ephemeral=True)
                 for r_num in range(1, 13):
                     res_text = calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num)
-                    all_summaries.append(res_text + "\n" + "="*30 + "\n")
-                result_text = "\n".join(all_summaries)
+                    if len(res_text) <= 2000:
+                        await interaction.followup.send(content=res_text, ephemeral=True)
+                    else:
+                        for chunk in [res_text[i:i+1900] for i in range(0, len(res_text), 1900)]:
+                            await interaction.followup.send(content=chunk, ephemeral=True)
+                    await asyncio.sleep(0.3)  # Rate Limit対策
             else:
                 r_num = int(val)
                 result_text = calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num)
+                if len(result_text) <= 2000:
+                    await interaction.followup.send(content=result_text, ephemeral=True)
+                else:
+                    for chunk in [result_text[i:i+1900] for i in range(0, len(result_text), 1900)]:
+                        await interaction.followup.send(content=chunk, ephemeral=True)
 
-            if len(result_text) <= 2000:
-                await interaction.followup.send(content=result_text, ephemeral=True)
-            else:
-                for i in range(0, len(result_text), 2000):
-                    await interaction.followup.send(content=result_text[i:i+2000], ephemeral=True)
         except Exception as e:
             tb = traceback.format_exc()
             error_msg = f"⚠️ エラーが発生しました:\n```python\n{tb}\n```"
@@ -489,7 +545,7 @@ async def check_status(ctx):
 
     msg = (
         f"📊 **【データ取り込み状況チェック】**\n\n"
-        f"**1. モデル読み込み状態**: {'成功' if models else '失敗'}\n"
+        f"**1. モデル読み込み状態**: {'成功' if models and 'rank_1' in models else '失敗'}\n"
         f"**2. モデルの特徴量数**: {len(expected_features)} 個\n"
         f"**3. 決まり手テーブル件数**: {len(kimarite_prob_dict)} 件\n\n"
         f"**4. GitHubファイル取得テスト**:\n" + "\n".join(file_results)
@@ -499,5 +555,7 @@ async def check_status(ctx):
 if __name__ == "__main__":
     keep_alive()
     token = os.environ.get("DISCORD_TOKEN")
-    bot.run(token)
-
+    if token:
+        bot.run(token)
+    else:
+        print("エラー: DISCORD_TOKEN 環境変数が設定されていません。")
