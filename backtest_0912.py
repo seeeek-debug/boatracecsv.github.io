@@ -6,7 +6,7 @@ import itertools
 
 # --- 基本設定 ---
 MODEL_FILENAME = "boatrace_lgb_model.pkl"
-TARGET_DATE = "2026-09-08"
+TARGET_DATE = "2026-09-07"
 
 VENUES = [
     "桐生", "戸田", "江戸川", "平和島", "多摩川", "浜名湖",
