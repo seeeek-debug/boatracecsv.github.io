@@ -240,6 +240,13 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     for col in X_input.select_dtypes(include=[np.number]).columns:
         X_input[col] = X_input[col].fillna(0.0)
 
+    # --- 【検証用】データ状態をメッセージに含める ---
+    total_feats = len(expected_features)
+    zero_feats = (X_input == 0.0).sum(axis=1).iloc[0]
+    valid_feats = total_feats - zero_feats
+    summary_text += f"\n🔍 [データ診断] 有効特徴量: {valid_feats}個 / ゼロ埋め: {zero_feats}個 (全{total_feats}中)\n"
+    # ----------------------------------------------
+
     prob_matrix = {}
     for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"], 1):
         if rank_name in models:
