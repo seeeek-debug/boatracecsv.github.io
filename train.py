@@ -79,9 +79,8 @@ def build_player_kimarite_stats():
     if not kimarite_col:
         return {}
 
-    player_col = next((col for col in df_all_res.columns if "1着_選手名" in col or ("選手名" in col and "1着" in col)), None)
-    if not player_col:
-        player_col = next((col for col in df_all_res.columns if "選手名" in col), None)
+    player_col_candidates = ["1着_選手名", "選手名", "氏名", "1着_氏名"]
+    player_col = next((col for col in df_all_res.columns if any(c in col for c in player_col_candidates)), None)
 
     player_stats = {}
     if player_col and kimarite_col:
@@ -232,9 +231,13 @@ def train_model():
         print("有効な学習データがありません。")
         return
 
+    # 表記揺れに対応して決まり手特徴量を算出
     if player_fav_kimarite:
         for i in range(1, 7):
-            p_col_candidates = [f"艇{i}_選手名", f"{i}号艇_選手名", f"選手名_{i}", f"選手{i}_名前"]
+            p_col_candidates = [
+                f"艇{i}_選手名", f"{i}号艇_選手名", f"選手名_{i}", f"選手{i}_名前",
+                f"艇{i}_氏名", f"{i}号艇_氏名", f"氏名_{i}", f"艇{i}_選手", f"{i}号艇_選手"
+            ]
             p_col = next((c for c in p_col_candidates if c in df_train.columns), None)
             
             if p_col:
@@ -263,9 +266,13 @@ def train_model():
 
     df_train = df_train.dropna(subset=[t for t in targets if t in df_train.columns])
 
+    # 学習データの各数値カラム中央値を計算・保存用辞書へ格納（推論側補完用）
+    feature_medians = {}
     for col in feature_cols:
         if col not in ["レース場", "風向", "天候"] and pd.api.types.is_numeric_dtype(df_train[col]):
-            df_train[col] = df_train[col].fillna(df_train[col].median())
+            median_val = df_train[col].median()
+            feature_medians[col] = median_val
+            df_train[col] = df_train[col].fillna(median_val)
 
     print(f"有効な学習レース数: {len(df_train)}行")
     if len(df_train) == 0:
@@ -273,24 +280,6 @@ def train_model():
 
     features = [col for col in feature_cols if col not in ["レースコード", "選手名"]]
     X = df_train[features]
-
-    # --- 🔍 追加：データ検証・デバッグログ出力 ---
-    print("\n" + "="*55)
-    print("📊 【学習前 データ検証ログ】")
-    print(f"1. 入力特徴量データ形状 (行数, 列数): {X.shape}")
-    
-    check_cols = [c for c in X.columns if any(k in c for k in ["展示", "チルト", "体重"])]
-    print(f"2. 展示・チルト・体重関連カラム件数: {len(check_cols)}件")
-    if check_cols:
-        print("   該当カラム一覧:", check_cols)
-        print("\n3. 展示関連データの統計情報 (欠損・補完状況チェック):")
-        print(X[check_cols].describe().T[["count", "mean", "min", "max"]])
-        print("\n4. サンプル値 (先頭3行):")
-        print(X[check_cols].head(3))
-    else:
-        print("⚠️ 警告: 展示タイム・チルト・体重等のカラムが見つかりませんでした。")
-    print("="*55 + "\n")
-    # --------------------------------------------
 
     targets_df = df_train[["res_1着_艇番", "res_2着_艇番", "res_3着_艇番"]].astype(int)
     X_train, X_val, y_train_df, y_val_df = train_test_split(X, targets_df, test_size=0.2, random_state=42)
@@ -326,61 +315,17 @@ def train_model():
         )
         models[f"rank_{i}"] = model
 
-    print("\n--- モデルの検証結果（正解率および3連単的中率） ---")
-    for i, target_col in enumerate(["res_1着_艇番", "res_2着_艇番", "res_3着_艇番"], start=1):
-        y_val = y_val_df[target_col] - 1
-        preds = models[f"rank_{i}"].predict(X_val)
-        pred_labels = np.argmax(preds, axis=1)
-        accuracy = np.mean(pred_labels == y_val) * 100
-        print(f"🔹 {i}着予想の単体正解率: {accuracy:.2f}%")
-
-    print("\n--- 3連単 予測シミュレーション検証 ---")
-    preds_1 = models["rank_1"].predict(X_val)
-    preds_2 = models["rank_2"].predict(X_val)
-    preds_3 = models["rank_3"].predict(X_val)
-
-    act_1 = (y_val_df["res_1着_艇番"] - 1).values
-    act_2 = (y_val_df["res_2着_艇番"] - 1).values
-    act_3 = (y_val_df["res_3着_艇番"] - 1).values
-
-    top1_hits = 0
-    top5_hits = 0
-    total_eval = len(X_val)
-
-    for idx in range(total_eval):
-        p1 = preds_1[idx]
-        p2 = preds_2[idx]
-        p3 = preds_3[idx]
-
-        comb_scores = []
-        for b1, b2, b3 in itertools.permutations(range(6), 3):
-            score = p1[b1] * p2[b2] * p3[b3]
-            comb_scores.append(((b1+1, b2+1, b3+1), score))
-
-        comb_scores.sort(key=lambda x: x[1], reverse=True)
-        top_combos = [comb[0] for comb in comb_scores[:5]]
-
-        actual_combo = (int(act_1[idx]+1), int(act_2[idx]+1), int(act_3[idx]+1))
-
-        if top_combos and actual_combo == top_combos[0]:
-            top1_hits += 1
-        if actual_combo in top_combos:
-            top5_hits += 1
-
-    print(f"🎯 3連単 1番人気予想の的中率: {(top1_hits / total_eval) * 100:.2f}% ({top1_hits}/{total_eval}レース)")
-    print(f"🎯 3連単 上位5点買いの的中率 (Hit率): {(top5_hits / total_eval) * 100:.2f}% ({top5_hits}/{total_eval}レース)")
-
+    # キー名を推論ボット側と完全同一にして保存
     saved_package = {
         "models": models,
-        "features": features,  # 👈 ボット側の予測時に列順と列名を統一するため追加
-        "player_course_stats": None,
-        "venue_wind_kimarite": None,
+        "feature_names": features,
+        "feature_medians": feature_medians,
         "player_fav_kimarite": player_fav_kimarite,
         "player_col": "選手名"
     }
 
     joblib.dump(saved_package, "boatrace_lgb_model.pkl")
-    print("モデルと決まり手集計データを 'boatrace_lgb_model.pkl' に保存しました。")
+    print("モデル、特徴量名、中央値データを 'boatrace_lgb_model.pkl' に正常保存しました。")
 
 if __name__ == "__main__":
     train_model()
