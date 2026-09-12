@@ -118,6 +118,14 @@ def load_and_merge_training_data():
             season = str(row.get("季節", "")).strip()
             season_win_dict[(v_code, season)] = row.to_dict()
 
+    # 会場コードからプレビュー用3文字コードへのマッピング
+    venue_preview_code_map = {
+        "01": "kir", "02": "tod", "03": "edg", "04": "hei", "05": "tam", "06": "ham",
+        "07": "gam", "08": "tkz", "09": "tsu", "10": "mik", "11": "biw", "12": "sum",
+        "13": "ama", "14": "nar", "15": "mar", "16": "koj", "17": "miy", "18": "tok",
+        "19": "shm", "20": "wkm", "21": "ash", "22": "fuk", "23": "ktu", "24": "omr"
+    }
+
     merged_rows = []
     file_cache = {}
 
@@ -147,17 +155,24 @@ def load_and_merge_training_data():
                 sui_path = f"data/previews/sui/{year}/{f'{month:02d}'}/{day}.csv"
                 orig_path = f"data/previews/original_exhibition/{year}/{f'{month:02d}'}/{day}.csv"
                 stt_path = f"data/previews/stt/{year}/{f'{month:02d}'}/{day}.csv"
+                
+                # 会場別の展示タイム・チルト等が含まれるプレビューデータのパスを追加
+                prev_code = venue_preview_code_map.get(venue_code, "")
+                venue_preview_path = f"data/previews/{prev_code}/{year}/{f'{month:02d}'}/{day}.csv" if prev_code else ""
 
                 if race_card_path not in file_cache:
                     file_cache[race_card_path] = load_csv_safely(race_card_path)
                     file_cache[sui_path] = load_csv_safely(sui_path)
                     file_cache[orig_path] = load_csv_safely(orig_path)
                     file_cache[stt_path] = load_csv_safely(stt_path)
+                    if venue_preview_path and venue_preview_path not in file_cache:
+                        file_cache[venue_preview_path] = load_csv_safely(venue_preview_path)
 
                 df_cards = file_cache.get(race_card_path)
                 df_sui = file_cache.get(sui_path)
                 df_orig = file_cache.get(orig_path)
                 df_stt = file_cache.get(stt_path)
+                df_venue_preview = file_cache.get(venue_preview_path) if venue_preview_path else None
 
                 if df_cards is None:
                     continue
@@ -178,12 +193,14 @@ def load_and_merge_training_data():
                 sui_row = get_matched_row(df_sui, r_code) or {}
                 orig_row = get_matched_row(df_orig, r_code) or {}
                 stt_row = get_matched_row(df_stt, r_code) or {}
+                venue_preview_row = get_matched_row(df_venue_preview, r_code) or {}
 
                 combined_row = {}
                 combined_row.update(card_row)
                 combined_row.update(sui_row)
                 combined_row.update(orig_row)
                 combined_row.update(stt_row)
+                combined_row.update(venue_preview_row) # 会場別の展示タイム・チルト等をここで結合
                 
                 c_data = course_win_dict.get((venue_code, race_round), {})
                 for k, v in c_data.items():
@@ -301,7 +318,6 @@ def train_model():
         accuracy = np.mean(pred_labels == y_val) * 100
         print(f"🔹 {i}着予想の単体正解率: {accuracy:.2f}%")
 
-    # 3連単のバックテスト検証ロジック
     print("\n--- 3連単 予測シミュレーション検証 ---")
     preds_1 = models["rank_1"].predict(X_val)
     preds_2 = models["rank_2"].predict(X_val)
