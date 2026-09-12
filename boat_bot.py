@@ -1,4 +1,4 @@
-import asyncio
+Import asyncio
 from datetime import datetime, timezone, timedelta
 import io
 import os
@@ -96,7 +96,6 @@ try:
     if os.path.exists(MODEL_FILENAME):
         loaded_package = joblib.load(MODEL_FILENAME)
         if isinstance(loaded_package, dict):
-            # モデルオブジェクトの展開（train.py の保存キー形式と従来の双方に対応）
             if "model_1st" in loaded_package:
                 models["rank_1"] = loaded_package.get("model_1st")
                 models["rank_2"] = loaded_package.get("model_2nd")
@@ -111,7 +110,6 @@ try:
             if loaded_pair_table and isinstance(loaded_pair_table, dict):
                 kimarite_prob_dict = loaded_pair_table
 
-            # 特徴量リストの取得
             if "feature_names" in loaded_package:
                 expected_features = loaded_package["feature_names"]
             elif "rank_1" in models and hasattr(models["rank_1"], "feature_name"):
@@ -172,7 +170,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     venue_s = str(venue_code).zfill(2)
     month_int = int(month)
 
-    # ゼロ埋めパスと非ゼロ埋めパスの両方で取得を試行
     race_card_p1 = f"data/programs/race_cards/{year}/{month_str}/{day_str_zf}.csv"
     race_card_p2 = f"data/programs/race_cards/{year}/{month_raw}/{day_raw}.csv"
     
@@ -195,7 +192,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     df_stt = fetch_github_csv_with_fallback(stt_p1, stt_p2)
     df_venue_preview = fetch_github_csv_with_fallback(venue_preview_p1, venue_preview_p2) if prev_code else None
 
-    # オリジナル展示データのカラム名を train.py と同じ標準形式へ変換
     if df_orig is not None:
         rename_dict = {}
         for i in range(1, 7):
@@ -217,7 +213,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         if df is None: return None
         for col in df.columns:
             if "レースコード" in col or "code" in col.lower():
-                # 小数点表記（.0）への対応
                 col_vals = df[col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
                 matched = df[col_vals == str(code)]
                 if len(matched) > 0:
@@ -261,7 +256,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
                         combined_row[f"est_season_{k}"] = v
                 break
 
-    # カラム名の相互展開 (艇1_ <-> 1号艇_ <-> _1)
     expanded_row = dict(combined_row)
     for k, v in list(combined_row.items()):
         for b in range(1, 7):
@@ -303,7 +297,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         if col in df_pred.columns:
             df_pred[col] = df_pred[col].astype('category')
 
-    # モデルの期待する特徴量順へ変換
     X_input = df_pred.reindex(columns=expected_features, fill_value=0.0)
     for col in expected_features:
         if col in ["レース場", "風向", "天候"] and col in X_input.columns:
@@ -312,14 +305,10 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     for col in X_input.select_dtypes(include=[np.number]).columns:
         X_input[col] = X_input[col].fillna(0.0)
 
-    # データ診断ログ
     total_feats = len(expected_features)
     zero_cols = X_input.columns[(X_input == 0.0).all()].tolist()
     zero_feats = len(zero_cols)
     valid_feats = total_feats - zero_feats
-
-    print(f"--- [データ診断] レースコード: {target_race_code} ---")
-    print(f"有効特徴量: {valid_feats} / ゼロ埋め: {zero_feats} (全{total_feats}個)")
 
     prob_matrix = {}
     for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"], 1):
@@ -441,46 +430,80 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     return summary_text
 
-# --- Discord UI部分 ---
-class RaceSelect(discord.ui.Select):
-    def __init__(self, venue):
-        self.venue = venue
-        options = [discord.SelectOption(label="⭐ 全レース予想 (1R～12R)", value="all")]
-        for i in range(1, 13):
-            options.append(discord.SelectOption(label=f"💖 {i}レース ({i}R)", value=str(i)))
-        super().__init__(placeholder="分析するレースを選択してください...", min_values=1, max_values=1, options=options)
+# --- Discord UI部分（常時表示・完全独立型） ---
 
-    async def callback(self, interaction: discord.Interaction):
+class InteractiveRaceControlView(discord.ui.View):
+    """選択中の会場を維持したまま、別会場への変更や別レースへの切り替えを常時行えるパネル"""
+    def __init__(self, current_venue: str):
+        super().__init__(timeout=None)
+        self.current_venue = current_venue
+
+        # 1. 会場変更用セレクトボックス
+        venue_select = discord.ui.Select(
+            placeholder=f"🏟️ 現在: {current_venue} (会場変更はこちら)",
+            min_values=1, max_values=1,
+            options=[discord.SelectOption(label=v, description=f"{v} に切り替え", default=(v == current_venue)) for v in VENUES],
+            custom_id="persistent_venue_select_dynamic"
+        )
+        venue_select.callback = self.venue_callback
+        self.add_item(venue_select)
+
+        # 2. 全レース一括予想ボタン
+        all_btn = discord.ui.Button(label="⭐ 全12R一括予想", style=discord.ButtonStyle.primary, custom_id=f"all_r_{current_venue}")
+        all_btn.callback = self.all_callback
+        self.add_item(all_btn)
+
+        # 3. 1R〜12R 個別レース選択ボタン（上段 1〜6R、下段 7〜12R など）
+        for r in range(1, 13):
+            r_btn = discord.ui.Button(label=f"{r}R", style=discord.ButtonStyle.secondary, custom_id=f"race_{current_venue}_{r}")
+            # クロージャ変数のキャプチャ対策としてデフォルト引数を利用
+            r_btn.callback = lambda interaction, r_num=r: self.race_callback(interaction, r_num)
+            self.add_item(r_btn)
+
+    async def venue_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        selected_venue = interaction.data["values"][0]
+        await interaction.followup.send(
+            content=f"🏟️ **{venue}** から **{selected_venue}** に切り替えました。下のボタンからレースを選択してください。",
+            view=InteractiveRaceControlView(selected_venue),
+            ephemeral=True
+        )
+
+    async def all_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        venue = self.current_venue
+        venue_code = VENUE_MAPPING.get(venue, "01")
+        target_date = datetime.now(JST)
+        year = target_date.strftime("%Y")
+        month = target_date.strftime("%m")
+        day_str = target_date.strftime("%Y-%m-%d")
+
+        await interaction.followup.send(content=f"🤖 **{venue}** 全12レースのAI予想・展開解析を開始します...", ephemeral=True)
+        for r_num in range(1, 13):
+            res_text = calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num)
+            if len(res_text) <= 2000:
+                await interaction.followup.send(content=res_text, ephemeral=True)
+            else:
+                for chunk in [res_text[i:i+1900] for i in range(0, len(res_text), 1900)]:
+                    await interaction.followup.send(content=chunk, ephemeral=True)
+            await asyncio.sleep(0.3)
+
+    async def race_callback(self, interaction: discord.Interaction, r_num: int):
         await interaction.response.defer(ephemeral=True)
         try:
-            venue = self.venue
+            venue = self.current_venue
             venue_code = VENUE_MAPPING.get(venue, "01")
-            val = self.values[0]
-
             target_date = datetime.now(JST)
             year = target_date.strftime("%Y")
             month = target_date.strftime("%m")
             day_str = target_date.strftime("%Y-%m-%d")
 
-            if val == "all":
-                await interaction.followup.send(content=f"🤖 **{venue}** 全12レースのAI予想・展開解析を開始します...", ephemeral=True)
-                for r_num in range(1, 13):
-                    res_text = calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num)
-                    if len(res_text) <= 2000:
-                        await interaction.followup.send(content=res_text, ephemeral=True)
-                    else:
-                        for chunk in [res_text[i:i+1900] for i in range(0, len(res_text), 1900)]:
-                            await interaction.followup.send(content=chunk, ephemeral=True)
-                    await asyncio.sleep(0.3)  # Rate Limit対策
+            result_text = calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num)
+            if len(result_text) <= 2000:
+                await interaction.followup.send(content=result_text, ephemeral=True)
             else:
-                r_num = int(val)
-                result_text = calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num)
-                if len(result_text) <= 2000:
-                    await interaction.followup.send(content=result_text, ephemeral=True)
-                else:
-                    for chunk in [result_text[i:i+1900] for i in range(0, len(result_text), 1900)]:
-                        await interaction.followup.send(content=chunk, ephemeral=True)
-
+                for chunk in [result_text[i:i+1900] for i in range(0, len(result_text), 1900)]:
+                    await interaction.followup.send(content=chunk, ephemeral=True)
         except Exception as e:
             tb = traceback.format_exc()
             error_msg = f"⚠️ エラーが発生しました:\n```python\n{tb}\n```"
@@ -488,22 +511,18 @@ class RaceSelect(discord.ui.Select):
                 error_msg = error_msg[:1990] + "\n```"
             await interaction.followup.send(content=error_msg, ephemeral=True)
 
-class RaceSelectView(discord.ui.View):
-    def __init__(self, venue):
-        super().__init__(timeout=None)
-        self.add_item(RaceSelect(venue))
 
 class VenueSelect(discord.ui.Select):
     def __init__(self):
         options = [discord.SelectOption(label=v, description=f"{v} のレースを選択") for v in VENUES]
-        super().__init__(placeholder="会場を選択してください...", min_values=1, max_values=1, options=options, custom_id="persistent_venue_select")
+        super().__init__(placeholder="最初にする会場を選択してください...", min_values=1, max_values=1, options=options, custom_id="persistent_venue_select")
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         venue = self.values[0]
         await interaction.followup.send(
-            content=f"🏟️ **{venue}** が選択されました。続いて、予測・展開を見たいレースを選択してください。",
-            view=RaceSelectView(venue),
+            content=f"🏟️ **{venue}** が選択されました。このメニューからいつでも会場変更やレース選択が可能です！👇",
+            view=InteractiveRaceControlView(venue),
             ephemeral=True
         )
 
@@ -517,6 +536,9 @@ async def on_ready():
     print(f"Logged in as {bot.user.name}")
     try:
         bot.add_view(VenueSelectView())
+        # デフォルト会場（例: 大村など）の永続ビューも登録しておくと安心です
+        for v in VENUES:
+            bot.add_view(InteractiveRaceControlView(v))
     except Exception as e:
         print(f"Error adding view: {e}")
 
@@ -524,7 +546,7 @@ async def on_ready():
 async def setup(ctx):
     await ctx.message.delete()
     await ctx.send(
-        content="🤖 **【AIレース分析・展開メニュー】**\n👇 下のメニューからいつでも会場を選択して予測を実行できます！",
+        content="🤖 **【AIレース分析・展開メニュー】**\n👇 まずは下のメニューから会場を選択してください！",
         view=VenueSelectView()
     )
 
