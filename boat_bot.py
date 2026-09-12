@@ -64,7 +64,6 @@ def fetch_github_csv(file_path):
         res = requests.get(uri, timeout=10)
         print(f"[DEBUG] Status Code for {file_path}: {res.status_code}")
         if res.status_code == 200:
-            # utf-8-sigを指定してBOMを自動削除
             df = pd.read_csv(io.StringIO(res.text), encoding="utf-8-sig", dtype=str)
             df.columns = df.columns.str.strip()
             CSV_CACHE[file_path] = df
@@ -111,10 +110,12 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     race_card_path = f"data/programs/race_cards/{year}/{month}/{day_part}.csv"
     sui_path = f"data/previews/sui/{year}/{month}/{day_part}.csv"
     orig_path = f"data/previews/original_exhibition/{year}/{month}/{day_part}.csv"
+    stt_path = f"data/previews/stt/{year}/{month}/{day_part}.csv" # スタート展示パス追加
     
     df_cards = fetch_github_csv(race_card_path)
     df_sui = fetch_github_csv(sui_path)
     df_orig = fetch_github_csv(orig_path)
+    df_stt = fetch_github_csv(stt_path) # スタート展示データ取得
 
     if df_cards is None:
         return summary_text + f" ⚠️ エラー: 出走表データが取得できませんでした ({race_card_path})。"
@@ -139,11 +140,13 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     sui_row = get_matched_row(df_sui, target_race_code) or {}
     orig_row = get_matched_row(df_orig, target_race_code) or {}
+    stt_row = get_matched_row(df_stt, target_race_code) or {} # スタート展示行取得
 
     combined_row = {}
     combined_row.update(card_row)
     combined_row.update(sui_row)
     combined_row.update(orig_row)
+    combined_row.update(stt_row) # スタート展示データを結合
 
     df_pred = pd.DataFrame([combined_row])
 
@@ -188,7 +191,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     for i in range(6):
         boat_num = i + 1
         
-        # 選手名の取得（完全一致と部分一致の両方に対応）
         name = f"選手{boat_num}"
         for c in [f"艇{boat_num}_選手名", f"{boat_num}号艇_選手名", f"選手{boat_num}_名前"]:
             if c in card_row and pd.notna(card_row[c]):
@@ -203,7 +205,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
                         name = str(val).strip()
                         break
 
-        # 級別の取得（完全一致と部分一致の両方に対応）
         p_class = ""
         for c in [f"艇{boat_num}_級別", f"{boat_num}号艇_級別", f"選手{boat_num}_級別", f"艇{boat_num}_級"]:
             if c in card_row and pd.notna(card_row[c]):
