@@ -240,12 +240,11 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     for col in X_input.select_dtypes(include=[np.number]).columns:
         X_input[col] = X_input[col].fillna(0.0)
 
-    # --- 【検証用】データ状態をメッセージに含める ---
+    # --- 【検証用】データ状態の計算 ---
     total_feats = len(expected_features)
     zero_feats = (X_input == 0.0).sum(axis=1).iloc[0]
     valid_feats = total_feats - zero_feats
-    summary_text += f"\n🔍 [データ診断] 有効特徴量: {valid_feats}個 / ゼロ埋め: {zero_feats}個 (全{total_feats}中)\n"
-    # ----------------------------------------------
+    # ---------------------------------
 
     prob_matrix = {}
     for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"], 1):
@@ -312,9 +311,12 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         tactical_tag = "⚔️ 【混戦・差し手モツレ】 互いの攻防から手堅く潰す展開"
         kimarite = "差し / 差し継ぎ"
 
+    # 診断結果を含めてヘッダーと展開予想を再構築
     summary_text = f"🤖 **{venue}** {r_num}RのAIレース分析・局面予想 ({day_str})\n" \
                    f"\n--- 【展開予想】 ---\n{tactical_tag}\n" \
-                   f"🎯 **推奨決まり手**: {kimarite}\n" + summary_text[summary_text.find("--- 【各艇の着順"): ]
+                   f"🎯 **推奨決まり手**: {kimarite}\n" \
+                   f"\n🔍 [データ診断] 有効特徴量: {valid_feats}個 / ゼロ埋め: {zero_feats}個 (全{total_feats}中)\n" + \
+                   summary_text[summary_text.find("--- 【各艇の着順"): ]
 
     summary_text += f"\n--- 【3連単 予想買い目 (上位5点)】 ---\n"
     trifecta_scores = []
@@ -419,34 +421,5 @@ class VenueSelect(discord.ui.Select):
         await interaction.response.defer(ephemeral=True)
         venue = self.values[0]
         await interaction.followup.send(
-            content=f"🏟️ **{venue}** が選択されました。続いて、予測・展開を見たいレースを選択してください。",
-            view=RaceSelectView(venue),
-            ephemeral=True
-        )
-
-class VenueSelectView(discord.ui.View):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs, timeout=None)
-        self.add_item(VenueSelect())
-
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user.name}")
-    try:
-        bot.add_view(VenueSelectView())
-    except Exception as e:
-        print(f"Error adding view: {e}")
-
-@bot.command(name="setup")
-async def setup(ctx):
-    await ctx.message.delete()
-    await ctx.send(
-        content="🤖 **【AIレース分析・展開メニュー】**\n👇 下のメニューからいつでも会場を選択して予測を実行できます！",
-        view=VenueSelectView()
-    )
-
-if __name__ == "__main__":
-    keep_alive()
-    token = os.environ.get("DISCORD_TOKEN")
-    bot.run(token)
+            content=f"🏟️
 
