@@ -230,7 +230,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         boat_data.append({"boat": boat_num, "name": name, "class": p_class, "p1": p1, "p2": p2, "p3": p3})
         
         class_str = f" ({p_class})" if p_class else ""
-        summary_text += f"• **{boat_num}号艇** {name}{class_str} -> 1着: **{p1:.1f}%** | 2着: **{p2:.1f}%**\n"
+        summary_text += f"・{boat_num}号艇 {name}{class_str} -> 1着: {p1:.1f}% | 2着: {p2:.1f}% | 3着: {p3:.1f}%\n"
 
     if not boat_data:
         return summary_text + " ⚠️ エラー: 艇データが取得できませんでした。"
