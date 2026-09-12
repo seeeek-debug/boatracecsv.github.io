@@ -88,7 +88,6 @@ try:
     if isinstance(loaded_package, dict):
         models = loaded_package.get("models")
         player_fav_kimarite = loaded_package.get("player_fav_kimarite")
-        # パッケージ内に pair_table があれば活用
         loaded_pair_table = loaded_package.get("pair_table")
         if loaded_pair_table and isinstance(loaded_pair_table, dict):
             kimarite_prob_dict = loaded_pair_table
@@ -104,7 +103,6 @@ except Exception as e:
     models = None
     print(f"モデルの読み込みに失敗しました: {e}")
 
-# パッケージに pair_table が無い場合、GitHubから pair_table.csv を取得して辞書化する
 def load_kimarite_table_from_github():
     global kimarite_prob_dict
     if kimarite_prob_dict:
@@ -122,7 +120,6 @@ def load_kimarite_table_from_github():
         except Exception as e:
             print(f"pair_table.csv のパースに失敗しました: {e}")
 
-# 起動時にペアテーブルをロード
 load_kimarite_table_from_github()
 
 def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num):
@@ -304,8 +301,13 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
             b2 = c2_idx + 1
             b3 = c3_idx + 1
             
-            # ① AIモデルによる基礎スコア（1・2・3着確率の積）
-            ai_score = float(m1[c1_idx]) * float(m2[c2_idx]) * float(m3[c3_idx])
+            # AI予測確率の取得
+            p1 = float(m1[c1_idx])
+            p2 = float(m2[c2_idx])
+            p3 = float(m3[c3_idx])
+            
+            # ① AI予測の自信度（べき乗でメリハリを強調）
+            ai_base_score = (p1 ** 1.8) * (p2 ** 1.3) * (p3 ** 1.0)
             
             # ② 決まり手別の条件付き確率をルックアップ
             c1_course = entry_courses[b1]
@@ -314,10 +316,10 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
             
             primary_kimarite = default_kimarite_map.get(b1, "差し")
             k_key = f"{primary_kimarite}_{c1_course}"
-            pair_prob = kimarite_prob_dict.get((k_key, c2_course, c3_course), 0.0001)
+            pair_prob = kimarite_prob_dict.get((k_key, c2_course, c3_course), 0.01)
             
-            # ③ AI予測スコアと決まり手別確率をハイブリッドでブレンド（AI 60% : 決まり手テーブル 40%）
-            final_score = (ai_score ** 0.6) * (max(pair_prob, 0.0001) ** 0.4)
+            # ③ AIを主軸にしつつ、決まり手確率を係数として組み合わせる
+            final_score = ai_base_score * (max(pair_prob, 0.001) ** 0.3)
             
             trifecta_scores.append(((b1, b2, b3), final_score))
             
@@ -395,8 +397,8 @@ class VenueSelect(discord.ui.Select):
         )
 
 class VenueSelectView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs, timeout=None)
         self.add_item(VenueSelect())
 
 @bot.event
