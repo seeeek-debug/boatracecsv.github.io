@@ -10,7 +10,7 @@ from datetime import datetime
 def load_csv_safely(path):
     if os.path.exists(path):
         try:
-            df = pd.read_csv(path, dtype=str)
+            df = pd.read_csv(path, dtype=str, encoding="utf-8-sig")
             df.columns = df.columns.str.strip()
             return df
         except Exception:
@@ -92,7 +92,7 @@ def build_player_kimarite_stats():
     return player_stats
 
 def load_and_merge_training_data():
-    print("横持ちファイルの読み込みと結合を開始します...")
+    print("横持ちファイルの読み込みと結合を開始します（出走表・水面気象・オリジナル展示・スタート展示）...")
     
     result_files = glob.glob("data/results/**/*.csv", recursive=True)
     if not result_files:
@@ -105,7 +105,7 @@ def load_and_merge_training_data():
 
     for res_file in target_files:
         try:
-            df_res = pd.read_csv(res_file, dtype=str)
+            df_res = pd.read_csv(res_file, dtype=str, encoding="utf-8-sig")
             df_res.columns = df_res.columns.str.strip()
             
             for _, res_row in df_res.iterrows():
@@ -120,15 +120,18 @@ def load_and_merge_training_data():
                 race_card_path = f"data/programs/race_cards/{year}/{month}/{day}.csv"
                 sui_path = f"data/previews/sui/{year}/{month}/{day}.csv"
                 orig_path = f"data/previews/original_exhibition/{year}/{month}/{day}.csv"
+                stt_path = f"data/previews/stt/{year}/{month}/{day}.csv" # スタート展示パス追加
 
                 if race_card_path not in file_cache:
                     file_cache[race_card_path] = load_csv_safely(race_card_path)
                     file_cache[sui_path] = load_csv_safely(sui_path)
                     file_cache[orig_path] = load_csv_safely(orig_path)
+                    file_cache[stt_path] = load_csv_safely(stt_path) # スタート展示キャッシュ追加
 
                 df_cards = file_cache.get(race_card_path)
                 df_sui = file_cache.get(sui_path)
                 df_orig = file_cache.get(orig_path)
+                df_stt = file_cache.get(stt_path) # スタート展示取得
 
                 if df_cards is None:
                     continue
@@ -148,11 +151,13 @@ def load_and_merge_training_data():
 
                 sui_row = get_matched_row(df_sui, r_code) or {}
                 orig_row = get_matched_row(df_orig, r_code) or {}
+                stt_row = get_matched_row(df_stt, r_code) or {} # スタート展示行取得
 
                 combined_row = {}
                 combined_row.update(card_row)
                 combined_row.update(sui_row)
                 combined_row.update(orig_row)
+                combined_row.update(stt_row) # スタート展示データを結合
                 
                 for k, v in res_row.items():
                     combined_row[f"res_{k}"] = v
@@ -195,7 +200,6 @@ def train_model():
         if col not in ["レース場", "風向", "天候"]:
             df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
 
-    # 文字列のまま残るレース場・風向・天候をLightGBM用のカテゴリ型に変換
     for col in ["レース場", "風向", "天候"]:
         if col in df_train.columns:
             df_train[col] = df_train[col].astype('category')
