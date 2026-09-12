@@ -75,13 +75,12 @@ def fetch_github_csv(file_path):
         print(f"CSV Fetch Error ({file_path}): {e}")
     return None
 
-# --- モデルおよび統計テーブルの読み込み ---
+# --- モデルおよび決まり手確率テーブルの読み込み ---
 MODEL_FILENAME = "boatrace_lgb_model.pkl"
 loaded_package = None
 models = None
 player_fav_kimarite = None
 kimarite_prob_dict = {}
-trifecta_prob_dict = {}
 expected_features = []
 
 try:
@@ -89,6 +88,10 @@ try:
     if isinstance(loaded_package, dict):
         models = loaded_package.get("models")
         player_fav_kimarite = loaded_package.get("player_fav_kimarite")
+        # パッケージ内に pair_table があれば活用
+        loaded_pair_table = loaded_package.get("pair_table")
+        if loaded_pair_table and isinstance(loaded_pair_table, dict):
+            kimarite_prob_dict = loaded_pair_table
         print("パッケージ形式でモデルと決まり手データを読み込みました。")
     else:
         models = loaded_package
@@ -101,9 +104,11 @@ except Exception as e:
     models = None
     print(f"モデルの読み込みに失敗しました: {e}")
 
-# 1. 決まり手別確率テーブル (pair_table.csv) のロード
-def load_kimarite_table():
+# パッケージに pair_table が無い場合、GitHubから pair_table.csv を取得して辞書化する
+def load_kimarite_table_from_github():
     global kimarite_prob_dict
+    if kimarite_prob_dict:
+        return
     df_pair = fetch_github_csv("pair_table.csv")
     if df_pair is not None:
         try:
@@ -113,29 +118,12 @@ def load_kimarite_table():
                 c3 = int(row['3着コース'])
                 prob = float(row['確率'])
                 kimarite_prob_dict[(k_type, c2, c3)] = prob
-            print(f"pair_table.csv から {len(kimarite_prob_dict)} 件の確率を読み込みました。")
+            print(f"pair_table.csv から {len(kimarite_prob_dict)} 件の条件付き確率を読み込みました。")
         except Exception as e:
             print(f"pair_table.csv のパースに失敗しました: {e}")
 
-# 2. 全体の出目確率テーブル (notebooks/tenkai_trifecta_prob_sample.csv) のロード
-def load_trifecta_table():
-    global trifecta_prob_dict
-    df_tri = fetch_github_csv("notebooks/tenkai_trifecta_prob_sample.csv")
-    if df_tri is not None:
-        try:
-            for _, row in df_tri.iterrows():
-                c1 = int(row['c1'])
-                c2 = int(row['c2'])
-                c3 = int(row['c3'])
-                p = float(row['P'])
-                trifecta_prob_dict[(c1, c2, c3)] = p
-            print(f"tenkai_trifecta_prob_sample.csv から {len(trifecta_prob_dict)} 件の出目確率を読み込みました。")
-        except Exception as e:
-            print(f"tenkai_trifecta_prob_sample.csv のパースに失敗しました: {e}")
-
-# 起動時に両方の統計テーブルをロード
-load_kimarite_table()
-load_trifecta_table()
+# 起動時にペアテーブルをロード
+load_kimarite_table_from_github()
 
 def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num):
     summary_text = f"🤖 **{venue}** {r_num}RのAIレース分析・局面予想 ({day_str})\n"
@@ -316,26 +304,20 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
             b2 = c2_idx + 1
             b3 = c3_idx + 1
             
-            # ① AIモデルによる予測スコア
+            # ① AIモデルによる基礎スコア（1・2・3着確率の積）
             ai_score = float(m1[c1_idx]) * float(m2[c2_idx]) * float(m3[c3_idx])
             
-            # ② 決まり手別の条件付き確率
+            # ② 決まり手別の条件付き確率をルックアップ
             c1_course = entry_courses[b1]
             c2_course = entry_courses[b2]
             c3_course = entry_courses[b3]
+            
             primary_kimarite = default_kimarite_map.get(b1, "差し")
             k_key = f"{primary_kimarite}_{c1_course}"
             pair_prob = kimarite_prob_dict.get((k_key, c2_course, c3_course), 0.0001)
             
-            # ③ 全体の出目確率 (tenkai_trifecta_prob_sample.csv)
-            base_prob = trifecta_prob_dict.get((b1, b2, b3), 0.0001)
-            
-            # ④ 3つの要素をブレンド (AI 50% : 決まり手テーブル 30% : 全体出目ベース 20%)
-            final_score = (
-                (ai_score ** 0.5) * 
-                (max(pair_prob, 0.0001) ** 0.3) * 
-                (max(base_prob, 0.0001) ** 0.2)
-            )
+            # ③ AI予測スコアと決まり手別確率をハイブリッドでブレンド（AI 60% : 決まり手テーブル 40%）
+            final_score = (ai_score ** 0.6) * (max(pair_prob, 0.0001) ** 0.4)
             
             trifecta_scores.append(((b1, b2, b3), final_score))
             
