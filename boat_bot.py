@@ -49,7 +49,6 @@ VENUE_MAPPING = {
     "下関": "19", "若松": "20", "芦屋": "21", "福岡": "22", "唐津": "23", "大村": "24"
 }
 
-# 会場コードからプレビュー用3文字コードへのマッピング（学習用と共通）
 VENUE_PREVIEW_CODE_MAP = {
     "01": "kir", "02": "tod", "03": "edg", "04": "hei", "05": "tam", "06": "ham",
     "07": "gam", "08": "tkz", "09": "tsu", "10": "mik", "11": "biw", "12": "sum",
@@ -67,23 +66,18 @@ def fetch_github_csv(file_path):
     if file_path in CSV_CACHE:
         return CSV_CACHE[file_path]
     uri = f"{GITHUB_RAW_BASE}{file_path}"
-    print(f"[DEBUG] Fetching CSV: {uri}")
     try:
         res = requests.get(uri, timeout=10)
-        print(f"[DEBUG] Status Code for {file_path}: {res.status_code}")
         if res.status_code == 200:
             df = pd.read_csv(io.StringIO(res.text), encoding="utf-8-sig", dtype=str)
             df.columns = df.columns.str.strip()
             CSV_CACHE[file_path] = df
-            print(f"[DEBUG] Success loading {file_path}, rows: {len(df)}")
             return df
-        else:
-            print(f"[DEBUG] Failed to fetch {file_path} (Status: {res.status_code})")
     except Exception as e:
         print(f"CSV Fetch Error ({file_path}): {e}")
     return None
 
-# --- モデルおよび決まり手確率テーブルの読み込み ---
+# --- モデルおよびデータの読み込み ---
 MODEL_FILENAME = "boatrace_lgb_model.pkl"
 loaded_package = None
 models = None
@@ -99,7 +93,7 @@ try:
         loaded_pair_table = loaded_package.get("pair_table")
         if loaded_pair_table and isinstance(loaded_pair_table, dict):
             kimarite_prob_dict = loaded_pair_table
-        print("パッケージ形式でモデルと決まり手データを読み込みました。")
+        print("パッケージ形式でモデルとデータを読み込みました。")
     else:
         models = loaded_package
         print("モデル単体として読み込みました。")
@@ -124,11 +118,16 @@ def load_kimarite_table_from_github():
                 c3 = int(row['3着コース'])
                 prob = float(row['確率'])
                 kimarite_prob_dict[(k_type, c2, c3)] = prob
-            print(f"pair_table.csv から {len(kimarite_prob_dict)} 件の条件付き確率を読み込みました。")
         except Exception as e:
-            print(f"pair_table.csv のパースに失敗しました: {e}")
+            print(f"pair_table.csv パースエラー: {e}")
 
 load_kimarite_table_from_github()
+
+def get_season(m):
+    if m in [3, 4, 5]: return "春"
+    elif m in [6, 7, 8]: return "夏"
+    elif m in [9, 10, 11]: return "秋"
+    else: return "冬"
 
 def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num):
     summary_text = f"🤖 **{venue}** {r_num}RのAIレース分析・局面予想 ({day_str})\n"
@@ -138,13 +137,14 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     day_part = day_str.split("-")[2] if "-" in day_str else day_str
     venue_s = str(venue_code).zfill(2)
+    month_int = int(month)
     
+    # 各種ファイルのパス構築
     race_card_path = f"data/programs/race_cards/{year}/{month}/{day_part}.csv"
     sui_path = f"data/previews/sui/{year}/{month}/{day_part}.csv"
     orig_path = f"data/previews/original_exhibition/{year}/{month}/{day_part}.csv"
     stt_path = f"data/previews/stt/{year}/{month}/{day_part}.csv"
     
-    # 会場別の展示タイム・チルト等が含まれるプレビューデータのパスを追加
     prev_code = VENUE_PREVIEW_CODE_MAP.get(venue_s, "")
     venue_preview_path = f"data/previews/{prev_code}/{year}/{month}/{day_part}.csv" if prev_code else ""
 
@@ -154,12 +154,15 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     df_stt = fetch_github_csv(stt_path)
     df_venue_preview = fetch_github_csv(venue_preview_path) if venue_preview_path else None
 
+    # スタジアム別集計データの取得
+    df_course_win = fetch_github_csv("data/estimate/stadium/course_win_rate.csv")
+    df_season_win = fetch_github_csv("data/estimate/stadium/win_rate.csv")
+
     if df_cards is None:
         return summary_text + f" ⚠️ エラー: 出走表データが取得できませんでした ({race_card_path})。"
 
     r_str = str(r_num).zfill(2)
     target_race_code = f"{year}{month}{day_part}{venue_s}{r_str}"
-    print(f"[DEBUG] Target Race Code: {target_race_code}")
 
     def get_matched_row(df, code):
         if df is None: return None
@@ -184,10 +187,34 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     combined_row.update(sui_row)
     combined_row.update(orig_row)
     combined_row.update(stt_row)
-    combined_row.update(venue_preview_row) # 会場別の展示タイム・チルト等をここで結合
+    combined_row.update(venue_preview_row)
+
+    # コース別勝率データの結合
+    if df_course_win is not None:
+        for _, row in df_course_win.iterrows():
+            v_code = str(row.get("場コード", "")).strip().zfill(2)
+            r_num_str = str(row.get("レース回", "")).strip()
+            if v_code == venue_s and r_num_str == str(int(r_num)):
+                for k, v in row.items():
+                    if k not in ["場コード", "レース回"]:
+                        combined_row[f"est_course_{k}"] = v
+                break
+
+    # 季節別勝率データの結合
+    if df_season_win is not None:
+        season_name = get_season(month_int)
+        for _, row in df_season_win.iterrows():
+            v_code = str(row.get("場コード", "")).strip().zfill(2)
+            season = str(row.get("季節", "")).strip()
+            if v_code == venue_s and season == season_name:
+                for k, v in row.items():
+                    if k not in ["場コード", "季節"]:
+                        combined_row[f"est_season_{k}"] = v
+                break
 
     df_pred = pd.DataFrame([combined_row])
 
+    # 選手ごとの得意決まり手付与
     if player_fav_kimarite:
         for i in range(1, 7):
             p_col_candidates = [f"艇{i}_選手名", f"{i}号艇_選手名", f"選手名_{i}", f"選手{i}_名前"]
@@ -210,10 +237,14 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         if col in df_pred.columns:
             df_pred[col] = df_pred[col].astype('category')
 
+    # 学習時の特徴量構成に完全同期（不足分は0.0で補完、余分なものはカット）
     X_input = df_pred.reindex(columns=expected_features, fill_value=0.0)
     for col in expected_features:
         if col in ["レース場", "風向", "天候"] and col in X_input.columns:
             X_input[col] = X_input[col].astype('category')
+
+    # 欠損値の穴埋め
+    X_input = X_input.fillna(0.0)
 
     prob_matrix = {}
     for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"], 1):
@@ -236,12 +267,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
                 if val and val != "nan":
                     name = val
                     break
-        if name == f"選手{boat_num}":
-            for col, val in card_row.items():
-                if f"艇{boat_num}" in col and ("選手名" in col or "名前" in col):
-                    if pd.notna(val) and str(val).strip() and str(val).strip() != "nan":
-                        name = str(val).strip()
-                        break
 
         p_class = ""
         for c in [f"艇{boat_num}_級別", f"{boat_num}号艇_級別", f"選手{boat_num}_級別", f"艇{boat_num}_級"]:
@@ -250,12 +275,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
                 if val and val != "nan":
                     p_class = val
                     break
-        if not p_class:
-            for col, val in card_row.items():
-                if f"艇{boat_num}" in col and "級" in col:
-                    if pd.notna(val) and str(val).strip() and str(val).strip() != "nan":
-                        p_class = str(val).strip()
-                        break
         
         arr_1 = prob_matrix.get(1, np.zeros(6))
         arr_2 = prob_matrix.get(2, np.zeros(6))
@@ -303,12 +322,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         
         entry_courses = {i+1: i+1 for i in range(6)}
         default_kimarite_map = {
-            1: "逃げ",
-            2: "差し",
-            3: "まくり",
-            4: "まくり",
-            5: "まくり差し",
-            6: "差し"
+            1: "逃げ", 2: "差し", 3: "まくり", 4: "まくり", 5: "まくり差し", 6: "差し"
         }
 
         for c1_idx, c2_idx, c3_idx in itertools.permutations(range(6), 3):
@@ -331,7 +345,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
             pair_prob = kimarite_prob_dict.get((k_key, c2_course, c3_course), 0.01)
             
             final_score = ai_base_score * (max(pair_prob, 0.001) ** 0.3)
-            
             trifecta_scores.append(((b1, b2, b3), final_score))
             
         trifecta_scores.sort(key=lambda x: x[1], reverse=True)
