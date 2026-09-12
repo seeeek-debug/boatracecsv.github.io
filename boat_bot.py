@@ -75,11 +75,13 @@ def fetch_github_csv(file_path):
         print(f"CSV Fetch Error ({file_path}): {e}")
     return None
 
-# --- モデルの読み込み ---
+# --- モデルおよび統計テーブルの読み込み ---
 MODEL_FILENAME = "boatrace_lgb_model.pkl"
 loaded_package = None
 models = None
 player_fav_kimarite = None
+kimarite_prob_dict = {}
+trifecta_prob_dict = {}
 expected_features = []
 
 try:
@@ -99,6 +101,42 @@ except Exception as e:
     models = None
     print(f"モデルの読み込みに失敗しました: {e}")
 
+# 1. 決まり手別確率テーブル (pair_table.csv) のロード
+def load_kimarite_table():
+    global kimarite_prob_dict
+    df_pair = fetch_github_csv("pair_table.csv")
+    if df_pair is not None:
+        try:
+            for _, row in df_pair.iterrows():
+                k_type = str(row['セル']).strip()
+                c2 = int(row['2着コース'])
+                c3 = int(row['3着コース'])
+                prob = float(row['確率'])
+                kimarite_prob_dict[(k_type, c2, c3)] = prob
+            print(f"pair_table.csv から {len(kimarite_prob_dict)} 件の確率を読み込みました。")
+        except Exception as e:
+            print(f"pair_table.csv のパースに失敗しました: {e}")
+
+# 2. 全体の出目確率テーブル (notebooks/tenkai_trifecta_prob_sample.csv) のロード
+def load_trifecta_table():
+    global trifecta_prob_dict
+    df_tri = fetch_github_csv("notebooks/tenkai_trifecta_prob_sample.csv")
+    if df_tri is not None:
+        try:
+            for _, row in df_tri.iterrows():
+                c1 = int(row['c1'])
+                c2 = int(row['c2'])
+                c3 = int(row['c3'])
+                p = float(row['P'])
+                trifecta_prob_dict[(c1, c2, c3)] = p
+            print(f"tenkai_trifecta_prob_sample.csv から {len(trifecta_prob_dict)} 件の出目確率を読み込みました。")
+        except Exception as e:
+            print(f"tenkai_trifecta_prob_sample.csv のパースに失敗しました: {e}")
+
+# 起動時に両方の統計テーブルをロード
+load_kimarite_table()
+load_trifecta_table()
+
 def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num):
     summary_text = f"🤖 **{venue}** {r_num}RのAIレース分析・局面予想 ({day_str})\n"
 
@@ -110,12 +148,12 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     race_card_path = f"data/programs/race_cards/{year}/{month}/{day_part}.csv"
     sui_path = f"data/previews/sui/{year}/{month}/{day_part}.csv"
     orig_path = f"data/previews/original_exhibition/{year}/{month}/{day_part}.csv"
-    stt_path = f"data/previews/stt/{year}/{month}/{day_part}.csv" # スタート展示パス追加
+    stt_path = f"data/previews/stt/{year}/{month}/{day_part}.csv"
     
     df_cards = fetch_github_csv(race_card_path)
     df_sui = fetch_github_csv(sui_path)
     df_orig = fetch_github_csv(orig_path)
-    df_stt = fetch_github_csv(stt_path) # スタート展示データ取得
+    df_stt = fetch_github_csv(stt_path)
 
     if df_cards is None:
         return summary_text + f" ⚠️ エラー: 出走表データが取得できませんでした ({race_card_path})。"
@@ -140,13 +178,13 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     sui_row = get_matched_row(df_sui, target_race_code) or {}
     orig_row = get_matched_row(df_orig, target_race_code) or {}
-    stt_row = get_matched_row(df_stt, target_race_code) or {} # スタート展示行取得
+    stt_row = get_matched_row(df_stt, target_race_code) or {}
 
     combined_row = {}
     combined_row.update(card_row)
     combined_row.update(sui_row)
     combined_row.update(orig_row)
-    combined_row.update(stt_row) # スタート展示データを結合
+    combined_row.update(stt_row)
 
     df_pred = pd.DataFrame([combined_row])
 
@@ -262,9 +300,45 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     trifecta_scores = []
     if 1 in prob_matrix and 2 in prob_matrix and 3 in prob_matrix:
         m1, m2, m3 = prob_matrix[1], prob_matrix[2], prob_matrix[3]
-        for c1, c2, c3 in itertools.permutations(range(6), 3):
-            score = float(m1[c1]) * float(m2[c2]) * float(m3[c3])
-            trifecta_scores.append(((c1+1, c2+1, c3+1), score))
+        
+        entry_courses = {i+1: i+1 for i in range(6)}
+        default_kimarite_map = {
+            1: "逃げ",
+            2: "差し",
+            3: "まくり",
+            4: "まくり",
+            5: "まくり差し",
+            6: "差し"
+        }
+
+        for c1_idx, c2_idx, c3_idx in itertools.permutations(range(6), 3):
+            b1 = c1_idx + 1
+            b2 = c2_idx + 1
+            b3 = c3_idx + 1
+            
+            # ① AIモデルによる予測スコア
+            ai_score = float(m1[c1_idx]) * float(m2[c2_idx]) * float(m3[c3_idx])
+            
+            # ② 決まり手別の条件付き確率
+            c1_course = entry_courses[b1]
+            c2_course = entry_courses[b2]
+            c3_course = entry_courses[b3]
+            primary_kimarite = default_kimarite_map.get(b1, "差し")
+            k_key = f"{primary_kimarite}_{c1_course}"
+            pair_prob = kimarite_prob_dict.get((k_key, c2_course, c3_course), 0.0001)
+            
+            # ③ 全体の出目確率 (tenkai_trifecta_prob_sample.csv)
+            base_prob = trifecta_prob_dict.get((b1, b2, b3), 0.0001)
+            
+            # ④ 3つの要素をブレンド (AI 50% : 決まり手テーブル 30% : 全体出目ベース 20%)
+            final_score = (
+                (ai_score ** 0.5) * 
+                (max(pair_prob, 0.0001) ** 0.3) * 
+                (max(base_prob, 0.0001) ** 0.2)
+            )
+            
+            trifecta_scores.append(((b1, b2, b3), final_score))
+            
         trifecta_scores.sort(key=lambda x: x[1], reverse=True)
 
         for rank, (combo, score) in enumerate(trifecta_scores[:5], 1):
