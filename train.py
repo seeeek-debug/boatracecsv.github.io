@@ -118,7 +118,6 @@ def load_and_merge_training_data():
             season = str(row.get("季節", "")).strip()
             season_win_dict[(v_code, season)] = row.to_dict()
 
-    # 会場コードからプレビュー用3文字コードへのマッピング
     venue_preview_code_map = {
         "01": "kir", "02": "tod", "03": "edg", "04": "hei", "05": "tam", "06": "ham",
         "07": "gam", "08": "tkz", "09": "tsu", "10": "mik", "11": "biw", "12": "sum",
@@ -156,7 +155,6 @@ def load_and_merge_training_data():
                 orig_path = f"data/previews/original_exhibition/{year}/{f'{month:02d}'}/{day}.csv"
                 stt_path = f"data/previews/stt/{year}/{f'{month:02d}'}/{day}.csv"
                 
-                # 会場別の展示タイム・チルト等が含まれるプレビューデータのパスを追加
                 prev_code = venue_preview_code_map.get(venue_code, "")
                 venue_preview_path = f"data/previews/{prev_code}/{year}/{f'{month:02d}'}/{day}.csv" if prev_code else ""
 
@@ -200,7 +198,7 @@ def load_and_merge_training_data():
                 combined_row.update(sui_row)
                 combined_row.update(orig_row)
                 combined_row.update(stt_row)
-                combined_row.update(venue_preview_row) # 会場別の展示タイム・チルト等をここで結合
+                combined_row.update(venue_preview_row)
                 
                 c_data = course_win_dict.get((venue_code, race_round), {})
                 for k, v in c_data.items():
@@ -275,7 +273,25 @@ def train_model():
 
     features = [col for col in feature_cols if col not in ["レースコード", "選手名"]]
     X = df_train[features]
+
+    # --- 🔍 追加：データ検証・デバッグログ出力 ---
+    print("\n" + "="*55)
+    print("📊 【学習前 データ検証ログ】")
+    print(f"1. 入力特徴量データ形状 (行数, 列数): {X.shape}")
     
+    check_cols = [c for c in X.columns if any(k in c for k in ["展示", "チルト", "体重"])]
+    print(f"2. 展示・チルト・体重関連カラム件数: {len(check_cols)}件")
+    if check_cols:
+        print("   該当カラム一覧:", check_cols)
+        print("\n3. 展示関連データの統計情報 (欠損・補完状況チェック):")
+        print(X[check_cols].describe().T[["count", "mean", "min", "max"]])
+        print("\n4. サンプル値 (先頭3行):")
+        print(X[check_cols].head(3))
+    else:
+        print("⚠️ 警告: 展示タイム・チルト・体重等のカラムが見つかりませんでした。")
+    print("="*55 + "\n")
+    # --------------------------------------------
+
     targets_df = df_train[["res_1着_艇番", "res_2着_艇番", "res_3着_艇番"]].astype(int)
     X_train, X_val, y_train_df, y_val_df = train_test_split(X, targets_df, test_size=0.2, random_state=42)
 
@@ -356,6 +372,7 @@ def train_model():
 
     saved_package = {
         "models": models,
+        "features": features,  # 👈 ボット側の予測時に列順と列名を統一するため追加
         "player_course_stats": None,
         "venue_wind_kimarite": None,
         "player_fav_kimarite": player_fav_kimarite,
