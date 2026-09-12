@@ -17,9 +17,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pandas numpy requests joblib
+          pip install pandas numpy requests joblib lightgbm scikit-learn
 
       - name: Run Backtest Script
         run: |
           python backtest_0912.py
-
