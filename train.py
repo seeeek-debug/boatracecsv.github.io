@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import lightgbm as lgb
 from sklearn.model_selection import train_test_split
+from sklearn.utils.class_weight import compute_sample_weight
 import joblib
 from datetime import datetime
 
@@ -92,7 +93,7 @@ def build_player_kimarite_stats():
     return player_stats
 
 def load_and_merge_training_data():
-    print("横持ちファイルの読み込みと結合を開始します（出走表・水面気象・オリジナル展示・スタート展示）...")
+    print("横持ちファイルの読み込みと結合を開始します（出走表・水面気象・オリジナル展示・スタート展示・推定勝率）...")
     
     result_files = glob.glob("data/results/**/*.csv", recursive=True)
     if not result_files:
@@ -100,8 +101,32 @@ def load_and_merge_training_data():
 
     target_files = get_target_files(result_files)
 
+    # 推定統計データの事前ロードと辞書化
+    df_course_win = load_csv_safely("data/estimate/stadium/course_win_rate.csv")
+    df_season_win = load_csv_safely("data/estimate/stadium/win_rate.csv")
+    
+    course_win_dict = {}
+    if df_course_win is not None:
+        for _, row in df_course_win.iterrows():
+            v_code = str(row.get("場コード", "")).strip().zfill(2)
+            r_num = str(row.get("レース回", "")).strip()
+            course_win_dict[(v_code, r_num)] = row.to_dict()
+
+    season_win_dict = {}
+    if df_season_win is not None:
+        for _, row in df_season_win.iterrows():
+            v_code = str(row.get("場コード", "")).strip().zfill(2)
+            season = str(row.get("季節", "")).strip()
+            season_win_dict[(v_code, season)] = row.to_dict()
+
     merged_rows = []
     file_cache = {}
+
+    def get_season(m):
+        if m in [3, 4, 5]: return "春"
+        elif m in [6, 7, 8]: return "夏"
+        elif m in [9, 10, 11]: return "秋"
+        else: return "冬"
 
     for res_file in target_files:
         try:
@@ -114,24 +139,26 @@ def load_and_merge_training_data():
                     continue
                 
                 year = r_code[0:4]
-                month = r_code[4:6]
+                month = int(r_code[4:6])
                 day = r_code[6:8]
+                venue_code = r_code[8:10]
+                race_round = str(int(r_code[10:12])) # 例: "01" -> "1"
 
-                race_card_path = f"data/programs/race_cards/{year}/{month}/{day}.csv"
-                sui_path = f"data/previews/sui/{year}/{month}/{day}.csv"
-                orig_path = f"data/previews/original_exhibition/{year}/{month}/{day}.csv"
-                stt_path = f"data/previews/stt/{year}/{month}/{day}.csv" # スタート展示パス追加
+                race_card_path = f"data/programs/race_cards/{year}/{f'{month:02d}'}/{day}.csv"
+                sui_path = f"data/previews/sui/{year}/{f'{month:02d}'}/{day}.csv"
+                orig_path = f"data/previews/original_exhibition/{year}/{f'{month:02d}'}/{day}.csv"
+                stt_path = f"data/previews/stt/{year}/{f'{month:02d}'}/{day}.csv"
 
                 if race_card_path not in file_cache:
                     file_cache[race_card_path] = load_csv_safely(race_card_path)
                     file_cache[sui_path] = load_csv_safely(sui_path)
                     file_cache[orig_path] = load_csv_safely(orig_path)
-                    file_cache[stt_path] = load_csv_safely(stt_path) # スタート展示キャッシュ追加
+                    file_cache[stt_path] = load_csv_safely(stt_path)
 
                 df_cards = file_cache.get(race_card_path)
                 df_sui = file_cache.get(sui_path)
                 df_orig = file_cache.get(orig_path)
-                df_stt = file_cache.get(stt_path) # スタート展示取得
+                df_stt = file_cache.get(stt_path)
 
                 if df_cards is None:
                     continue
@@ -151,14 +178,27 @@ def load_and_merge_training_data():
 
                 sui_row = get_matched_row(df_sui, r_code) or {}
                 orig_row = get_matched_row(df_orig, r_code) or {}
-                stt_row = get_matched_row(df_stt, r_code) or {} # スタート展示行取得
+                stt_row = get_matched_row(df_stt, r_code) or {}
 
                 combined_row = {}
                 combined_row.update(card_row)
                 combined_row.update(sui_row)
                 combined_row.update(orig_row)
-                combined_row.update(stt_row) # スタート展示データを結合
+                combined_row.update(stt_row)
                 
+                # レース回ごとのコース勝率データを結合
+                c_data = course_win_dict.get((venue_code, race_round), {})
+                for k, v in c_data.items():
+                    if k not in ["場コード", "レース回"]:
+                        combined_row[f"est_course_{k}"] = v
+
+                # 季節ごとのコース勝率データを結合
+                season_name = get_season(month)
+                s_data = season_win_dict.get((venue_code, season_name), {})
+                for k, v in s_data.items():
+                    if k not in ["場コード", "季節"]:
+                        combined_row[f"est_season_{k}"] = v
+
                 for k, v in res_row.items():
                     combined_row[f"res_{k}"] = v
 
@@ -234,8 +274,12 @@ def train_model():
 
         X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
 
-        train_data = lgb.Dataset(X_train, label=y_train)
-        val_data = lgb.Dataset(X_val, label=y_val, reference=train_data)
+        # クラスの不均衡を補正するためのサンプルウェイトを計算
+        train_weights = compute_sample_weight('balanced', y_train)
+        val_weights = compute_sample_weight('balanced', y_val)
+
+        train_data = lgb.Dataset(X_train, label=y_train, weight=train_weights)
+        val_data = lgb.Dataset(X_val, label=y_val, weight=val_weights, reference=train_data)
 
         params = {
             "objective": "multiclass",
