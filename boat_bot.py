@@ -240,13 +240,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     for col in X_input.select_dtypes(include=[np.number]).columns:
         X_input[col] = X_input[col].fillna(0.0)
 
-    # --- デバッグ用ログ出力 ---
-    print(f"--- {venue} {r_num}R : X_input columns & 0.0 check ---")
-    print("総カラム数:", len(X_input.columns))
-    zero_counts = (X_input == 0.0).sum()
-    print("0.0になっている列の数:", (zero_counts > 0).sum())
-    # -------------------------
-
     prob_matrix = {}
     for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"], 1):
         if rank_name in models:
@@ -399,8 +392,11 @@ class RaceSelect(discord.ui.Select):
                 for i in range(0, len(result_text), 2000):
                     await interaction.followup.send(content=result_text[i:i+2000], ephemeral=True)
         except Exception as e:
-            traceback.print_exc()
-            await interaction.followup.send(content=f"⚠️ エラーが発生しました: {e}", ephemeral=True)
+            tb = traceback.format_exc()
+            error_msg = f"⚠️ エラーが発生しました:\n```python\n{tb}\n```"
+            if len(error_msg) > 2000:
+                error_msg = error_msg[:1990] + "\n```"
+            await interaction.followup.send(content=error_msg, ephemeral=True)
 
 class RaceSelectView(discord.ui.View):
     def __init__(self, venue):
