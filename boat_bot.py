@@ -139,7 +139,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     venue_s = str(venue_code).zfill(2)
     month_int = int(month)
     
-    # 各種ファイルのパス構築
     race_card_path = f"data/programs/race_cards/{year}/{month}/{day_part}.csv"
     sui_path = f"data/previews/sui/{year}/{month}/{day_part}.csv"
     orig_path = f"data/previews/original_exhibition/{year}/{month}/{day_part}.csv"
@@ -154,7 +153,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     df_stt = fetch_github_csv(stt_path)
     df_venue_preview = fetch_github_csv(venue_preview_path) if venue_preview_path else None
 
-    # スタジアム別集計データの取得
     df_course_win = fetch_github_csv("data/estimate/stadium/course_win_rate.csv")
     df_season_win = fetch_github_csv("data/estimate/stadium/win_rate.csv")
 
@@ -189,7 +187,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     combined_row.update(stt_row)
     combined_row.update(venue_preview_row)
 
-    # コース別勝率データの結合
     if df_course_win is not None:
         for _, row in df_course_win.iterrows():
             v_code = str(row.get("場コード", "")).strip().zfill(2)
@@ -200,7 +197,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
                         combined_row[f"est_course_{k}"] = v
                 break
 
-    # 季節別勝率データの結合
     if df_season_win is not None:
         season_name = get_season(month_int)
         for _, row in df_season_win.iterrows():
@@ -214,7 +210,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
     df_pred = pd.DataFrame([combined_row])
 
-    # 選手ごとの得意決まり手付与
     if player_fav_kimarite:
         for i in range(1, 7):
             p_col_candidates = [f"艇{i}_選手名", f"{i}号艇_選手名", f"選手名_{i}", f"選手{i}_名前"]
@@ -237,17 +232,20 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         if col in df_pred.columns:
             df_pred[col] = df_pred[col].astype('category')
 
-    # 学習時の特徴量構成に完全同期（不足分は0.0で補完、余分なものはカット）
     X_input = df_pred.reindex(columns=expected_features, fill_value=0.0)
     for col in expected_features:
         if col in ["レース場", "風向", "天候"] and col in X_input.columns:
             X_input[col] = X_input[col].astype('category')
 
-    # 欠損値の穴埋め
-    # 数値型の列だけに絞って穴埋めする
     for col in X_input.select_dtypes(include=[np.number]).columns:
         X_input[col] = X_input[col].fillna(0.0)
 
+    # --- デバッグ用ログ出力 ---
+    print(f"--- {venue} {r_num}R : X_input columns & 0.0 check ---")
+    print("総カラム数:", len(X_input.columns))
+    zero_counts = (X_input == 0.0).sum()
+    print("0.0になっている列の数:", (zero_counts > 0).sum())
+    # -------------------------
 
     prob_matrix = {}
     for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"], 1):
@@ -448,3 +446,4 @@ if __name__ == "__main__":
     keep_alive()
     token = os.environ.get("DISCORD_TOKEN")
     bot.run(token)
+
