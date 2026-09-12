@@ -49,6 +49,14 @@ VENUE_MAPPING = {
     "下関": "19", "若松": "20", "芦屋": "21", "福岡": "22", "唐津": "23", "大村": "24"
 }
 
+# 会場コードからプレビュー用3文字コードへのマッピング（学習用と共通）
+VENUE_PREVIEW_CODE_MAP = {
+    "01": "kir", "02": "tod", "03": "edg", "04": "hei", "05": "tam", "06": "ham",
+    "07": "gam", "08": "tkz", "09": "tsu", "10": "mik", "11": "biw", "12": "sum",
+    "13": "ama", "14": "nar", "15": "mar", "16": "koj", "17": "miy", "18": "tok",
+    "19": "shm", "20": "wkm", "21": "ash", "22": "fuk", "23": "ktu", "24": "omr"
+}
+
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -129,22 +137,27 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         return summary_text + " ⚠️ エラー: 予測モデルが読み込まれていません。"
 
     day_part = day_str.split("-")[2] if "-" in day_str else day_str
+    venue_s = str(venue_code).zfill(2)
     
     race_card_path = f"data/programs/race_cards/{year}/{month}/{day_part}.csv"
     sui_path = f"data/previews/sui/{year}/{month}/{day_part}.csv"
     orig_path = f"data/previews/original_exhibition/{year}/{month}/{day_part}.csv"
     stt_path = f"data/previews/stt/{year}/{month}/{day_part}.csv"
     
+    # 会場別の展示タイム・チルト等が含まれるプレビューデータのパスを追加
+    prev_code = VENUE_PREVIEW_CODE_MAP.get(venue_s, "")
+    venue_preview_path = f"data/previews/{prev_code}/{year}/{month}/{day_part}.csv" if prev_code else ""
+
     df_cards = fetch_github_csv(race_card_path)
     df_sui = fetch_github_csv(sui_path)
     df_orig = fetch_github_csv(orig_path)
     df_stt = fetch_github_csv(stt_path)
+    df_venue_preview = fetch_github_csv(venue_preview_path) if venue_preview_path else None
 
     if df_cards is None:
         return summary_text + f" ⚠️ エラー: 出走表データが取得できませんでした ({race_card_path})。"
 
     r_str = str(r_num).zfill(2)
-    venue_s = str(venue_code).zfill(2)
     target_race_code = f"{year}{month}{day_part}{venue_s}{r_str}"
     print(f"[DEBUG] Target Race Code: {target_race_code}")
 
@@ -164,12 +177,14 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     sui_row = get_matched_row(df_sui, target_race_code) or {}
     orig_row = get_matched_row(df_orig, target_race_code) or {}
     stt_row = get_matched_row(df_stt, target_race_code) or {}
+    venue_preview_row = get_matched_row(df_venue_preview, target_race_code) or {}
 
     combined_row = {}
     combined_row.update(card_row)
     combined_row.update(sui_row)
     combined_row.update(orig_row)
     combined_row.update(stt_row)
+    combined_row.update(venue_preview_row) # 会場別の展示タイム・チルト等をここで結合
 
     df_pred = pd.DataFrame([combined_row])
 
@@ -301,15 +316,12 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
             b2 = c2_idx + 1
             b3 = c3_idx + 1
             
-            # AI予測確率の取得
             p1 = float(m1[c1_idx])
             p2 = float(m2[c2_idx])
             p3 = float(m3[c3_idx])
             
-            # ① AI予測の自信度（べき乗でメリハリを強調）
             ai_base_score = (p1 ** 1.8) * (p2 ** 1.3) * (p3 ** 1.0)
             
-            # ② 決まり手別の条件付き確率をルックアップ
             c1_course = entry_courses[b1]
             c2_course = entry_courses[b2]
             c3_course = entry_courses[b3]
@@ -318,7 +330,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
             k_key = f"{primary_kimarite}_{c1_course}"
             pair_prob = kimarite_prob_dict.get((k_key, c2_course, c3_course), 0.01)
             
-            # ③ AIを主軸にしつつ、決まり手確率を係数として組み合わせる
             final_score = ai_base_score * (max(pair_prob, 0.001) ** 0.3)
             
             trifecta_scores.append(((b1, b2, b3), final_score))
