@@ -109,7 +109,6 @@ def load_kimarite_table_from_github():
     global kimarite_prob_dict
     if kimarite_prob_dict:
         return
-    # 正しいGitHubパスに修正
     df_pair = fetch_github_csv("data/estimate/kimarite/tables/pair_table.csv")
     if df_pair is not None:
         try:
@@ -210,7 +209,25 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
                         combined_row[f"est_season_{k}"] = v
                 break
 
-    df_pred = pd.DataFrame([combined_row])
+    # カラム名の表記ブレ相互変換 (艇1_ <-> 1号艇_ <-> _1)
+    expanded_row = dict(combined_row)
+    for k, v in list(combined_row.items()):
+        for b in range(1, 7):
+            sb = str(b)
+            if k.startswith(f"艇{sb}_"):
+                attr = k[2:]
+                expanded_row[f"{sb}号艇_{attr}"] = v
+                expanded_row[f"{attr}_{sb}"] = v
+            elif k.startswith(f"{sb}号艇_"):
+                attr = k[3:]
+                expanded_row[f"艇{sb}_{attr}"] = v
+                expanded_row[f"{attr}_{sb}"] = v
+            elif k.endswith(f"_{sb}"):
+                attr = k[:-2]
+                expanded_row[f"艇{sb}_{attr}"] = v
+                expanded_row[f"{sb}号艇_{attr}"] = v
+
+    df_pred = pd.DataFrame([expanded_row])
 
     if player_fav_kimarite:
         for i in range(1, 7):
@@ -242,10 +259,16 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     for col in X_input.select_dtypes(include=[np.number]).columns:
         X_input[col] = X_input[col].fillna(0.0)
 
-    # データ検証用ログの計算
+    # データ検証用ログ計算＆コンソールデバッグ出力
     total_feats = len(expected_features)
-    zero_feats = (X_input == 0.0).sum(axis=1).iloc[0]
+    zero_cols = X_input.columns[(X_input == 0.0).all()].tolist()
+    zero_feats = len(zero_cols)
     valid_feats = total_feats - zero_feats
+
+    print(f"--- [データ診断] レースコード: {target_race_code} ---")
+    print(f"有効特徴量: {valid_feats} / ゼロ埋め: {zero_feats} (全{total_feats}個)")
+    if zero_cols:
+        print(f"ゼロ埋めされている特徴量 (先頭30個): {zero_cols[:30]}")
 
     prob_matrix = {}
     for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"], 1):
@@ -262,17 +285,17 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         boat_num = i + 1
         
         name = f"選手{boat_num}"
-        for c in [f"艇{boat_num}_選手名", f"{boat_num}号艇_選手名", f"選手{boat_num}_名前"]:
-            if c in card_row and pd.notna(card_row[c]):
-                val = str(card_row[c]).strip()
+        for c in [f"艇{boat_num}_選手名", f"{boat_num}号艇_選手名", f"選手名_{boat_num}", f"選手{boat_num}_名前"]:
+            if c in df_pred.columns and pd.notna(df_pred.iloc[0][c]):
+                val = str(df_pred.iloc[0][c]).strip()
                 if val and val != "nan":
                     name = val
                     break
 
         p_class = ""
-        for c in [f"艇{boat_num}_級別", f"{boat_num}号艇_級別", f"選手{boat_num}_級別", f"艇{boat_num}_級"]:
-            if c in card_row and pd.notna(card_row[c]):
-                val = str(card_row[c]).strip()
+        for c in [f"艇{boat_num}_級別", f"{boat_num}号艇_級別", f"選手名_{boat_num}_級別", f"艇{boat_num}_級"]:
+            if c in df_pred.columns and pd.notna(df_pred.iloc[0][c]):
+                val = str(df_pred.iloc[0][c]).strip()
                 if val and val != "nan":
                     p_class = val
                     break
@@ -312,7 +335,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         tactical_tag = "⚔️ 【混戦・差し手モツレ】 互いの攻防から手堅く潰す展開"
         kimarite = "差し / 差し継ぎ"
 
-    # テキスト上書きを回避し、順番通りに組み立て
     summary_text = (
         f"🤖 **{venue}** {r_num}RのAIレース分析・局面予想 ({day_str})\n\n"
         f"--- 【展開予想】 ---\n{tactical_tag}\n"
@@ -452,7 +474,6 @@ async def setup(ctx):
 
 @bot.command(name="status")
 async def check_status(ctx):
-    """取り込み状態を確認するデバッグコマンド"""
     test_files = [
         "data/estimate/kimarite/tables/pair_table.csv",
         "data/estimate/stadium/course_win_rate.csv",
@@ -479,3 +500,4 @@ if __name__ == "__main__":
     keep_alive()
     token = os.environ.get("DISCORD_TOKEN")
     bot.run(token)
+
