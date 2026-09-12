@@ -244,7 +244,10 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
             X_input[col] = X_input[col].astype('category')
 
     # 欠損値の穴埋め
-    X_input = X_input.fillna(0.0)
+    # 数値型の列だけに絞って穴埋めする
+for col in X_input.select_dtypes(include=[np.number]).columns:
+    X_input[col] = X_input[col].fillna(0.0)
+
 
     prob_matrix = {}
     for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"], 1):
