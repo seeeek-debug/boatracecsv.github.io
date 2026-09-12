@@ -311,12 +311,17 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         tactical_tag = "⚔️ 【混戦・差し手モツレ】 互いの攻防から手堅く潰す展開"
         kimarite = "差し / 差し継ぎ"
 
-    # 診断結果を含めてヘッダーと展開予想を再構築
-    summary_text = f"🤖 **{venue}** {r_num}RのAIレース分析・局面予想 ({day_str})\n" \
-                   f"\n--- 【展開予想】 ---\n{tactical_tag}\n" \
-                   f"🎯 **推奨決まり手**: {kimarite}\n" \
-                   f"\n🔍 [データ診断] 有効特徴量: {valid_feats}個 / ゼロ埋め: {zero_feats}個 (全{total_feats}中)\n" + \
-                   summary_text[summary_text.find("--- 【各艇の着順"): ]
+    # 診断結果を含めてヘッダーと展開予想を再構築（構文エラー修正版）
+    sub_text_index = summary_text.find("--- 【各艇の着順")
+    remaining_part = summary_text[sub_text_index:] if sub_text_index != -1 else ""
+
+    summary_text = (
+        f"🤖 **{venue}** {r_num}RのAIレース分析・局面予想 ({day_str})\n\n"
+        f"--- 【展開予想】 ---\n{tactical_tag}\n"
+        f"🎯 **推奨決まり手**: {kimarite}\n\n"
+        f"🔍 [データ診断] 有効特徴量: {valid_feats}個 / ゼロ埋め: {zero_feats}個 (全{total_feats}中)\n\n"
+        f"{remaining_part}"
+    )
 
     summary_text += f"\n--- 【3連単 予想買い目 (上位5点)】 ---\n"
     trifecta_scores = []
@@ -418,8 +423,5 @@ class VenueSelect(discord.ui.Select):
         super().__init__(placeholder="会場を選択してください...", min_values=1, max_values=1, options=options, custom_id="persistent_venue_select")
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        venue = self.values[0]
-        await interaction.followup.send(
-            content=f"🏟️
+        await interaction
 
