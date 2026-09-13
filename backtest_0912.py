@@ -577,5 +577,5 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
 
 
 if __name__ == "__main__":
-    run_backtest("2026-09-06", "2026-09-13")
+    run_backtest("2026-02-06", "2026-02-13")
 
