@@ -87,7 +87,9 @@ def fetch_github_csv(file_path, use_cache=True):
     try:
         res = requests.get(uri, timeout=10)
         if res.status_code == 200:
-            df = pd.read_csv(io.StringIO(res.text), encoding="utf-8-sig")
+            df = pd.read_csv(
+                io.StringIO(res.text), encoding="utf-8-sig", dtype=str
+            )
             df.columns = df.columns.str.strip()
             CSV_CACHE[file_path] = (now, df)
             return df
@@ -397,7 +399,6 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
         month_raw = str(curr_dt.month)
         day_raw = str(curr_dt.day)
 
-        # 払戻金CSV（data/results/payouts/...）を取得
         res_p1 = f"data/results/payouts/{year}/{month_str}/{day_str_zf}.csv"
         res_p2 = f"data/results/payouts/{year}/{month_raw}/{day_raw}.csv"
         df_results = fetch_github_csv_with_fallback(
@@ -418,14 +419,14 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
                 if not pred:
                     continue
 
-                code = pred["target_race_code"]
+                code = str(pred["target_race_code"]).strip()
                 status = pred["status"]
                 top5 = pred["top5_combos"]
 
                 actual_combo = None
                 payout = 0.0
 
-                if df_results is not None:
+                if df_results is not None and not df_results.empty:
                     matched = None
                     for col in df_results.columns:
                         if "レースコード" in col or "code" in col.lower():
@@ -435,24 +436,17 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
                                 .str.replace(r"\.0$", "", regex=True)
                                 .str.strip()
                             )
-                            m = df_results[col_vals == str(code)]
+                            m = df_results[col_vals == code]
                             if len(m) > 0:
                                 matched = m.iloc[0]
                                 break
 
                     if matched is not None:
-                        # 3連単_組番 と 3連単_払戻金 を抽出
-                        combo_val = matched.get("3連単_組番")
+                        combo_val = str(matched.get("3連単_組番", "")).strip()
                         payout_val = matched.get("3連単_払戻金")
 
-                        if pd.notna(combo_val):
-                            # '1-3-2' 形式を分解
-                            parts = (
-                                str(combo_val)
-                                .replace(" ", "")
-                                .strip()
-                                .split("-")
-                            )
+                        if combo_val and "-" in combo_val:
+                            parts = combo_val.split("-")
                             if len(parts) == 3 and all(
                                 p.isdigit() for p in parts
                             ):
@@ -463,27 +457,44 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
                                 )
 
                         if pd.notna(payout_val):
-                            payout = float(
-                                str(payout_val).replace(",", "").replace("円", "")
-                            )
+                            try:
+                                payout = float(
+                                    str(payout_val)
+                                    .replace(",", "")
+                                    .replace("円", "")
+                                    .strip()
+                                )
+                            except ValueError:
+                                payout = 0.0
 
-                cost = len(top5) * bet_per_combo
-                is_hit = (
-                    actual_combo is not None and actual_combo in top5
-                )
-                win_payout = payout if is_hit else 0.0
+                # 的中判定（実データが取れていて、かつ予想Top5に含まれる場合のみ）
+                is_hit = (actual_combo is not None) and (actual_combo in top5)
 
-                stats["全"]["races"] += 1
-                stats["全"]["invest"] += cost
-                stats["全"]["payout"] += win_payout
-                if is_hit:
-                    stats["全"]["hits"] += 1
+                # 「見」の場合は購入しないため投資も払戻も0扱いにする
+                if status == "見":
+                    cost = 0
+                    win_payout = 0.0
+                else:
+                    cost = len(top5) * bet_per_combo
+                    win_payout = payout if is_hit else 0.0
 
-                stats[status]["races"] += 1
-                stats[status]["invest"] += cost
-                stats[status]["payout"] += win_payout
-                if is_hit:
-                    stats[status]["hits"] += 1
+                # 全体統計への加算（実際に購入対象となる勝負＋通常のみ全体集計に計上）
+                if status != "見":
+                    stats["全"]["races"] += 1
+                    stats["全"]["invest"] += cost
+                    stats["全"]["payout"] += win_payout
+                    if is_hit:
+                        stats["全"]["hits"] += 1
+
+                # ステータス別統計への加算
+                if status in stats:
+                    stats[status]["races"] += 1
+                    # 見送りのレース数はカウントするが投資・払戻は加算しない
+                    if status != "見":
+                        stats[status]["invest"] += cost
+                        stats[status]["payout"] += win_payout
+                        if is_hit:
+                            stats[status]["hits"] += 1
 
                 logs.append(
                     {
@@ -499,7 +510,11 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
                             if actual_combo
                             else "不明"
                         ),
-                        "的中": "🎯的中" if is_hit else "❌不的不",
+                        "的中": (
+                            "🎯的中"
+                            if (is_hit and status != "見")
+                            else ("(的中)" if is_hit else "❌不的中")
+                        ),
                         "払戻金": win_payout,
                     }
                 )
@@ -516,14 +531,14 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
     def calc_roi(payout, invest):
         return (payout / invest * 100) if invest > 0 else 0.0
 
-    print(f"・総レース数: {stats['全']['races']} レース")
+    print(f"・購入対象レース数（勝負＋通常）: {stats['全']['races']} レース")
     print(f"・的中レース数: {stats['全']['hits']} レース")
-    print(f"・全体的中率: {calc_rate(stats['全']['hits'], stats['全']['races']):.2f}%")
+    print(f"・購入対象的中率: {calc_rate(stats['全']['hits'], stats['全']['races']):.2f}%")
     print(
-        f"・全体総投資: {stats['全']['invest']:,} 円 | 全体払戻: {int(stats['全']['payout']):,} 円"
+        f"・実質総投資: {stats['全']['invest']:,} 円 | 実質総払戻: {int(stats['全']['payout']):,} 円"
     )
     print(
-        f"・全体回収率: {calc_roi(stats['全']['payout'], stats['全']['invest']):.2f}%\n"
+        f"・実質回収率: {calc_roi(stats['全']['payout'], stats['全']['invest']):.2f}%\n"
     )
 
     print("--- 判定別レース数 ---")
@@ -531,20 +546,7 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
     print(f"・📊 通常レース数: {stats['通常']['races']} レース")
     print(f"・⚠️ 見（見送り）数: {stats['見']['races']} レース\n")
 
-    target_races = stats["勝負"]["races"] + stats["通常"]["races"]
-    target_hits = stats["勝負"]["hits"] + stats["通常"]["hits"]
-    target_invest = stats["勝負"]["invest"] + stats["通常"]["invest"]
-    target_payout = stats["勝負"]["payout"] + stats["通常"]["payout"]
-
-    print("--- 🔥 見以外のレースを購入した場合（勝負＋通常） ---")
-    print(f"・対象レース数: {target_races} レース")
-    print(f"・的中レース数: {target_hits} レース")
-    print(f"・的中率: {calc_rate(target_hits, target_races):.2f}%")
-    print(f"・総投資: {target_invest:,} 円")
-    print(f"・総払戻: {int(target_payout):,} 円")
-    print(f"・回収率: {calc_roi(target_payout, target_invest):.2f}%\n")
-
-    print("--- 🎯 勝負レース単体の成績 ---")
+    print("--- 🔥 勝負レース単体の成績 ---")
     print(
         f"・的中率: {calc_rate(stats['勝負']['hits'], stats['勝負']['races']):.2f}%"
     )
