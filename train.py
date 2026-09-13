@@ -19,6 +19,10 @@ def load_csv_safely(path):
             pass
     return None
 
+def clean_name(val):
+    if pd.isna(val): return ""
+    return str(val).replace(" ", "").replace("　", "").strip()
+
 def get_target_files(result_files):
     start_date = datetime(2026, 3, 1)
     current_date = datetime.now()
@@ -84,7 +88,8 @@ def build_player_kimarite_stats():
 
     player_stats = {}
     if player_col and kimarite_col:
-        grouped = df_all_res.groupby([player_col, kimarite_col]).size().unstack(fill_value=0)
+        df_all_res["_clean_player"] = df_all_res[player_col].apply(clean_name)
+        grouped = df_all_res.groupby(["_clean_player", kimarite_col]).size().unstack(fill_value=0)
         grouped_rate = grouped.div(grouped.sum(axis=1), axis=0)
         player_stats = grouped_rate.to_dict(orient="index")
         print(f"選手ごとの決まり手データを集計しました（対象選手数: {len(player_stats)}人）")
@@ -92,7 +97,7 @@ def build_player_kimarite_stats():
     return player_stats
 
 def load_and_merge_training_data():
-    print("横持ちファイルの読み込みと結合を開始します...")
+    print("データファイルの読み込みと結合を開始します...")
     
     result_files = glob.glob("data/results/**/*.csv", recursive=True)
     if not result_files:
@@ -215,7 +220,7 @@ def load_and_merge_training_data():
 
                 merged_rows.append(combined_row)
 
-        except Exception as e:
+        except Exception:
             pass
 
     if not merged_rows:
@@ -231,33 +236,40 @@ def train_model():
         print("有効な学習データがありません。")
         return
 
-    # 表記揺れに対応して決まり手特徴量を算出
     if player_fav_kimarite:
+        dummy_k_keys = list(next(iter(player_fav_kimarite.values())).keys()) if player_fav_kimarite else []
         for i in range(1, 7):
             p_col_candidates = [
                 f"艇{i}_選手名", f"{i}号艇_選手名", f"選手名_{i}", f"選手{i}_名前",
                 f"艇{i}_氏名", f"{i}号艇_氏名", f"氏名_{i}", f"艇{i}_選手", f"{i}号艇_選手"
             ]
-            p_col = next((c for c in p_col_candidates if c in df_train.columns), None)
             
-            if p_col:
-                dummy_k_keys = list(next(iter(player_fav_kimarite.values())).keys()) if player_fav_kimarite else []
-                for k_name in dummy_k_keys:
-                    col_name = f"艇{i}_kimarite_{k_name}"
-                    df_train[col_name] = df_train[p_col].map(
-                        lambda name: player_fav_kimarite.get(str(name).strip(), {}).get(k_name, 0.0)
-                    )
+            p_series = pd.Series([""] * len(df_train), index=df_train.index)
+            for c in p_col_candidates:
+                if c in df_train.columns:
+                    p_series = p_series.replace("", np.nan).fillna(df_train[c]).fillna("")
+            
+            cleaned_names = p_series.apply(clean_name)
+            for k_name in dummy_k_keys:
+                col_name = f"艇{i}_kimarite_{k_name}"
+                df_train[col_name] = cleaned_names.map(
+                    lambda name: player_fav_kimarite.get(name, {}).get(k_name, 0.0)
+                )
 
     exclude_cols = [col for col in df_train.columns if col.startswith("res_")]
     feature_cols = [col for col in df_train.columns if col not in exclude_cols]
 
-    for col in feature_cols:
-        if col not in ["レース場", "風向", "天候"]:
-            df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
+    cat_cols = ["レース場", "風向", "天候"]
+    cat_categories = {}
 
-    for col in ["レース場", "風向", "天候"]:
+    for col in cat_cols:
         if col in df_train.columns:
             df_train[col] = df_train[col].astype('category')
+            cat_categories[col] = list(df_train[col].cat.categories)
+
+    for col in feature_cols:
+        if col not in cat_cols:
+            df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
 
     targets = ["res_1着_艇番", "res_2着_艇番", "res_3着_艇番"]
     for t in targets:
@@ -266,12 +278,13 @@ def train_model():
 
     df_train = df_train.dropna(subset=[t for t in targets if t in df_train.columns])
 
-    # 学習データの各数値カラム中央値を計算・保存用辞書へ格納（推論側補完用）
     feature_medians = {}
     for col in feature_cols:
-        if col not in ["レース場", "風向", "天候"] and pd.api.types.is_numeric_dtype(df_train[col]):
+        if col not in cat_cols:
             median_val = df_train[col].median()
-            feature_medians[col] = median_val
+            if pd.isna(median_val):
+                median_val = 0.0
+            feature_medians[col] = float(median_val)
             df_train[col] = df_train[col].fillna(median_val)
 
     print(f"有効な学習レース数: {len(df_train)}行")
@@ -284,6 +297,8 @@ def train_model():
     targets_df = df_train[["res_1着_艇番", "res_2着_艇番", "res_3着_艇番"]].astype(int)
     X_train, X_val, y_train_df, y_val_df = train_test_split(X, targets_df, test_size=0.2, random_state=42)
 
+    actual_cat_cols = [c for c in cat_cols if c in features]
+
     models = {}
     for i, target_col in enumerate(["res_1着_艇番", "res_2着_艇番", "res_3着_艇番"], start=1):
         print(f"--- {i}着の予測モデルを学習中 ({target_col}) ---")
@@ -293,8 +308,8 @@ def train_model():
         train_weights = compute_sample_weight('balanced', y_train)
         val_weights = compute_sample_weight('balanced', y_val)
 
-        train_data = lgb.Dataset(X_train, label=y_train, weight=train_weights)
-        val_data = lgb.Dataset(X_val, label=y_val, weight=val_weights, reference=train_data)
+        train_data = lgb.Dataset(X_train, label=y_train, weight=train_weights, categorical_feature=actual_cat_cols)
+        val_data = lgb.Dataset(X_val, label=y_val, weight=val_weights, reference=train_data, categorical_feature=actual_cat_cols)
 
         params = {
             "objective": "multiclass",
@@ -315,12 +330,12 @@ def train_model():
         )
         models[f"rank_{i}"] = model
 
-    # キー名を推論ボット側と完全同一にして保存
     saved_package = {
         "models": models,
         "feature_names": features,
         "feature_medians": feature_medians,
         "player_fav_kimarite": player_fav_kimarite,
+        "cat_categories": cat_categories,
         "player_col": "選手名"
     }
 
