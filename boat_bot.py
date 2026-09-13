@@ -62,25 +62,34 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 CSV_CACHE = {}
 
-def fetch_github_csv(file_path):
-    if file_path in CSV_CACHE:
+def fetch_github_csv(file_path, use_cache=False):
+    """
+    GitHubからCSVを取得する。
+    use_cache=True の場合は静的マスタ（過去データ等）をキャッシュ。
+    use_cache=False（デフォルト）の場合はタイムスタンプを付与してリアルタイムの展示・直前情報を確実に取得。
+    """
+    if use_cache and file_path in CSV_CACHE:
         return CSV_CACHE[file_path]
-    uri = f"{GITHUB_RAW_BASE}{file_path}"
+    
+    # HTTP/CDNキャッシュを回避するためURLにタイムスタンプを付与
+    timestamp = int(datetime.now().timestamp())
+    uri = f"{GITHUB_RAW_BASE}{file_path}?t={timestamp}"
     try:
         res = requests.get(uri, timeout=10)
         if res.status_code == 200:
             df = pd.read_csv(io.StringIO(res.text), encoding="utf-8-sig")
             df.columns = df.columns.str.strip()
-            CSV_CACHE[file_path] = df
+            if use_cache:
+                CSV_CACHE[file_path] = df
             return df
     except Exception as e:
         print(f"CSV Fetch Error ({file_path}): {e}")
     return None
 
-def fetch_github_csv_with_fallback(primary_path, fallback_path):
-    df = fetch_github_csv(primary_path)
+def fetch_github_csv_with_fallback(primary_path, fallback_path, use_cache=False):
+    df = fetch_github_csv(primary_path, use_cache=use_cache)
     if df is None and fallback_path:
-        df = fetch_github_csv(fallback_path)
+        df = fetch_github_csv(fallback_path, use_cache=use_cache)
     return df
 
 # --- モデルおよびデータの読み込み ---
@@ -135,7 +144,7 @@ def load_kimarite_table_from_github():
     global kimarite_prob_dict
     if kimarite_prob_dict:
         return
-    df_pair = fetch_github_csv("data/estimate/kimarite/tables/pair_table.csv")
+    df_pair = fetch_github_csv("data/estimate/kimarite/tables/pair_table.csv", use_cache=True)
     if df_pair is not None:
         try:
             for _, row in df_pair.iterrows():
@@ -170,6 +179,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     venue_s = str(venue_code).zfill(2)
     month_int = int(month)
 
+    # 動的（リアルタイム）ファイルパス
     race_card_p1 = f"data/programs/race_cards/{year}/{month_str}/{day_str_zf}.csv"
     race_card_p2 = f"data/programs/race_cards/{year}/{month_raw}/{day_raw}.csv"
 
@@ -186,18 +196,20 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     venue_preview_p1 = f"data/previews/{prev_code}/{year}/{month_str}/{day_str_zf}.csv" if prev_code else None
     venue_preview_p2 = f"data/previews/{prev_code}/{year}/{month_raw}/{day_raw}.csv" if prev_code else None
 
-    df_cards = fetch_github_csv_with_fallback(race_card_p1, race_card_p2)
-    df_sui = fetch_github_csv_with_fallback(sui_p1, sui_p2)
-    df_orig = fetch_github_csv_with_fallback(orig_p1, orig_p2)
-    df_stt = fetch_github_csv_with_fallback(stt_p1, stt_p2)
-    df_venue_preview = fetch_github_csv_with_fallback(venue_preview_p1, venue_preview_p2)
+    # 展示・風・STなどのリアルタイムデータはキャッシュを使わず（use_cache=False）常に最新を取得
+    df_cards = fetch_github_csv_with_fallback(race_card_p1, race_card_p2, use_cache=False)
+    df_sui = fetch_github_csv_with_fallback(sui_p1, sui_p2, use_cache=False)
+    df_orig = fetch_github_csv_with_fallback(orig_p1, orig_p2, use_cache=False)
+    df_stt = fetch_github_csv_with_fallback(stt_p1, stt_p2, use_cache=False)
+    df_venue_preview = fetch_github_csv_with_fallback(venue_preview_p1, venue_preview_p2, use_cache=False)
 
     if df_orig is not None:
         rename_dict = {f"艇{i}_値{j}": f"艇{i}_オリジナル" + ["一周タイム", "まわり足タイム", "直線タイム"][j-1] for i in range(1, 7) for j in range(1, 4)}
         df_orig = df_orig.rename(columns=rename_dict)
 
-    df_course_win = fetch_github_csv("data/estimate/stadium/course_win_rate.csv")
-    df_season_win = fetch_github_csv("data/estimate/stadium/win_rate.csv")
+    # 静的推定データはキャッシュを利用
+    df_course_win = fetch_github_csv("data/estimate/stadium/course_win_rate.csv", use_cache=True)
+    df_season_win = fetch_github_csv("data/estimate/stadium/win_rate.csv", use_cache=True)
 
     if df_cards is None:
         return header_text + "⚠️ エラー: 出走表データが取得できませんでした。"
@@ -447,7 +459,7 @@ async def check_status(ctx):
         "data/estimate/stadium/course_win_rate.csv",
         "data/estimate/stadium/win_rate.csv"
     ]
-    file_results = [f"✅ {f} (取得成功: {len(fetch_github_csv(f))}行)" if fetch_github_csv(f) is not None else f"❌ {f} (取得失敗)" for f in test_files]
+    file_results = [f"✅ {f} (取得成功: {len(fetch_github_csv(f, use_cache=True))}行)" if fetch_github_csv(f, use_cache=True) is not None else f"❌ {f} (取得失敗)" for f in test_files]
 
     msg = (
         f"📊 **【データ取り込み状況チェック】**\n\n"
