@@ -3,6 +3,7 @@ from datetime import datetime, timezone, timedelta
 import io
 import os
 import threading
+import time
 import traceback
 from flask import Flask
 import discord
@@ -29,6 +30,10 @@ def keep_alive():
     t.daemon = True
     t.start()
 
+def clean_name(val):
+    if pd.isna(val): return ""
+    return str(val).replace(" ", "").replace("　", "").strip()
+
 # --- Discordボット設定 ---
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/seeeek-debug/boatracecsv.github.io/main/"
 NOTIFICATION_CHANNEL_ID = 156632996264511610
@@ -52,40 +57,39 @@ VENUE_MAPPING = {
 VENUE_PREVIEW_CODE_MAP = {
     "01": "kir", "02": "tod", "03": "edg", "04": "hei", "05": "tam", "06": "ham",
     "07": "gam", "08": "tkz", "09": "tsu", "10": "mik", "11": "biw", "12": "sum",
-    "13": "ana", "14": "nar", "15": "mar", "16": "koj", "17": "miy", "18": "tok",
-    "19": "shm", "20": "wkm", "21": "ash", "22": "fuk", "23": "ktu", "24": "oom"
+    "13": "ama", "14": "nar", "15": "mar", "16": "koj", "17": "miy", "18": "tok",
+    "19": "shm", "20": "wkm", "21": "ash", "22": "fuk", "23": "ktu", "24": "omr"
 }
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-CSV_CACHE = {}
+# --- 5分間スマートキャッシュ (TTLキャッシュ) ---
+CSV_CACHE = {}  # key: file_path, val: (timestamp, df)
+CACHE_TTL = 300 # 300秒 = 5分間キャッシュ
 
-def fetch_github_csv(file_path, use_cache=False):
-    """
-    GitHubからCSVを取得する。
-    use_cache=True の場合は静的マスタをキャッシュ。
-    use_cache=False の場合はタイムスタンプを付与してリアルタイムデータを確実に取得。
-    """
+def fetch_github_csv(file_path, use_cache=True):
+    now = time.time()
     if use_cache and file_path in CSV_CACHE:
-        return CSV_CACHE[file_path]
+        ts, cached_df = CSV_CACHE[file_path]
+        if now - ts < CACHE_TTL:
+            return cached_df
     
-    timestamp = int(datetime.now().timestamp())
+    timestamp = int(now)
     uri = f"{GITHUB_RAW_BASE}{file_path}?t={timestamp}"
     try:
         res = requests.get(uri, timeout=10)
         if res.status_code == 200:
             df = pd.read_csv(io.StringIO(res.text), encoding="utf-8-sig")
             df.columns = df.columns.str.strip()
-            if use_cache:
-                CSV_CACHE[file_path] = df
+            CSV_CACHE[file_path] = (now, df)
             return df
     except Exception as e:
         print(f"CSV Fetch Error ({file_path}): {e}")
     return None
 
-def fetch_github_csv_with_fallback(primary_path, fallback_path, use_cache=False):
+def fetch_github_csv_with_fallback(primary_path, fallback_path, use_cache=True):
     df = fetch_github_csv(primary_path, use_cache=use_cache)
     if df is None and fallback_path:
         df = fetch_github_csv(fallback_path, use_cache=use_cache)
@@ -98,6 +102,7 @@ player_fav_kimarite = None
 kimarite_prob_dict = {}
 expected_features = []
 feature_medians = {}
+cat_categories = {}
 
 try:
     if os.path.exists(MODEL_FILENAME):
@@ -126,6 +131,9 @@ try:
 
             if "feature_medians" in loaded_package:
                 feature_medians = loaded_package.get("feature_medians", {})
+
+            if "cat_categories" in loaded_package:
+                cat_categories = loaded_package.get("cat_categories", {})
 
             print("パッケージ形式でモデルとデータを正常に読み込みました。")
         else:
@@ -194,16 +202,12 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     venue_preview_p1 = f"data/previews/{prev_code}/{year}/{month_str}/{day_str_zf}.csv" if prev_code else None
     venue_preview_p2 = f"data/previews/{prev_code}/{year}/{month_raw}/{day_raw}.csv" if prev_code else None
 
-    # 展示・直前データはリアルタイム取得
-    df_cards = fetch_github_csv_with_fallback(race_card_p1, race_card_p2, use_cache=False)
-    df_sui = fetch_github_csv_with_fallback(sui_p1, sui_p2, use_cache=False)
-    df_orig = fetch_github_csv_with_fallback(orig_p1, orig_p2, use_cache=False)
-    df_stt = fetch_github_csv_with_fallback(stt_p1, stt_p2, use_cache=False)
-    df_venue_preview = fetch_github_csv_with_fallback(venue_preview_p1, venue_preview_p2, use_cache=False)
-
-    if df_orig is not None:
-        rename_dict = {f"艇{i}_値{j}": f"艇{i}_オリジナル" + ["一周タイム", "まわり足タイム", "直線タイム"][j-1] for i in range(1, 7) for j in range(1, 4)}
-        df_orig = df_orig.rename(columns=rename_dict)
+    # スマートキャッシュ(use_cache=True)を利用して通信量を激減
+    df_cards = fetch_github_csv_with_fallback(race_card_p1, race_card_p2, use_cache=True)
+    df_sui = fetch_github_csv_with_fallback(sui_p1, sui_p2, use_cache=True)
+    df_orig = fetch_github_csv_with_fallback(orig_p1, orig_p2, use_cache=True)
+    df_stt = fetch_github_csv_with_fallback(stt_p1, stt_p2, use_cache=True)
+    df_venue_preview = fetch_github_csv_with_fallback(venue_preview_p1, venue_preview_p2, use_cache=True)
 
     df_course_win = fetch_github_csv("data/estimate/stadium/course_win_rate.csv", use_cache=True)
     df_season_win = fetch_github_csv("data/estimate/stadium/win_rate.csv", use_cache=True)
@@ -250,40 +254,34 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
                     if k not in ["場コード", "季節"]: combined_row[f"est_season_{k}"] = v
                 break
 
-    expanded_row = dict(combined_row)
-    for k, v in list(combined_row.items()):
-        for b in range(1, 7):
-            sb = str(b)
-            if k.startswith(f"艇{sb}_"):
-                expanded_row[f"{sb}号艇_{k[2:]}"] = v
-                expanded_row[f"{k[2:]}_{sb}"] = v
-            elif k.startswith(f"{sb}号艇_"):
-                expanded_row[f"艇{sb}_{k[3:]}"] = v
-                expanded_row[f"{k[3:]}_{sb}"] = v
-            elif k.endswith(f"_{sb}"):
-                expanded_row[f"艇{sb}_{k[:-2]}"] = v
-                expanded_row[f"{sb}号艇_{k[:-2]}"] = v
-
-    df_pred = pd.DataFrame([expanded_row])
+    df_pred = pd.DataFrame([combined_row])
 
     if player_fav_kimarite:
+        dummy_k_keys = list(next(iter(player_fav_kimarite.values())).keys()) if player_fav_kimarite else []
         for i in range(1, 7):
             p_col_candidates = [f"艇{i}_選手名", f"{i}号艇_選手名", f"選手名_{i}", f"艇{i}_氏名", f"{i}号艇_氏名", f"氏名_{i}", f"艇{i}_選手", f"{i}号艇_選手"]
-            p_col = next((c for c in p_col_candidates if c in df_pred.columns), None)
-            if p_col:
-                dummy_k_keys = list(next(iter(player_fav_kimarite.values())).keys()) if player_fav_kimarite else []
-                p_val = str(df_pred.iloc[0].get(p_col, "")).strip()
-                for k_name in dummy_k_keys:
-                    df_pred[f"艇{i}_kimarite_{k_name}"] = player_fav_kimarite.get(p_val, {}).get(k_name, 0.0)
+            p_val = ""
+            for c in p_col_candidates:
+                if c in df_pred.columns and pd.notna(df_pred.iloc[0][c]):
+                    val = clean_name(df_pred.iloc[0][c])
+                    if val and val != "nan":
+                        p_val = val
+                        break
+            
+            for k_name in dummy_k_keys:
+                df_pred[f"艇{i}_kimarite_{k_name}"] = player_fav_kimarite.get(p_val, {}).get(k_name, 0.0)
 
     X_input = df_pred.reindex(columns=expected_features)
 
+    cat_cols = ["レース場", "風向", "天候"]
     for col in expected_features:
-        if col in ["レース場", "風向", "天候"] and col in X_input.columns:
-            X_input[col] = X_input[col].astype('category')
-
-    for col in X_input.columns:
-        if col not in ["レース場", "風向", "天候"]:
+        if col in cat_cols and col in X_input.columns:
+            saved_cats = cat_categories.get(col, None)
+            if saved_cats:
+                X_input[col] = pd.Categorical(X_input[col], categories=saved_cats)
+            else:
+                X_input[col] = X_input[col].astype('category')
+        elif col not in cat_cols:
             X_input[col] = pd.to_numeric(X_input[col], errors='coerce')
             X_input[col] = X_input[col].fillna(feature_medians.get(col, 0.0) if isinstance(feature_medians, dict) else 0.0)
 
@@ -306,7 +304,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
                     break
         boat_names.append(name)
 
-    # 予想計算と信頼度判定
     status_badge = "📊 **【通常レース】AI信頼度：中**"
     trifecta_scores = []
 
@@ -339,7 +336,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
             elif top_score < 0.0018 or score_diff < 0.0003:
                 status_badge = "⚠️ **【見（見送り）推奨】AI信頼度：低（混戦）**"
 
-    # レスポンス文字列の作成
     summary_text = f"🎯 **{venue}** {r_num}R 予想結果 ({day_str})\n"
     summary_text += f"判定: {status_badge}\n\n"
     summary_text += "--- 【3連単 予想買い目（上位5点）】 ---\n"
@@ -422,9 +418,12 @@ class InteractiveRaceControlView(discord.ui.View):
 
         await interaction.followup.send(content=f"🤖 **{venue}** 全12レースの解析を開始します...", ephemeral=True)
         for r_num in range(1, 13):
-            res_text = calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num)
+            # 非同期スレッド（to_thread）で実行してボットのフリーズを防ぐ
+            res_text = await asyncio.to_thread(
+                calculate_single_race_analysis, venue, venue_code, year, month, day_str, r_num
+            )
             await interaction.followup.send(content=res_text, ephemeral=True)
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.1)
 
     async def race_callback(self, interaction: discord.Interaction, r_num: int):
         await interaction.response.defer(ephemeral=True)
@@ -434,7 +433,10 @@ class InteractiveRaceControlView(discord.ui.View):
             target_date = datetime.now(JST)
             year, month, day_str = target_date.strftime("%Y"), target_date.strftime("%m"), target_date.strftime("%Y-%m-%d")
 
-            result_text = calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num)
+            # 非同期スレッド（to_thread）で実行
+            result_text = await asyncio.to_thread(
+                calculate_single_race_analysis, venue, venue_code, year, month, day_str, r_num
+            )
             await interaction.followup.send(content=result_text, ephemeral=True)
         except Exception as e:
             tb = traceback.format_exc()
