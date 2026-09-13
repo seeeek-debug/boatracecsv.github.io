@@ -351,7 +351,7 @@ def predict_single_race(
     trifecta_scores.sort(key=lambda x: x[1], reverse=True)
 
     # -------------------------------------------------------------
-    # 🎯 直前オッズ (od3) 解析 ＆ 厳選期待値フィルター
+    # 🎯 直前オッズ (od3) 解析 ＆ 期待値フィルター
     # -------------------------------------------------------------
     odds_map = {}
     if df_odds is not None and not df_odds.empty:
@@ -384,18 +384,18 @@ def predict_single_race(
                                 pass
                     break
 
-    # AI上位8点以内の中から、設定した厳格な基準に合う買い目のみ厳選
+    # AI上位8点以内の中から期待値が高い買い目を抽出
     candidate_combos = trifecta_scores[:8]
     selected_combos = []
 
-    MIN_PROBABILITY = 0.05  # AI勝率 5.0% 以上
-    MIN_EXPECTED_VALUE = 1.15  # 期待値 1.15 以上
+    MIN_PROBABILITY = 0.035  # AI推定確率 3.5% 以上
+    MIN_EXPECTED_VALUE = 1.05  # 期待値 1.05 以上
 
     for combo, score in candidate_combos:
         combo_str = f"{combo[0]}-{combo[1]}-{combo[2]}"
         est_prob = score / total_score_sum if total_score_sum > 0 else 0.0
 
-        # AI勝率が5%未満の買い目は完全除外
+        # AI勝率が最低ライン以下の大穴は完全無視
         if est_prob < MIN_PROBABILITY:
             continue
 
@@ -403,7 +403,7 @@ def predict_single_race(
             odds = odds_map[combo_str]
             expected_value = est_prob * odds
 
-            # 期待値1.15以上 かつ トリガミ回避（オッズ3.0倍以上）
+            # 期待値条件クリア かつ ガミ回避（オッズ3.0倍以上）
             if expected_value >= MIN_EXPECTED_VALUE and odds >= 3.0:
                 selected_combos.append(combo)
 
@@ -412,11 +412,13 @@ def predict_single_race(
 
     top_score = trifecta_scores[0][1]
 
-    # ステータス判定（自信度スコア 0.0035 未満、または適正買い目ゼロなら「見」）
-    if len(final_combos) == 0 or top_score < 0.0035:
+    # ステータス判定
+    if len(final_combos) == 0:
         status = "見"
-    else:
+    elif top_score >= 0.0030:
         status = "勝負"
+    else:
+        status = "通常"
 
     return {
         "target_race_code": target_race_code,
@@ -432,13 +434,14 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
     stats = {
         "全": {"races": 0, "hits": 0, "invest": 0, "payout": 0},
         "勝負": {"races": 0, "hits": 0, "invest": 0, "payout": 0},
+        "通常": {"races": 0, "hits": 0, "invest": 0, "payout": 0},
         "見": {"races": 0, "hits": 0, "invest": 0, "payout": 0},
     }
 
     logs = []
     curr_dt = start_dt
 
-    print(f"🚀 バックテスト開始（厳選モード）: {start_date_str} ～ {end_date_str}")
+    print(f"🚀 バックテスト開始: {start_date_str} ～ {end_date_str}")
 
     while curr_dt <= end_dt:
         year = curr_dt.strftime("%Y")
@@ -564,7 +567,7 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
         curr_dt += timedelta(days=1)
 
     print("\n" + "=" * 50)
-    print("📊 【バックテスト結果レポート（厳選モード）】")
+    print("📊 【バックテスト結果レポート】")
     print("=" * 50)
 
     def calc_rate(hits, races):
@@ -573,7 +576,7 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
     def calc_roi(payout, invest):
         return (payout / invest * 100) if invest > 0 else 0.0
 
-    print(f"・購入対象レース数（勝負のみ）: {stats['全']['races']} レース")
+    print(f"・購入対象レース数（勝負＋通常）: {stats['全']['races']} レース")
     print(f"・的中レース数: {stats['全']['hits']} レース")
     print(f"・購入対象的中率: {calc_rate(stats['全']['hits'], stats['全']['races']):.2f}%")
     print(
@@ -585,7 +588,16 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
 
     print("--- 判定別レース数 ---")
     print(f"・🔥 勝負レース数: {stats['勝負']['races']} レース")
+    print(f"・📊 通常レース数: {stats['通常']['races']} レース")
     print(f"・⚠️ 見（見送り）数: {stats['見']['races']} レース\n")
+
+    print("--- 🔥 勝負レース単体の成績 ---")
+    print(
+        f"・的中率: {calc_rate(stats['勝負']['hits'], stats['勝負']['races']):.2f}%"
+    )
+    print(
+        f"・回収率: {calc_roi(stats['勝負']['payout'], stats['勝負']['invest']):.2f}%\n"
+    )
 
     df_log = pd.DataFrame(logs)
     if not df_log.empty:
