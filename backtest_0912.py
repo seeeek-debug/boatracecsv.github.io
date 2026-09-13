@@ -165,23 +165,17 @@ if not kimarite_prob_dict:
 
 
 def predict_single_race(
-    venue_code, year, month_str, day_str_zf, month_raw, day_raw, r_num
+    venue_code, year, month_str, day_str_zf, month_raw, day_raw, r_num, df_odds=None
 ):
     venue_s = str(venue_code).zfill(2)
     month_int = int(month_str)
 
-    race_card_p1 = (
-        f"data/programs/race_cards/{year}/{month_str}/{day_str_zf}.csv"
-    )
+    race_card_p1 = f"data/programs/race_cards/{year}/{month_str}/{day_str_zf}.csv"
     race_card_p2 = f"data/programs/race_cards/{year}/{month_raw}/{day_raw}.csv"
     sui_p1 = f"data/previews/sui/{year}/{month_str}/{day_str_zf}.csv"
     sui_p2 = f"data/previews/sui/{year}/{month_raw}/{day_raw}.csv"
-    orig_p1 = (
-        f"data/previews/original_exhibition/{year}/{month_str}/{day_str_zf}.csv"
-    )
-    orig_p2 = (
-        f"data/previews/original_exhibition/{year}/{month_raw}/{day_raw}.csv"
-    )
+    orig_p1 = f"data/previews/original_exhibition/{year}/{month_str}/{day_str_zf}.csv"
+    orig_p2 = f"data/previews/original_exhibition/{year}/{month_raw}/{day_raw}.csv"
     stt_p1 = f"data/previews/stt/{year}/{month_str}/{day_str_zf}.csv"
     stt_p2 = f"data/previews/stt/{year}/{month_raw}/{day_raw}.csv"
 
@@ -197,9 +191,7 @@ def predict_single_race(
         else None
     )
 
-    df_cards = fetch_github_csv_with_fallback(
-        race_card_p1, race_card_p2, use_cache=True
-    )
+    df_cards = fetch_github_csv_with_fallback(race_card_p1, race_card_p2, use_cache=True)
     if df_cards is None:
         return None
 
@@ -226,10 +218,7 @@ def predict_single_race(
         for col in df.columns:
             if "レースコード" in col or "code" in col.lower():
                 col_vals = (
-                    df[col]
-                    .astype(str)
-                    .str.replace(r"\.0$", "", regex=True)
-                    .str.strip()
+                    df[col].astype(str).str.replace(r"\.0$", "", regex=True).str.strip()
                 )
                 matched = df[col_vals == str(code)]
                 if len(matched) > 0:
@@ -338,6 +327,8 @@ def predict_single_race(
     }
 
     trifecta_scores = []
+    total_score_sum = 0.0
+
     for c1_idx, c2_idx, c3_idx in itertools.permutations(range(6), 3):
         b1, b2, b3 = c1_idx + 1, c2_idx + 1, c3_idx + 1
         p1, p2, p3 = float(m1[c1_idx]), float(m2[c2_idx]), float(m3[c3_idx])
@@ -355,23 +346,84 @@ def predict_single_race(
         )
         final_score = ai_base_score * (max(pair_prob, 0.001) ** 0.3)
         trifecta_scores.append(((b1, b2, b3), final_score))
+        total_score_sum += final_score
 
     trifecta_scores.sort(key=lambda x: x[1], reverse=True)
 
-    status = "通常"
-    if len(trifecta_scores) >= 5:
-        top_score = trifecta_scores[0][1]
-        score_diff = trifecta_scores[0][1] - trifecta_scores[4][1]
-        if top_score >= 0.0030 and score_diff >= 0.0008:
-            status = "勝負"
-        elif top_score < 0.0020 or score_diff < 0.0003:
-            status = "見"
+    # -------------------------------------------------------------
+    # 🎯 直前オッズ (od3) 解析 ＆ 期待値フィルター
+    # -------------------------------------------------------------
+    odds_map = {}
+    if df_odds is not None and not df_odds.empty:
+        for col in df_odds.columns:
+            if "レースコード" in col or "code" in col.lower():
+                col_vals = (
+                    df_odds[col]
+                    .astype(str)
+                    .str.replace(r"\.0$", "", regex=True)
+                    .str.strip()
+                )
+                matched_odds = df_odds[col_vals == target_race_code]
+                if len(matched_odds) > 0:
+                    matched_row = matched_odds.iloc[0]
+                    for c1, c2, c3 in itertools.permutations(range(1, 7), 3):
+                        combo_key = f"{c1}-{c2}-{c3}"
+                        col_name = f"3連単_{combo_key}"
+                        if col_name in matched_row and pd.notna(
+                            matched_row[col_name]
+                        ):
+                            try:
+                                val = float(
+                                    str(matched_row[col_name])
+                                    .replace(",", "")
+                                    .strip()
+                                )
+                                if val > 0:
+                                    odds_map[combo_key] = val
+                            except ValueError:
+                                pass
+                    break
 
-    top5_combos = [combo for combo, _ in trifecta_scores[:5]]
+    # AI上位8点以内の中から期待値が高い買い目を抽出
+    candidate_combos = trifecta_scores[:8]
+    selected_combos = []
+
+    MIN_PROBABILITY = 0.035  # AI推定確率 3.5% 以上
+    MIN_EXPECTED_VALUE = 1.05  # 期待値 1.05 以上
+
+    for combo, score in candidate_combos:
+        combo_str = f"{combo[0]}-{combo[1]}-{combo[2]}"
+        est_prob = score / total_score_sum if total_score_sum > 0 else 0.0
+
+        # AI勝率が最低ライン以下の大穴は完全無視
+        if est_prob < MIN_PROBABILITY:
+            continue
+
+        if combo_str in odds_map:
+            odds = odds_map[combo_str]
+            expected_value = est_prob * odds
+
+            # 期待値条件クリア かつ ガミ回避（オッズ3.0倍以上）
+            if expected_value >= MIN_EXPECTED_VALUE and odds >= 3.0:
+                selected_combos.append(combo)
+
+    # 採用する買い目（最大5点）
+    final_combos = selected_combos[:5]
+
+    top_score = trifecta_scores[0][1]
+
+    # ステータス判定
+    if len(final_combos) == 0:
+        status = "見"
+    elif top_score >= 0.0030:
+        status = "勝負"
+    else:
+        status = "通常"
+
     return {
         "target_race_code": target_race_code,
         "status": status,
-        "top5_combos": top5_combos,
+        "top5_combos": final_combos,
     }
 
 
@@ -401,9 +453,12 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
 
         res_p1 = f"data/results/payouts/{year}/{month_str}/{day_str_zf}.csv"
         res_p2 = f"data/results/payouts/{year}/{month_raw}/{day_raw}.csv"
-        df_results = fetch_github_csv_with_fallback(
-            res_p1, res_p2, use_cache=True
-        )
+        df_results = fetch_github_csv_with_fallback(res_p1, res_p2, use_cache=True)
+
+        # 直前オッズ (od3) の取得
+        odds_p1 = f"data/previews/od3/{year}/{month_str}/{day_str_zf}.csv"
+        odds_p2 = f"data/previews/od3/{year}/{month_raw}/{day_raw}.csv"
+        df_odds = fetch_github_csv_with_fallback(odds_p1, odds_p2, use_cache=True)
 
         for venue_name, venue_code in VENUE_MAPPING.items():
             for r_num in range(1, 13):
@@ -415,6 +470,7 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
                     month_raw,
                     day_raw,
                     r_num,
+                    df_odds=df_odds,
                 )
                 if not pred:
                     continue
@@ -447,9 +503,7 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
 
                         if combo_val and "-" in combo_val:
                             parts = combo_val.split("-")
-                            if len(parts) == 3 and all(
-                                p.isdigit() for p in parts
-                            ):
+                            if len(parts) == 3 and all(p.isdigit() for p in parts):
                                 actual_combo = (
                                     int(parts[0]),
                                     int(parts[1]),
@@ -467,18 +521,17 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
                             except ValueError:
                                 payout = 0.0
 
-                # 的中判定（実データが取れていて、かつ予想Top5に含まれる場合のみ）
                 is_hit = (actual_combo is not None) and (actual_combo in top5)
 
-                # 「見」の場合は購入しないため投資も払戻も0扱いにする
                 if status == "見":
                     cost = 0
                     win_payout = 0.0
+                    hit_label = "ー(見送り)"
                 else:
                     cost = len(top5) * bet_per_combo
                     win_payout = payout if is_hit else 0.0
+                    hit_label = "🎯的中" if is_hit else "❌不的中"
 
-                # 全体統計への加算（実際に購入対象となる勝負＋通常のみ全体集計に計上）
                 if status != "見":
                     stats["全"]["races"] += 1
                     stats["全"]["invest"] += cost
@@ -486,10 +539,8 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
                     if is_hit:
                         stats["全"]["hits"] += 1
 
-                # ステータス別統計への加算
                 if status in stats:
                     stats[status]["races"] += 1
-                    # 見送りのレース数はカウントするが投資・払戻は加算しない
                     if status != "見":
                         stats[status]["invest"] += cost
                         stats[status]["payout"] += win_payout
@@ -502,19 +553,13 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
                         "会場": venue_name,
                         "R": f"{r_num}R",
                         "ステータス": status,
-                        "予想買い目(Top5)": [
-                            f"{c[0]}-{c[1]}-{c[2]}" for c in top5
-                        ],
+                        "予想買い目": [f"{c[0]}-{c[1]}-{c[2]}" for c in top5],
                         "結果": (
                             f"{actual_combo[0]}-{actual_combo[1]}-{actual_combo[2]}"
                             if actual_combo
                             else "不明"
                         ),
-                        "的中": (
-                            "🎯的中"
-                            if (is_hit and status != "見")
-                            else ("(的中)" if is_hit else "❌不的中")
-                        ),
+                        "的中": hit_label,
                         "払戻金": win_payout,
                     }
                 )
@@ -563,7 +608,7 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
                     "会場",
                     "R",
                     "ステータス",
-                    "予想買い目(Top5)",
+                    "予想買い目",
                     "結果",
                     "的中",
                     "払戻金",
@@ -577,5 +622,4 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
 
 
 if __name__ == "__main__":
-    run_backtest("2026-09-13", "2026-09-13")
-
+    run_backtest("2026-09-13", "2026-09-13")  
