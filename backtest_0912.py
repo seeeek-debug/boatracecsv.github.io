@@ -1,335 +1,593 @@
-import os
-import joblib
-import pandas as pd
-import numpy as np
+import io
 import itertools
+import os
+import time
+from datetime import datetime, timedelta
+import joblib
+import numpy as np
+import pandas as pd
+import requests
 
-# --- 基本設定 ---
-MODEL_FILENAME = "boatrace_lgb_model.pkl"
-TARGET_DATE = "2026-09-13"
-
-VENUES = [
-    "桐生", "戸田", "江戸川", "平和島", "多摩川", "浜名湖",
-    "蒲郡", "常滑", "津", "三国", "びわこ", "住之江",
-    "尼崎", "鳴門", "丸亀", "児島", "宮島", "徳山",
-    "下関", "若松", "芦屋", "福岡", "唐津", "大村"
-]
+# --- GitHub設定 & キャッシュ ---
+GITHUB_RAW_BASE = (
+    "https://raw.githubusercontent.com/seeeek-debug/boatracecsv.github.io/main/"
+)
+CSV_CACHE = {}
+CACHE_TTL = 300
 
 VENUE_MAPPING = {
-    "桐生": "01", "戸田": "02", "江戸川": "03", "平和島": "04", "多摩川": "05", "浜名湖": "06",
-    "蒲郡": "07", "常滑": "08", "津": "09", "三国": "10", "びわこ": "11", "住之江": "12",
-    "尼崎": "13", "鳴門": "14", "丸亀": "15", "児島": "16", "宮島": "17", "徳山": "18",
-    "下関": "19", "若松": "20", "芦屋": "21", "福岡": "22", "唐津": "23", "大村": "24"
+    "桐生": "01",
+    "戸田": "02",
+    "江戸川": "03",
+    "平和島": "04",
+    "多摩川": "05",
+    "浜名湖": "06",
+    "蒲郡": "07",
+    "常滑": "08",
+    "津": "09",
+    "三国": "10",
+    "びわこ": "11",
+    "住之江": "12",
+    "尼崎": "13",
+    "鳴門": "14",
+    "丸亀": "15",
+    "児島": "16",
+    "宮島": "17",
+    "徳山": "18",
+    "下関": "19",
+    "若松": "20",
+    "芦屋": "21",
+    "福岡": "22",
+    "唐津": "23",
+    "大村": "24",
 }
 
 VENUE_PREVIEW_CODE_MAP = {
-    "01": "kir", "02": "tod", "03": "edg", "04": "hei", "05": "tam", "06": "ham",
-    "07": "gam", "08": "tkz", "09": "tsu", "10": "mik", "11": "biw", "12": "sum",
-    "13": "ama", "14": "nar", "15": "mar", "16": "koj", "17": "miy", "18": "tok",
-    "19": "shm", "20": "wkm", "21": "ash", "22": "fuk", "23": "ktu", "24": "omr"
+    "01": "kir",
+    "02": "tod",
+    "03": "edg",
+    "04": "hei",
+    "05": "tam",
+    "06": "ham",
+    "07": "gam",
+    "08": "tkz",
+    "09": "tsu",
+    "10": "mik",
+    "11": "biw",
+    "12": "sum",
+    "13": "ama",
+    "14": "nar",
+    "15": "mar",
+    "16": "koj",
+    "17": "miy",
+    "18": "tok",
+    "19": "shm",
+    "20": "wkm",
+    "21": "ash",
+    "22": "fuk",
+    "23": "ktu",
+    "24": "omr",
 }
 
-CSV_CACHE = {}
 
-def load_csv(file_path):
-    if not file_path:
-        return None
-    if file_path in CSV_CACHE:
-        return CSV_CACHE[file_path]
-    
-    if os.path.exists(file_path):
-        try:
-            df = pd.read_csv(file_path, encoding="utf-8-sig", dtype=str)
+def clean_name(val):
+    if pd.isna(val):
+        return ""
+    return str(val).replace(" ", "").replace("　", "").strip()
+
+
+def fetch_github_csv(file_path, use_cache=True):
+    now = time.time()
+    if use_cache and file_path in CSV_CACHE:
+        ts, cached_df = CSV_CACHE[file_path]
+        if now - ts < CACHE_TTL:
+            return cached_df
+
+    timestamp = int(now)
+    uri = f"{GITHUB_RAW_BASE}{file_path}?t={timestamp}"
+    try:
+        res = requests.get(uri, timeout=10)
+        if res.status_code == 200:
+            df = pd.read_csv(io.StringIO(res.text), encoding="utf-8-sig")
             df.columns = df.columns.str.strip()
-            CSV_CACHE[file_path] = df
+            CSV_CACHE[file_path] = (now, df)
             return df
-        except Exception:
-            pass
+    except Exception:
+        pass
     return None
 
-def get_first_available(paths):
-    for p in paths:
-        if not p:
-            continue
-        df = load_csv(p)
-        if df is not None:
-            return df, p
-    return None, None
+
+def fetch_github_csv_with_fallback(primary_path, fallback_path, use_cache=True):
+    df = fetch_github_csv(primary_path, use_cache=use_cache)
+    if df is None and fallback_path:
+        df = fetch_github_csv(fallback_path, use_cache=use_cache)
+    return df
+
 
 def get_season(m):
-    if m in [3, 4, 5]: return "春"
-    elif m in [6, 7, 8]: return "夏"
-    elif m in [9, 10, 11]: return "秋"
-    else: return "冬"
+    if m in [3, 4, 5]:
+        return "春"
+    elif m in [6, 7, 8]:
+        return "夏"
+    elif m in [9, 10, 11]:
+        return "秋"
+    else:
+        return "冬"
 
-# --- 1. モデルおよび決まり手データのロード ---
-print("📦 ローカルからモデルおよび環境データを読み込んでいます...")
-if not os.path.exists(MODEL_FILENAME):
-    print(f"❌ エラー: モデルファイル '{MODEL_FILENAME}' が見つかりません。")
-    exit(1)
 
-loaded_package = joblib.load(MODEL_FILENAME)
+# --- モデル・事前データの読み込み ---
+MODEL_FILENAME = "boatrace_lgb_model.pkl"
 models = {}
-expected_features = []
 player_fav_kimarite = None
 kimarite_prob_dict = {}
+expected_features = []
+feature_medians = {}
+cat_categories = {}
 
-if isinstance(loaded_package, dict):
-    if "model_1st" in loaded_package:
-        models["rank_1"] = loaded_package.get("model_1st")
-        models["rank_2"] = loaded_package.get("model_2nd")
-        models["rank_3"] = loaded_package.get("model_3rd")
-    elif "models" in loaded_package:
-        models = loaded_package.get("models")
-    elif "rank_1" in loaded_package:
-        models = loaded_package
+if os.path.exists(MODEL_FILENAME):
+    loaded_package = joblib.load(MODEL_FILENAME)
+    if isinstance(loaded_package, dict):
+        if "model_1st" in loaded_package:
+            models["rank_1"] = loaded_package.get("model_1st")
+            models["rank_2"] = loaded_package.get("model_2nd")
+            models["rank_3"] = loaded_package.get("model_3rd")
+        elif "models" in loaded_package:
+            models = loaded_package.get("models")
+        elif "rank_1" in loaded_package:
+            models = loaded_package
 
-    player_fav_kimarite = loaded_package.get("player_fav_kimarite")
-    loaded_pair_table = loaded_package.get("pair_table")
-    if loaded_pair_table and isinstance(loaded_pair_table, dict):
-        kimarite_prob_dict = loaded_pair_table
+        player_fav_kimarite = loaded_package.get("player_fav_kimarite")
+        loaded_pair_table = loaded_package.get("pair_table")
+        if loaded_pair_table and isinstance(loaded_pair_table, dict):
+            kimarite_prob_dict = loaded_pair_table
 
-    if "feature_names" in loaded_package:
-        expected_features = loaded_package["feature_names"]
-    elif "rank_1" in models and hasattr(models["rank_1"], "feature_name"):
-        expected_features = models["rank_1"].feature_name()
+        if "feature_names" in loaded_package:
+            expected_features = loaded_package["feature_names"]
+        elif "features" in loaded_package:
+            expected_features = loaded_package["features"]
 
+        if "feature_medians" in loaded_package:
+            feature_medians = loaded_package.get("feature_medians", {})
+        if "cat_categories" in loaded_package:
+            cat_categories = loaded_package.get("cat_categories", {})
+else:
+    print(f"⚠️ モデルファイル '{MODEL_FILENAME}' が見つかりません。")
+
+# 決まり手テーブルフォールバック
 if not kimarite_prob_dict:
-    df_pair = load_csv("data/estimate/kimarite/tables/pair_table.csv")
+    df_pair = fetch_github_csv(
+        "data/estimate/kimarite/tables/pair_table.csv", use_cache=True
+    )
     if df_pair is not None:
         for _, row in df_pair.iterrows():
-            k_type = str(row['セル']).strip()
-            c2 = int(row['2着コース'])
-            c3 = int(row['3着コース'])
-            kimarite_prob_dict[(k_type, c2, c3)] = float(row['確率'])
+            k_type = str(row["セル"]).strip()
+            c2 = int(row["2着コース"])
+            c3 = int(row["3着コース"])
+            prob = float(row["確率"])
+            kimarite_prob_dict[(k_type, c2, c3)] = prob
 
-# --- 2. バックテスト実行 ---
-year, month, day = TARGET_DATE.split("-")
-month_str, day_str = month.zfill(2), day.zfill(2)
-month_raw, day_raw = str(int(month)), str(int(day))
 
-print(f"\n🚀 {TARGET_DATE} の全レース検証を開始します...\n")
+# --- 単一レース予測関数 (bot.py と完全同等ロジック) ---
+def predict_single_race(
+    venue_code, year, month_str, day_str_zf, month_raw, day_raw, r_num
+):
+    venue_s = str(venue_code).zfill(2)
+    month_int = int(month_str)
 
-total_races = 0
-hits = 0
-results_summary = []
-found_any_card = False
-
-for venue in VENUES:
-    venue_s = VENUE_MAPPING[venue]
-    prev_code = VENUE_PREVIEW_CODE_MAP.get(venue_s, "")
-
-    card_paths = [
-        f"data/programs/race_cards/{year}/{month_str}/{day_str}.csv",
-        f"data/programs/race_cards/{year}/{month_raw}/{day_raw}.csv",
-        f"data/race_cards/{year}/{month_str}/{day_str}.csv",
-        f"data/race_cards/{year}/{month_raw}/{day_raw}.csv"
-    ]
-    # payouts 階層を含むファイルパスを追加
-    result_paths = [
-        f"data/results/payouts/{year}/{month_str}/{day_str}.csv",
-        f"data/results/payouts/{year}/{month_raw}/{day_raw}.csv",
-        f"data/results/{year}/{month_str}/{day_str}.csv",
-        f"data/results/{year}/{month_raw}/{day_raw}.csv",
-        f"data/results/{year}/{month_str}/{month_str}{day_str}.csv"
-    ]
-    sui_paths = [
-        f"data/previews/sui/{year}/{month_str}/{day_str}.csv",
-        f"data/previews/sui/{year}/{month_raw}/{day_raw}.csv"
-    ]
-    orig_paths = [
-        f"data/previews/original_exhibition/{year}/{month_str}/{day_str}.csv",
+    race_card_p1 = (
+        f"data/programs/race_cards/{year}/{month_str}/{day_str_zf}.csv"
+    )
+    race_card_p2 = f"data/programs/race_cards/{year}/{month_raw}/{day_raw}.csv"
+    sui_p1 = f"data/previews/sui/{year}/{month_str}/{day_str_zf}.csv"
+    sui_p2 = f"data/previews/sui/{year}/{month_raw}/{day_raw}.csv"
+    orig_p1 = (
+        f"data/previews/original_exhibition/{year}/{month_str}/{day_str_zf}.csv"
+    )
+    orig_p2 = (
         f"data/previews/original_exhibition/{year}/{month_raw}/{day_raw}.csv"
-    ]
-    stt_paths = [
-        f"data/previews/stt/{year}/{month_str}/{day_str}.csv",
-        f"data/previews/stt/{year}/{month_raw}/{day_raw}.csv"
-    ]
-    venue_preview_paths = [
-        f"data/previews/{prev_code}/{year}/{month_str}/{day_str}.csv" if prev_code else "",
-        f"data/previews/{prev_code}/{year}/{month_raw}/{day_raw}.csv" if prev_code else ""
-    ]
+    )
+    stt_p1 = f"data/previews/stt/{year}/{month_str}/{day_str_zf}.csv"
+    stt_p2 = f"data/previews/stt/{year}/{month_raw}/{day_raw}.csv"
 
-    df_cards, _ = get_first_available(card_paths)
+    prev_code = VENUE_PREVIEW_CODE_MAP.get(venue_s, "")
+    venue_preview_p1 = (
+        f"data/previews/{prev_code}/{year}/{month_str}/{day_str_zf}.csv"
+        if prev_code
+        else None
+    )
+    venue_preview_p2 = (
+        f"data/previews/{prev_code}/{year}/{month_raw}/{day_raw}.csv"
+        if prev_code
+        else None
+    )
+
+    df_cards = fetch_github_csv_with_fallback(
+        race_card_p1, race_card_p2, use_cache=True
+    )
     if df_cards is None:
-        continue
-    found_any_card = True
+        return None
 
-    df_results, _ = get_first_available(result_paths)
-    df_sui, _ = get_first_available(sui_paths)
-    df_orig, _ = get_first_available(orig_paths)
-    df_stt, _ = get_first_available(stt_paths)
-    df_venue_preview, _ = get_first_available(venue_preview_paths)
+    df_sui = fetch_github_csv_with_fallback(sui_p1, sui_p2, use_cache=True)
+    df_orig = fetch_github_csv_with_fallback(orig_p1, orig_p2, use_cache=True)
+    df_stt = fetch_github_csv_with_fallback(stt_p1, stt_p2, use_cache=True)
+    df_venue_preview = fetch_github_csv_with_fallback(
+        venue_preview_p1, venue_preview_p2, use_cache=True
+    )
 
-    if df_orig is not None:
-        rename_dict = {f"艇{i}_値1": f"艇{i}_オリジナル一周タイム" for i in range(1, 7)}
-        df_orig = df_orig.rename(columns=rename_dict)
+    df_course_win = fetch_github_csv(
+        "data/estimate/stadium/course_win_rate.csv", use_cache=True
+    )
+    df_season_win = fetch_github_csv(
+        "data/estimate/stadium/win_rate.csv", use_cache=True
+    )
 
-    df_course_win = load_csv("data/estimate/stadium/course_win_rate.csv")
-    df_season_win = load_csv("data/estimate/stadium/win_rate.csv")
+    r_str = str(r_num).zfill(2)
+    target_race_code = f"{year}{month_str}{day_str_zf}{venue_s}{r_str}"
 
-    for r_num in range(1, 13):
-        r_str = str(r_num).zfill(2)
-        target_race_code = f"{year}{month_str}{day_str}{venue_s}{r_str}"
-
-        def get_matched_row(df, code):
-            if df is None: return None
-            code_str = str(code).strip()
-            for col in df.columns:
-                if any(k in col for k in ["レースコード", "race_code", "コード", "code"]):
-                    col_vals = df[col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-                    matched = df[col_vals == code_str]
-                    if len(matched) > 0:
-                        return matched.iloc[0].to_dict()
+    def get_matched_row(df, code):
+        if df is None:
             return None
+        for col in df.columns:
+            if "レースコード" in col or "code" in col.lower():
+                col_vals = (
+                    df[col]
+                    .astype(str)
+                    .str.replace(r"\.0$", "", regex=True)
+                    .str.strip()
+                )
+                matched = df[col_vals == str(code)]
+                if len(matched) > 0:
+                    return matched.iloc[0].to_dict()
+        return None
 
-        card_row = get_matched_row(df_cards, target_race_code)
-        if not card_row:
-            continue
+    card_row = get_matched_row(df_cards, target_race_code)
+    if not card_row:
+        return None
 
-        res_row = get_matched_row(df_results, target_race_code) or {}
-        sui_row = get_matched_row(df_sui, target_race_code) or {}
-        orig_row = get_matched_row(df_orig, target_race_code) or {}
-        stt_row = get_matched_row(df_stt, target_race_code) or {}
-        venue_preview_row = get_matched_row(df_venue_preview, target_race_code) or {}
+    combined_row = {}
+    combined_row.update(card_row)
+    combined_row.update(get_matched_row(df_sui, target_race_code) or {})
+    combined_row.update(get_matched_row(df_orig, target_race_code) or {})
+    combined_row.update(get_matched_row(df_stt, target_race_code) or {})
+    combined_row.update(get_matched_row(df_venue_preview, target_race_code) or {})
 
-        combined_row = {}
-        combined_row.update(card_row)
-        combined_row.update(res_row)
-        combined_row.update(sui_row)
-        combined_row.update(orig_row)
-        combined_row.update(stt_row)
-        combined_row.update(venue_preview_row)
+    if df_course_win is not None:
+        for _, row in df_course_win.iterrows():
+            if str(row.get("場コード", "")).strip().zfill(2) == venue_s and str(
+                row.get("レース回", "")
+            ).strip() == str(int(r_num)):
+                for k, v in row.items():
+                    if k not in ["場コード", "レース回"]:
+                        combined_row[f"est_course_{k}"] = v
+                break
 
-        if df_course_win is not None:
-            for _, row in df_course_win.iterrows():
-                if str(row.get("場コード", "")).strip().zfill(2) == venue_s and str(row.get("レース回", "")).strip() == str(r_num):
-                    for k, v in row.items():
-                        if k not in ["場コード", "レース回"]: combined_row[f"est_course_{k}"] = v
-                    break
+    if df_season_win is not None:
+        season_name = get_season(month_int)
+        for _, row in df_season_win.iterrows():
+            if str(row.get("場コード", "")).strip().zfill(2) == venue_s and str(
+                row.get("季節", "")
+            ).strip() == season_name:
+                for k, v in row.items():
+                    if k not in ["場コード", "季節"]:
+                        combined_row[f"est_season_{k}"] = v
+                break
 
-        if df_season_win is not None:
-            season_name = get_season(int(month))
-            for _, row in df_season_win.iterrows():
-                if str(row.get("場コード", "")).strip().zfill(2) == venue_s and str(row.get("季節", "")).strip() == season_name:
-                    for k, v in row.items():
-                        if k not in ["場コード", "季節"]: combined_row[f"est_season_{k}"] = v
-                    break
+    df_pred = pd.DataFrame([combined_row])
 
-        expanded_row = dict(combined_row)
-        for k, v in list(combined_row.items()):
-            for b in range(1, 7):
-                sb = str(b)
-                if k.startswith(f"艇{sb}_"):
-                    expanded_row[f"{sb}号艇_{k[2:]}"] = v
-                    expanded_row[f"{k[2:]}_{sb}"] = v
-                elif k.startswith(f"{sb}号艇_"):
-                    expanded_row[f"艇{sb}_{k[3:]}"] = v
-                    expanded_row[f"{k[3:]}_{sb}"] = v
+    if player_fav_kimarite:
+        dummy_k_keys = (
+            list(next(iter(player_fav_kimarite.values())).keys())
+            if player_fav_kimarite
+            else []
+        )
+        for i in range(1, 7):
+            p_col_candidates = [
+                f"艇{i}_選手名",
+                f"{i}号艇_選手名",
+                f"選手名_{i}",
+                f"艇{i}_氏名",
+                f"{i}号艇_氏名",
+                f"氏名_{i}",
+                f"艇{i}_選手",
+                f"{i}号艇_選手",
+            ]
+            p_val = ""
+            for c in p_col_candidates:
+                if c in df_pred.columns and pd.notna(df_pred.iloc[0][c]):
+                    val = clean_name(df_pred.iloc[0][c])
+                    if val and val != "nan":
+                        p_val = val
+                        break
+            for k_name in dummy_k_keys:
+                df_pred[f"艇{i}_kimarite_{k_name}"] = player_fav_kimarite.get(
+                    p_val, {}
+                ).get(k_name, 0.0)
 
-        df_pred = pd.DataFrame([expanded_row])
+    X_input = df_pred.reindex(columns=expected_features)
+    cat_cols = ["レース場", "風向", "天候"]
+    for col in expected_features:
+        if col in cat_cols and col in X_input.columns:
+            saved_cats = cat_categories.get(col, None)
+            if saved_cats:
+                X_input[col] = pd.Categorical(X_input[col], categories=saved_cats)
+            else:
+                X_input[col] = X_input[col].astype("category")
+        elif col not in cat_cols:
+            X_input[col] = pd.to_numeric(X_input[col], errors="coerce")
+            X_input[col] = X_input[col].fillna(
+                feature_medians.get(col, 0.0)
+                if isinstance(feature_medians, dict)
+                else 0.0
+            )
 
-        if player_fav_kimarite:
-            for i in range(1, 7):
-                p_col = next((c for c in [f"艇{i}_選手名", f"{i}号艇_選手名", f"選手名_{i}"] if c in df_pred.columns), None)
-                if p_col:
-                    dummy_k_keys = list(next(iter(player_fav_kimarite.values())).keys()) if player_fav_kimarite else []
-                    for k_name in dummy_k_keys:
-                        p_val = str(df_pred.iloc[0].get(p_col, "")).strip()
-                        df_pred[f"艇{i}_kimarite_{k_name}"] = player_fav_kimarite.get(p_val, {}).get(k_name, 0.0)
+    prob_matrix = {}
+    for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"], 1):
+        if rank_name in models and models[rank_name] is not None:
+            preds = models[rank_name].predict(X_input)
+            if len(preds) > 0:
+                prob_matrix[rank_idx] = np.array(preds[0])
 
-        for col in [c for c in df_pred.columns if not c.startswith("res_")]:
-            if col not in ["レース場", "風向", "天候"]:
-                df_pred[col] = pd.to_numeric(df_pred[col], errors='coerce')
+    if not (1 in prob_matrix and 2 in prob_matrix and 3 in prob_matrix):
+        return None
 
-        for col in ["レース場", "風向", "天候"]:
-            if col in df_pred.columns:
-                df_pred[col] = df_pred[col].astype('category')
+    m1, m2, m3 = prob_matrix[1], prob_matrix[2], prob_matrix[3]
+    entry_courses = {i + 1: i + 1 for i in range(6)}
+    default_kimarite_map = {
+        1: "逃げ",
+        2: "差し",
+        3: "まくり",
+        4: "まくり",
+        5: "まくり差し",
+        6: "まくり差し",
+    }
 
-        X_input = df_pred.reindex(columns=expected_features, fill_value=0.0)
-        for col in expected_features:
-            if col in ["レース場", "風向", "天候"] and col in X_input.columns:
-                X_input[col] = X_input[col].astype('category')
-        for col in X_input.select_dtypes(include=[np.number]).columns:
-            X_input[col] = X_input[col].fillna(0.0)
+    trifecta_scores = []
+    for c1_idx, c2_idx, c3_idx in itertools.permutations(range(6), 3):
+        b1, b2, b3 = c1_idx + 1, c2_idx + 1, c3_idx + 1
+        p1, p2, p3 = float(m1[c1_idx]), float(m2[c2_idx]), float(m3[c3_idx])
+        ai_base_score = (p1**1.8) * (p2**1.3) * (p3**1.0)
+        c1_course, c2_course, c3_course = (
+            entry_courses[b1],
+            entry_courses[b2],
+            entry_courses[b3],
+        )
+        primary_kimarite = default_kimarite_map.get(b1, "差し")
+        k_key = f"{primary_kimarite}_{c1_course}"
+        pair_prob = kimarite_prob_dict.get(
+            (k_key, c2_course, c3_course),
+            kimarite_prob_dict.get((primary_kimarite, c2_course, c3_course), 0.001),
+        )
+        final_score = ai_base_score * (max(pair_prob, 0.001) ** 0.3)
+        trifecta_scores.append(((b1, b2, b3), final_score))
 
-        prob_matrix = {}
-        for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"], 1):
-            if rank_name in models and models[rank_name] is not None:
-                preds = models[rank_name].predict(X_input)
-                if len(preds) > 0:
-                    prob_matrix[rank_idx] = np.array(preds[0])
+    trifecta_scores.sort(key=lambda x: x[1], reverse=True)
 
-        m1, m2, m3 = prob_matrix.get(1), prob_matrix.get(2), prob_matrix.get(3)
-        if m1 is None or m2 is None or m3 is None:
-            continue
+    status = "通常"
+    if len(trifecta_scores) >= 5:
+        top_score = trifecta_scores[0][1]
+        score_diff = trifecta_scores[0][1] - trifecta_scores[4][1]
+        if top_score >= 0.0025 and score_diff >= 0.0008:
+            status = "勝負"
+        elif top_score < 0.0018 or score_diff < 0.0003:
+            status = "見"
 
-        default_kimarite_map = {1: "逃げ", 2: "差し", 3: "まくり", 4: "まくり", 5: "まくり差し", 6: "差し"}
-        trifecta_scores = []
-        for c1_idx, c2_idx, c3_idx in itertools.permutations(range(6), 3):
-            b1, b2, b3 = c1_idx + 1, c2_idx + 1, c3_idx + 1
-            ai_base_score = (float(m1[c1_idx]) ** 1.8) * (float(m2[c2_idx]) ** 1.3) * (float(m3[c3_idx]) ** 1.0)
-            primary_kimarite = default_kimarite_map.get(b1, "差し")
-            pair_prob = kimarite_prob_dict.get((f"{primary_kimarite}_{b1}", b2, b3),
-                        kimarite_prob_dict.get((primary_kimarite, b2, b3), 0.01))
-            final_score = ai_base_score * (max(pair_prob, 0.001) ** 0.3)
-            trifecta_scores.append((f"{b1}-{b2}-{b3}", final_score))
+    top5_combos = [combo for combo, _ in trifecta_scores[:5]]
+    return {
+        "target_race_code": target_race_code,
+        "status": status,
+        "top5_combos": top5_combos,
+    }
 
-        trifecta_scores.sort(key=lambda x: x[1], reverse=True)
-        top5_bets = [x[0] for x in trifecta_scores[:5]]
 
-        # 実際の確定結果・払戻金の取得（新しいCSVの列名 3連単_組番 に対応）
-        r1 = str(expanded_row.get("res_1着", "")).replace(".0", "").strip()
-        r2 = str(expanded_row.get("res_2着", "")).replace(".0", "").strip()
-        r3 = str(expanded_row.get("res_3着", "")).replace(".0", "").strip()
-        
-        actual_result = ""
-        if r1 and r2 and r3 and r1 != "nan" and r2 != "nan" and r3 != "nan":
-            actual_result = f"{r1}-{r2}-{r3}"
-        else:
-            actual_result = str(expanded_row.get("3連単_組番", expanded_row.get("res_3連単", ""))).replace(".0", "").strip()
+# --- バックテスト実行メイン処理 ---
+def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
+    start_dt = datetime.strptime(start_date_str, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date_str, "%Y-%m-%d")
 
-        if not actual_result or actual_result in ["nan--", "nan"]:
-            continue
+    # 統計用変数
+    stats = {
+        "全": {"races": 0, "hits": 0, "invest": 0, "payout": 0},
+        "勝負": {"races": 0, "hits": 0, "invest": 0, "payout": 0},
+        "通常": {"races": 0, "hits": 0, "invest": 0, "payout": 0},
+        "見": {"races": 0, "hits": 0, "invest": 0, "payout": 0},
+    }
 
-        total_races += 1
-        is_hit = actual_result in top5_bets
-        if is_hit:
-            hits += 1
-            hit_rank = top5_bets.index(actual_result) + 1
-            rank_str = f"🎯 的中 ({hit_rank}番手)"
-        else:
-            rank_str = "❌ 不的中"
+    logs = []
+    curr_dt = start_dt
 
-        race_label = f"{venue} {r_num}R"
-        payout = str(expanded_row.get("3連単_払戻金", expanded_row.get("res_3連単払戻", expanded_row.get("res_払戻", "-")))).strip()
+    print(f"🚀 バックテスト開始: {start_date_str} ～ {end_date_str}")
 
-        results_summary.append({
-            "race": race_label,
-            "bets": ", ".join(top5_bets),
-            "actual": actual_result,
-            "status": rank_str,
-            "payout": payout
-        })
+    while curr_dt <= end_dt:
+        year = curr_dt.strftime("%Y")
+        month_str = curr_dt.strftime("%m")
+        day_str_zf = curr_dt.strftime("%d")
+        day_str = curr_dt.strftime("%Y-%m-%d")
+        month_raw = str(curr_dt.month)
+        day_raw = str(curr_dt.day)
 
-# --- 3. 結果の表示 ---
-print("==========================================================================")
-print(f" 📊 {TARGET_DATE} 全レース AI予想バックテスト結果")
-print("==========================================================================")
+        # レース結果データの取得
+        res_p1 = f"data/results/{year}/{month_str}/{day_str_zf}.csv"
+        res_p2 = f"data/results/{year}/{month_raw}/{day_raw}.csv"
+        df_results = fetch_github_csv_with_fallback(
+            res_p1, res_p2, use_cache=True
+        )
 
-if not found_any_card:
-    print(f"⚠️ 指定日 ({TARGET_DATE}) の出走表CSVが見つかりませんでした。")
-elif total_races == 0:
-    print(f"⚠️ レース結果データが見つかりませんでした。")
-else:
-    for r in results_summary:
-        payout_info = f" | 払戻: {r['payout']}円" if "🎯" in r['status'] and r['payout'] != "-" else ""
-        print(f"[{r['race']}] 予想5点: [{r['bets']}] | 確定: {r['actual']} | {r['status']}{payout_info}")
+        for venue_name, venue_code in VENUE_MAPPING.items():
+            for r_num in range(1, 13):
+                pred = predict_single_race(
+                    venue_code,
+                    year,
+                    month_str,
+                    day_str_zf,
+                    month_raw,
+                    day_raw,
+                    r_num,
+                )
+                if not pred:
+                    continue
 
-    print("--------------------------------------------------------------------------")
-    hit_rate = (hits / total_races * 100) if total_races > 0 else 0
-    print(f"総検証レース数 : {total_races} R")
-    print(f"的中数         : {hits} R")
-    print(f"的中率         : {hit_rate:.1f} %")
-    print("==========================================================================")
+                code = pred["target_race_code"]
+                status = pred["status"]
+                top5 = pred["top5_combos"]
+
+                # 結果テーブルから該当レースを照合
+                actual_combo = None
+                payout = 0
+
+                if df_results is not None:
+                    matched = None
+                    for col in df_results.columns:
+                        if "レースコード" in col or "code" in col.lower():
+                            col_vals = (
+                                df_results[col]
+                                .astype(str)
+                                .str.replace(r"\.0$", "", regex=True)
+                                .str.strip()
+                            )
+                            m = df_results[col_vals == str(code)]
+                            if len(m) > 0:
+                                matched = m.iloc[0]
+                                break
+
+                    if matched is not None:
+                        # 3連単の結果と払戻金を取得（カラム表記揺れに対応）
+                        combo_val = (
+                            matched.get("3連単_組番")
+                            or matched.get("3連単")
+                            or matched.get("確定_3連単")
+                        )
+                        payout_val = (
+                            matched.get("3連単_払戻金")
+                            or matched.get("3連単_払戻")
+                            or matched.get("払戻金_3連単")
+                        )
+
+                        if pd.notna(combo_val):
+                            combo_str = str(combo_val).replace("-", "").strip()
+                            if len(combo_str) == 3 and combo_str.isdigit():
+                                actual_combo = (
+                                    int(combo_str[0]),
+                                    int(combo_str[1]),
+                                    int(combo_str[2]),
+                                )
+
+                        if pd.notna(payout_val):
+                            payout = float(
+                                str(payout_val).replace(",", "").replace("円", "")
+                            )
+
+                # 的中判定 & 集計
+                cost = len(top5) * bet_per_combo  # 5点買い = 500円
+                is_hit = (
+                    actual_combo is not None and actual_combo in top5
+                )  # 上位5点に入っているか
+                win_payout = payout if is_hit else 0
+
+                stats["全"]["races"] += 1
+                stats["全"]["invest"] += cost
+                stats["全"]["payout"] += win_payout
+                if is_hit:
+                    stats["全"]["hits"] += 1
+
+                stats[status]["races"] += 1
+                stats[status]["invest"] += cost
+                stats[status]["payout"] += win_payout
+                if is_hit:
+                    stats[status]["hits"] += 1
+
+                logs.append(
+                    {
+                        "日付": day_str,
+                        "会場": venue_name,
+                        "R": f"{r_num}R",
+                        "ステータス": status,
+                        "予想買い目(Top5)": [
+                            f"{c[0]}-{c[1]}-{c[2]}" for c in top5
+                        ],
+                        "結果": (
+                            f"{actual_combo[0]}-{actual_combo[1]}-{actual_combo[2]}"
+                            if actual_combo
+                            else "不明"
+                        ),
+                        "的中": "🎯的中" if is_hit else "❌不的中",
+                        "払戻金": win_payout,
+                    }
+                )
+
+        curr_dt += timedelta(days=1)
+
+    # --- バックテスト結果表示 ---
+    print("\n" + "=" * 50)
+    print("📊 【バックテスト結果レポート】")
+    print("=" * 50)
+
+    def calc_rate(hits, races):
+        return (hits / races * 100) if races > 0 else 0.0
+
+    def calc_roi(payout, invest):
+        return (payout / invest * 100) if invest > 0 else 0.0
+
+    print(f"・総レース数: {stats['全']['races']} レース")
+    print(f"・的中レース数: {stats['全']['hits']} レース")
+    print(f"・全体的中率: {calc_rate(stats['全']['hits'], stats['全']['races']):.2f}%")
+    print(
+        f"・全体総投資: {stats['全']['invest']:,} 円 | 全体払戻: {int(stats['全']['payout']):,} 円"
+    )
+    print(
+        f"・全体回収率: {calc_roi(stats['全']['payout'], stats['全']['invest']):.2f}%\n"
+    )
+
+    print("--- 判定別レース数 ---")
+    print(f"・🔥 勝負レース数: {stats['勝負']['races']} レース")
+    print(f"・📊 通常レース数: {stats['通常']['races']} レース")
+    print(f"・⚠️ 見（見送り）数: {stats['見']['races']} レース\n")
+
+    # 見以外のレース（勝負 + 通常）
+    target_races = stats["勝負"]["races"] + stats["通常"]["races"]
+    target_hits = stats["勝負"]["hits"] + stats["通常"]["hits"]
+    target_invest = stats["勝負"]["invest"] + stats["通常"]["invest"]
+    target_payout = stats["勝負"]["payout"] + stats["通常"]["payout"]
+
+    print("--- 🔥 見以外のレースを購入した場合（勝負＋通常） ---")
+    print(f"・対象レース数: {target_races} レース")
+    print(f"・的中レース数: {target_hits} レース")
+    print(f"・的中率: {calc_rate(target_hits, target_races):.2f}%")
+    print(f"・総投資: {target_invest:,} 円")
+    print(f"・総払戻: {int(target_payout):,} 円")
+    print(f"・回収率: {calc_roi(target_payout, target_invest):.2f}%\n")
+
+    print("--- 🎯 勝負レース単体の成績 ---")
+    print(
+        f"・的中率: {calc_rate(stats['勝負']['hits'], stats['勝負']['races']):.2f}%"
+    )
+    print(
+        f"・回収率: {calc_roi(stats['勝負']['payout'], stats['勝負']['invest']):.2f}%\n"
+    )
+
+    print("--- 買い目・勝敗詳細ログ（先頭10件サンプル） ---")
+    df_log = pd.DataFrame(logs)
+    if not df_log.empty:
+        print(
+            df_log[
+                [
+                    "日付",
+                    "会場",
+                    "R",
+                    "ステータス",
+                    "予想買い目(Top5)",
+                    "結果",
+                    "的中",
+                    "払戻金",
+                ]
+            ]
+            .head(10)
+            .to_string(index=False)
+        )
+        df_log.to_csv("backtest_results.csv", index=False, encoding="utf-8-sig")
+        print("\n📁 詳細なバックテスト結果を 'backtest_results.csv' に出力しました。")
+
+
+if __name__ == "__main__":
+    # 日付範囲を指定して実行
+    run_backtest("2026-09-06", "2026-09-13")
 
