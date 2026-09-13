@@ -362,9 +362,9 @@ def predict_single_race(
     if len(trifecta_scores) >= 5:
         top_score = trifecta_scores[0][1]
         score_diff = trifecta_scores[0][1] - trifecta_scores[4][1]
-        if top_score >= 0.0025 and score_diff >= 0.0008:
+        if top_score >= 0.0030 and score_diff >= 0.0008:
             status = "勝負"
-        elif top_score < 0.0018 or score_diff < 0.0003:
+        elif top_score < 0.0020 or score_diff < 0.0003:
             status = "見"
 
     top5_combos = [combo for combo, _ in trifecta_scores[:5]]
