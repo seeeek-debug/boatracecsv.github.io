@@ -65,13 +65,12 @@ CSV_CACHE = {}
 def fetch_github_csv(file_path, use_cache=False):
     """
     GitHubからCSVを取得する。
-    use_cache=True の場合は静的マスタ（過去データ等）をキャッシュ。
-    use_cache=False（デフォルト）の場合はタイムスタンプを付与してリアルタイムの展示・直前情報を確実に取得。
+    use_cache=True の場合は静的マスタをキャッシュ。
+    use_cache=False の場合はタイムスタンプを付与してリアルタイムデータを確実に取得。
     """
     if use_cache and file_path in CSV_CACHE:
         return CSV_CACHE[file_path]
     
-    # HTTP/CDNキャッシュを回避するためURLにタイムスタンプを付与
     timestamp = int(datetime.now().timestamp())
     uri = f"{GITHUB_RAW_BASE}{file_path}?t={timestamp}"
     try:
@@ -179,7 +178,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     venue_s = str(venue_code).zfill(2)
     month_int = int(month)
 
-    # 動的（リアルタイム）ファイルパス
     race_card_p1 = f"data/programs/race_cards/{year}/{month_str}/{day_str_zf}.csv"
     race_card_p2 = f"data/programs/race_cards/{year}/{month_raw}/{day_raw}.csv"
 
@@ -196,7 +194,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     venue_preview_p1 = f"data/previews/{prev_code}/{year}/{month_str}/{day_str_zf}.csv" if prev_code else None
     venue_preview_p2 = f"data/previews/{prev_code}/{year}/{month_raw}/{day_raw}.csv" if prev_code else None
 
-    # 展示・風・STなどのリアルタイムデータはキャッシュを使わず（use_cache=False）常に最新を取得
+    # 展示・直前データはリアルタイム取得
     df_cards = fetch_github_csv_with_fallback(race_card_p1, race_card_p2, use_cache=False)
     df_sui = fetch_github_csv_with_fallback(sui_p1, sui_p2, use_cache=False)
     df_orig = fetch_github_csv_with_fallback(orig_p1, orig_p2, use_cache=False)
@@ -207,7 +205,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         rename_dict = {f"艇{i}_値{j}": f"艇{i}_オリジナル" + ["一周タイム", "まわり足タイム", "直線タイム"][j-1] for i in range(1, 7) for j in range(1, 4)}
         df_orig = df_orig.rename(columns=rename_dict)
 
-    # 静的推定データはキャッシュを利用
     df_course_win = fetch_github_csv("data/estimate/stadium/course_win_rate.csv", use_cache=True)
     df_season_win = fetch_github_csv("data/estimate/stadium/win_rate.csv", use_cache=True)
 
@@ -288,7 +285,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     for col in X_input.columns:
         if col not in ["レース場", "風向", "天候"]:
             X_input[col] = pd.to_numeric(X_input[col], errors='coerce')
-            X_input[col] = X_input[col].fillna(feature_medians.get(col, 0.0))
+            X_input[col] = X_input[col].fillna(feature_medians.get(col, 0.0) if isinstance(feature_medians, dict) else 0.0)
 
     prob_matrix = {}
     for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"], 1):
@@ -309,7 +306,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
                     break
         boat_names.append(name)
 
-    # 出力文字列の構成
     summary_text = f"🎯 **{venue}** {r_num}R 予想結果 ({day_str})\n\n"
     summary_text += "--- 【3連単 予想買い目（上位5点）】 ---\n"
 
@@ -361,23 +357,37 @@ class InteractiveRaceControlView(discord.ui.View):
         super().__init__(timeout=None)
         self.current_venue = current_venue
 
+        options = [discord.SelectOption(label=v, description=f"{v} のレース予想を表示") for v in VENUES]
         venue_select = discord.ui.Select(
             placeholder=f"🏟️ 現在: {current_venue} (会場変更はこちら)",
             min_values=1, max_values=1,
-            options=[discord.SelectOption(label=v, description=f"{v} のレース予想を表示") for v in VENUES],
-            custom_id="persistent_venue_select_dynamic"
+            options=options,
+            custom_id=f"p_venue_select_{current_venue}"
         )
         venue_select.callback = self.venue_callback
         self.add_item(venue_select)
 
-        all_btn = discord.ui.Button(label="⭐ 全12R一括予想", style=discord.ButtonStyle.success, custom_id="persistent_all_btn")
+        all_btn = discord.ui.Button(
+            label="⭐ 全12R一括予想",
+            style=discord.ButtonStyle.success,
+            custom_id=f"p_all_btn_{current_venue}"
+        )
         all_btn.callback = self.all_callback
         self.add_item(all_btn)
 
         for r in range(1, 13):
-            r_btn = discord.ui.Button(label=f"{r}R", style=discord.ButtonStyle.primary, custom_id=f"persistent_r_btn_{r}")
-            r_btn.callback = lambda interaction, r_num=r: self.race_callback(interaction, r_num)
+            r_btn = discord.ui.Button(
+                label=f"{r}R",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"p_r_btn_{current_venue}_{r}"
+            )
+            r_btn.callback = self.make_race_callback(r)
             self.add_item(r_btn)
+
+    def make_race_callback(self, r_num: int):
+        async def callback(interaction: discord.Interaction):
+            await self.race_callback(interaction, r_num)
+        return callback
 
     async def venue_callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -418,7 +428,13 @@ class InteractiveRaceControlView(discord.ui.View):
 class VenueSelect(discord.ui.Select):
     def __init__(self):
         options = [discord.SelectOption(label=v, description=f"{v} のレース予想を表示") for v in VENUES]
-        super().__init__(placeholder="最初にする会場を選択してください...", min_values=1, max_values=1, custom_id="persistent_venue_select_init")
+        super().__init__(
+            placeholder="最初にする会場を選択してください...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="persistent_venue_select_init"
+        )
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -472,9 +488,9 @@ async def check_status(ctx):
 
 if __name__ == "__main__":
     keep_alive()
-    token = os.environ.get("DISCORD_TOKEN")
+    token = os.environ.get("DISCORD_TOKEN") or os.environ.get("DISCORD_BOT_TOKEN")
     if token:
         bot.run(token)
     else:
         print("エラー: DISCORD_TOKEN 環境変数が設定されていません。")
-
+  
