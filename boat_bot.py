@@ -63,7 +63,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 CSV_CACHE = {}
 
 def fetch_github_csv(file_path):
-    """GitHubからCSVを取得しキャッシュする（フォールバックパス対応）"""
     if file_path in CSV_CACHE:
         return CSV_CACHE[file_path]
     uri = f"{GITHUB_RAW_BASE}{file_path}"
@@ -86,7 +85,6 @@ def fetch_github_csv_with_fallback(primary_path, fallback_path):
 
 # --- モデルおよびデータの読み込み ---
 MODEL_FILENAME = "boatrace_lgb_model.pkl"
-loaded_package = None
 models = {}
 player_fav_kimarite = None
 kimarite_prob_dict = {}
@@ -118,7 +116,6 @@ try:
             elif "rank_1" in models and hasattr(models["rank_1"], "feature_name"):
                 expected_features = models["rank_1"].feature_name()
 
-            # 🛠️ 中央値データの読み込みを追加
             if "feature_medians" in loaded_package:
                 feature_medians = loaded_package.get("feature_medians", {})
 
@@ -128,8 +125,6 @@ try:
             print("モデル単体として読み込みました。")
             if "rank_1" in models and hasattr(models["rank_1"], "feature_name"):
                 expected_features = models["rank_1"].feature_name()
-
-        print(f"ロード済みモデル特徴量数: {len(expected_features)}")
     else:
         print(f"警告: モデルファイル ('{MODEL_FILENAME}') が見つかりません。")
 except Exception as e:
@@ -149,7 +144,6 @@ def load_kimarite_table_from_github():
                 c3 = int(row['3着コース'])
                 prob = float(row['確率'])
                 kimarite_prob_dict[(k_type, c2, c3)] = prob
-            print("決まり手テーブルの読み込みに成功しました。")
         except Exception as e:
             print(f"pair_table.csv パースエラー: {e}")
 
@@ -162,7 +156,7 @@ def get_season(m):
     else: return "冬"
 
 def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num):
-    header_text = f"🤖 **{venue}** {r_num}RのAIレース分析・展開予想 ({day_str})\n"
+    header_text = f"🎯 **{venue}** {r_num}R 予想結果 ({day_str})\n"
 
     if not models or "rank_1" not in models or models["rank_1"] is None:
         return header_text + "⚠️ エラー: 予測モデルが読み込まれていません。"
@@ -199,11 +193,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     df_venue_preview = fetch_github_csv_with_fallback(venue_preview_p1, venue_preview_p2)
 
     if df_orig is not None:
-        rename_dict = {}
-        for i in range(1, 7):
-            rename_dict[f"艇{i}_値1"] = f"艇{i}_オリジナル一周タイム"
-            rename_dict[f"艇{i}_値2"] = f"艇{i}_オリジナルまわり足タイム"
-            rename_dict[f"艇{i}_値3"] = f"艇{i}_オリジナル直線タイム"
+        rename_dict = {f"艇{i}_値{j}": f"艇{i}_オリジナル" + ["一周タイム", "まわり足タイム", "直線タイム"][j-1] for i in range(1, 7) for j in range(1, 4)}
         df_orig = df_orig.rename(columns=rename_dict)
 
     df_course_win = fetch_github_csv("data/estimate/stadium/course_win_rate.csv")
@@ -229,37 +219,26 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     if not card_row:
         return header_text + f"⚠️ エラー: レースコード '{target_race_code}' のデータが見つかりません。"
 
-    sui_row = get_matched_row(df_sui, target_race_code) or {}
-    orig_row = get_matched_row(df_orig, target_race_code) or {}
-    stt_row = get_matched_row(df_stt, target_race_code) or {}
-    venue_preview_row = get_matched_row(df_venue_preview, target_race_code) or {}
-
     combined_row = {}
     combined_row.update(card_row)
-    combined_row.update(sui_row)
-    combined_row.update(orig_row)
-    combined_row.update(stt_row)
-    combined_row.update(venue_preview_row)
+    combined_row.update(get_matched_row(df_sui, target_race_code) or {})
+    combined_row.update(get_matched_row(df_orig, target_race_code) or {})
+    combined_row.update(get_matched_row(df_stt, target_race_code) or {})
+    combined_row.update(get_matched_row(df_venue_preview, target_race_code) or {})
 
     if df_course_win is not None:
         for _, row in df_course_win.iterrows():
-            v_code = str(row.get("場コード", "")).strip().zfill(2)
-            r_num_str = str(row.get("レース回", "")).strip()
-            if v_code == venue_s and r_num_str == str(int(r_num)):
+            if str(row.get("場コード", "")).strip().zfill(2) == venue_s and str(row.get("レース回", "")).strip() == str(int(r_num)):
                 for k, v in row.items():
-                    if k not in ["場コード", "レース回"]:
-                        combined_row[f"est_course_{k}"] = v
+                    if k not in ["場コード", "レース回"]: combined_row[f"est_course_{k}"] = v
                 break
 
     if df_season_win is not None:
         season_name = get_season(month_int)
         for _, row in df_season_win.iterrows():
-            v_code = str(row.get("場コード", "")).strip().zfill(2)
-            season = str(row.get("季節", "")).strip()
-            if v_code == venue_s and season == season_name:
+            if str(row.get("場コード", "")).strip().zfill(2) == venue_s and str(row.get("季節", "")).strip() == season_name:
                 for k, v in row.items():
-                    if k not in ["場コード", "季節"]:
-                        combined_row[f"est_season_{k}"] = v
+                    if k not in ["場コード", "季節"]: combined_row[f"est_season_{k}"] = v
                 break
 
     expanded_row = dict(combined_row)
@@ -267,38 +246,27 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         for b in range(1, 7):
             sb = str(b)
             if k.startswith(f"艇{sb}_"):
-                attr = k[2:]
-                expanded_row[f"{sb}号艇_{attr}"] = v
-                expanded_row[f"{attr}_{sb}"] = v
+                expanded_row[f"{sb}号艇_{k[2:]}"] = v
+                expanded_row[f"{k[2:]}_{sb}"] = v
             elif k.startswith(f"{sb}号艇_"):
-                attr = k[3:]
-                expanded_row[f"艇{sb}_{attr}"] = v
-                expanded_row[f"{attr}_{sb}"] = v
+                expanded_row[f"艇{sb}_{k[3:]}"] = v
+                expanded_row[f"{k[3:]}_{sb}"] = v
             elif k.endswith(f"_{sb}"):
-                attr = k[:-2]
-                expanded_row[f"艇{sb}_{attr}"] = v
-                expanded_row[f"{sb}号艇_{attr}"] = v
+                expanded_row[f"艇{sb}_{k[:-2]}"] = v
+                expanded_row[f"{sb}号艇_{k[:-2]}"] = v
 
     df_pred = pd.DataFrame([expanded_row])
 
-    # 🛠️ 修正: 選手名の候補カラムを拡張（「氏名」「選手」表記対応）
     if player_fav_kimarite:
         for i in range(1, 7):
-            p_col_candidates = [
-                f"艇{i}_選手名", f"{i}号艇_選手名", f"選手名_{i}",
-                f"艇{i}_氏名", f"{i}号艇_氏名", f"氏名_{i}",
-                f"艇{i}_選手", f"{i}号艇_選手"
-            ]
+            p_col_candidates = [f"艇{i}_選手名", f"{i}号艇_選手名", f"選手名_{i}", f"艇{i}_氏名", f"{i}号艇_氏名", f"氏名_{i}", f"艇{i}_選手", f"{i}号艇_選手"]
             p_col = next((c for c in p_col_candidates if c in df_pred.columns), None)
-
             if p_col:
                 dummy_k_keys = list(next(iter(player_fav_kimarite.values())).keys()) if player_fav_kimarite else []
                 p_val = str(df_pred.iloc[0].get(p_col, "")).strip()
                 for k_name in dummy_k_keys:
-                    col_name = f"艇{i}_kimarite_{k_name}"
-                    df_pred[col_name] = player_fav_kimarite.get(p_val, {}).get(k_name, 0.0)
+                    df_pred[f"艇{i}_kimarite_{k_name}"] = player_fav_kimarite.get(p_val, {}).get(k_name, 0.0)
 
-    # 🛠️ 修正: 欠損値を0.0ではなく「学習時の中央値（feature_medians）」で穴埋め
     X_input = df_pred.reindex(columns=expected_features)
 
     for col in expected_features:
@@ -308,113 +276,43 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     for col in X_input.columns:
         if col not in ["レース場", "風向", "天候"]:
             X_input[col] = pd.to_numeric(X_input[col], errors='coerce')
-            fill_val = feature_medians.get(col, 0.0)
-            X_input[col] = X_input[col].fillna(fill_val)
-
-    total_feats = len(expected_features)
-    zero_cols = X_input.columns[(X_input == 0.0).all()].tolist()
-    zero_feats = len(zero_cols)
-    valid_feats = total_feats - zero_feats
+            X_input[col] = X_input[col].fillna(feature_medians.get(col, 0.0))
 
     prob_matrix = {}
     for rank_idx, rank_name in enumerate(["rank_1", "rank_2", "rank_3"], 1):
         if rank_name in models and models[rank_name] is not None:
-            model = models[rank_name]
-            preds = model.predict(X_input)
+            preds = models[rank_name].predict(X_input)
             if len(preds) > 0:
                 prob_matrix[rank_idx] = np.array(preds[0])
 
-    boat_data = []
-    probs_detail_text = ""
-
+    boat_names = []
     for i in range(6):
-        boat_num = i + 1
-
-        # 🛠️ 修正: 艇データ展開時の選手名判定候補を拡張
-        name = f"選手{boat_num}"
-        for c in [f"艇{boat_num}_選手名", f"{boat_num}号艇_選手名", f"選手名_{boat_num}", f"艇{boat_num}_氏名", f"{boat_num}号艇_氏名", f"氏名_{boat_num}", f"艇{boat_num}_選手", f"{boat_num}号艇_選手"]:
+        b_num = i + 1
+        name = f"選手{b_num}"
+        for c in [f"艇{b_num}_選手名", f"{b_num}号艇_選手名", f"選手名_{b_num}", f"艇{b_num}_氏名", f"{b_num}号艇_氏名", f"氏名_{b_num}", f"艇{b_num}_選手", f"{b_num}号艇_選手"]:
             if c in df_pred.columns and pd.notna(df_pred.iloc[0][c]):
                 val = str(df_pred.iloc[0][c]).strip()
                 if val and val != "nan":
                     name = val
                     break
+        boat_names.append(name)
 
-        p_class = ""
-        for c in [f"艇{boat_num}_級別", f"{boat_num}号艇_級別", f"選手級_{boat_num}", f"艇{boat_num}_階級", f"{boat_num}号艇_階級"]:
-            if c in df_pred.columns and pd.notna(df_pred.iloc[0][c]):
-                val = str(df_pred.iloc[0][c]).strip()
-                if val and val != "nan":
-                    p_class = val
-                    break
+    # 出力文字列の構成
+    summary_text = f"🎯 **{venue}** {r_num}R 予想結果 ({day_str})\n\n"
+    summary_text += "--- 【3連単 予想買い目（上位5点）】 ---\n"
 
-        arr_1 = prob_matrix.get(1, np.zeros(6))
-        arr_2 = prob_matrix.get(2, np.zeros(6))
-        arr_3 = prob_matrix.get(3, np.zeros(6))
-
-        p1 = float(arr_1[i]) * 100 if len(arr_1) > i else 0.0
-        p2 = float(arr_2[i]) * 100 if len(arr_2) > i else 0.0
-        p3 = float(arr_3[i]) * 100 if len(arr_3) > i else 0.0
-
-        boat_data.append({'boat': boat_num, 'name': name, 'class': p_class, 'p1': p1, 'p2': p2, 'p3': p3})
-
-        class_str = f" ({p_class})" if p_class else ""
-        probs_detail_text += f"・{boat_num}号艇 {name}{class_str} → 1着: {p1:.1f}% | 2着: {p2:.1f}% | 3着: {p3:.1f}%\n"
-
-    if not boat_data:
-        return header_text + "⚠️ エラー: 艇データが取得できませんでした。"
-
-    top_1st = max(boat_data, key=lambda x: x['p1'])
-    top_2nd = max(boat_data, key=lambda x: x['p2'])
-
-    if top_1st['boat'] == 1 and top_1st['p1'] >= 40.0:
-        tactical_tag = "🛡️ 【イン堅固・逃げ本線】 1号艇が抜群の信頼度で逃げ"
-        kimarite = "逃げ (1-2, 1-3)"
-    elif top_1st['boat'] == 2:
-        tactical_tag = "💡 【2号艇の差し抜け】 2コースから鋭く差し込む"
-        kimarite = "差し (2-1, 2-3)"
-    elif top_1st['boat'] == 3:
-        tactical_tag = "🌊 【3号艇のセンター強襲】 自在に攻めて主導権を握る"
-        kimarite = "まくり差し / まくり (3-1, 3-2)"
-    elif top_1st['boat'] >= 4:
-        tactical_tag = f"🔥 【{top_1st['boat']}号艇の展開突き・強襲】 外枠から一撃狙う"
-        kimarite = f"まくり差し / 差し ({top_1st['boat']}-1, {top_1st['boat']}-2)"
-    else:
-        tactical_tag = "⚔️ 【混戦・差し手もつれ】 互いの攻防から手堅く潰す展開"
-        kimarite = "差し / 差し返し"
-
-    summary_text = (
-        f"🤖 **{venue}** {r_num}RのAIレース分析・展開予想 ({day_str})\n\n"
-        f"--- 【展開予測】 ---\n{tactical_tag}\n"
-        f"🎯 **推奨決まり手**: {kimarite}\n"
-        f"📊 【データ診断】 有効特徴量: {valid_feats}個 / ゼロ埋め: {zero_feats}個\n"
-        f"--- 【各艇の着順確率一覧】 ---\n{probs_detail_text}"
-    )
-
-    summary_text += f"\n--- 【3連単 予想買い目（上位5点）】 ---\n"
-    trifecta_scores = []
     if 1 in prob_matrix and 2 in prob_matrix and 3 in prob_matrix:
         m1, m2, m3 = prob_matrix[1], prob_matrix[2], prob_matrix[3]
-
         entry_courses = {i+1: i+1 for i in range(6)}
-        default_kimarite_map = {
-            1: "逃げ", 2: "差し", 3: "まくり", 4: "まくり", 5: "まくり差し", 6: "まくり差し"
-        }
+        default_kimarite_map = {1: "逃げ", 2: "差し", 3: "まくり", 4: "まくり", 5: "まくり差し", 6: "まくり差し"}
 
+        trifecta_scores = []
         for c1_idx, c2_idx, c3_idx in itertools.permutations(range(6), 3):
-            b1 = c1_idx + 1
-            b2 = c2_idx + 1
-            b3 = c3_idx + 1
-
-            p1 = float(m1[c1_idx])
-            p2 = float(m2[c2_idx])
-            p3 = float(m3[c3_idx])
+            b1, b2, b3 = c1_idx + 1, c2_idx + 1, c3_idx + 1
+            p1, p2, p3 = float(m1[c1_idx]), float(m2[c2_idx]), float(m3[c3_idx])
 
             ai_base_score = (p1 ** 1.8) * (p2 ** 1.3) * (p3 ** 1.0)
-
-            c1_course = entry_courses[b1]
-            c2_course = entry_courses[b2]
-            c3_course = entry_courses[b3]
-
+            c1_course, c2_course, c3_course = entry_courses[b1], entry_courses[b2], entry_courses[b3]
             primary_kimarite = default_kimarite_map.get(b1, "差し")
             k_key = f"{primary_kimarite}_{c1_course}"
             pair_prob = kimarite_prob_dict.get((k_key, c2_course, c3_course), kimarite_prob_dict.get((primary_kimarite, c2_course, c3_course), 0.001))
@@ -427,24 +325,30 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         for rank, (combo, score) in enumerate(trifecta_scores[:5], 1):
             summary_text += f"第{rank}位: **{combo[0]} - {combo[1]} - {combo[2]}** (スコア: {score:.4f})\n"
 
-    top_1_class_str = f" ({top_1st['class']})" if top_1st['class'] else ""
-    top_2_class_str = f" ({top_2nd['class']})" if top_2nd['class'] else ""
+    summary_text += "\n--- 【各艇の予測確率】 ---\n"
+    arr_1 = prob_matrix.get(1, np.zeros(6))
+    arr_2 = prob_matrix.get(2, np.zeros(6))
+    arr_3 = prob_matrix.get(3, np.zeros(6))
 
-    summary_text += f"\n--- 【レース展開の考察】 ---\n"
-    summary_text += f"軸推奨: **{top_1st['boat']}号艇 {top_1st['name']}{top_1_class_str}** (1着率 {top_1st['p1']:.1f}%)\n"
-    summary_text += f"相手候補: **{top_2nd['boat']}号艇 {top_2nd['name']}{top_2_class_str}** (2着率 {top_2nd['p2']:.1f}%)\n"
+    for i in range(6):
+        p1 = float(arr_1[i]) * 100 if len(arr_1) > i else 0.0
+        p2 = float(arr_2[i]) * 100 if len(arr_2) > i else 0.0
+        p3 = float(arr_3[i]) * 100 if len(arr_3) > i else 0.0
+
+        p_2ren = min(p1 + p2, 100.0)
+        p_3ren = min(p1 + p2 + p3, 100.0)
+
+        summary_text += f"・{i+1}号艇 {boat_names[i]}: 1着率 {p1:.1f}% | 2連率 {p_2ren:.1f}% | 3連率 {p_3ren:.1f}%\n"
 
     return summary_text
 
-# --- Discord UI部分（常時表示・完全独立型） ---
+# --- Discord UI部分 ---
 
 class InteractiveRaceControlView(discord.ui.View):
-    """選択中の会場を維持したまま、別会場への変更や別レースへの切り替えを常時行えるパネル"""
     def __init__(self, current_venue: str):
         super().__init__(timeout=None)
         self.current_venue = current_venue
 
-        # 1. 会場変更セレクトボックス
         venue_select = discord.ui.Select(
             placeholder=f"🏟️ 現在: {current_venue} (会場変更はこちら)",
             min_values=1, max_values=1,
@@ -454,12 +358,10 @@ class InteractiveRaceControlView(discord.ui.View):
         venue_select.callback = self.venue_callback
         self.add_item(venue_select)
 
-        # 2. 全レース一括予想ボタン
         all_btn = discord.ui.Button(label="⭐ 全12R一括予想", style=discord.ButtonStyle.success, custom_id="persistent_all_btn")
         all_btn.callback = self.all_callback
         self.add_item(all_btn)
 
-        # 3. 1R～12R 個別レース選択ボタン
         for r in range(1, 13):
             r_btn = discord.ui.Button(label=f"{r}R", style=discord.ButtonStyle.primary, custom_id=f"persistent_r_btn_{r}")
             r_btn.callback = lambda interaction, r_num=r: self.race_callback(interaction, r_num)
@@ -479,19 +381,13 @@ class InteractiveRaceControlView(discord.ui.View):
         venue = self.current_venue
         venue_code = VENUE_MAPPING.get(venue, "01")
         target_date = datetime.now(JST)
-        year = target_date.strftime("%Y")
-        month = target_date.strftime("%m")
-        day_str = target_date.strftime("%Y-%m-%d")
+        year, month, day_str = target_date.strftime("%Y"), target_date.strftime("%m"), target_date.strftime("%Y-%m-%d")
 
         await interaction.followup.send(content=f"🤖 **{venue}** 全12レースの解析を開始します...", ephemeral=True)
         for r_num in range(1, 13):
             res_text = calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num)
-            if len(res_text) <= 2000:
-                await interaction.followup.send(content=res_text, ephemeral=True)
-            else:
-                for chunk in [res_text[i:i+1900] for i in range(0, len(res_text), 1900)]:
-                    await interaction.followup.send(content=chunk, ephemeral=True)
-            await asyncio.sleep(0.3)
+            await interaction.followup.send(content=res_text, ephemeral=True)
+            await asyncio.sleep(0.2)
 
     async def race_callback(self, interaction: discord.Interaction, r_num: int):
         await interaction.response.defer(ephemeral=True)
@@ -499,22 +395,13 @@ class InteractiveRaceControlView(discord.ui.View):
             venue = self.current_venue
             venue_code = VENUE_MAPPING.get(venue, "01")
             target_date = datetime.now(JST)
-            year = target_date.strftime("%Y")
-            month = target_date.strftime("%m")
-            day_str = target_date.strftime("%Y-%m-%d")
+            year, month, day_str = target_date.strftime("%Y"), target_date.strftime("%m"), target_date.strftime("%Y-%m-%d")
 
             result_text = calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num)
-            if len(result_text) <= 2000:
-                await interaction.followup.send(content=result_text, ephemeral=True)
-            else:
-                for chunk in [result_text[i:i+1900] for i in range(0, len(result_text), 1900)]:
-                    await interaction.followup.send(content=chunk, ephemeral=True)
+            await interaction.followup.send(content=result_text, ephemeral=True)
         except Exception as e:
             tb = traceback.format_exc()
-            error_msg = f"⚠️ エラーが発生しました:\n```python\n{tb}\n```"
-            if len(error_msg) > 2000:
-                error_msg = error_msg[:1990] + "\n```"
-            await interaction.followup.send(content=error_msg, ephemeral=True)
+            await interaction.followup.send(content=f"⚠️ エラーが発生しました:\n```python\n{tb}\n```", ephemeral=True)
 
 class VenueSelect(discord.ui.Select):
     def __init__(self):
@@ -549,7 +436,7 @@ async def on_ready():
 async def setup(ctx):
     await ctx.message.delete()
     await ctx.send(
-        content="🤖 **【AIレース分析・展開予測メニュー】**\n👇 まずは下のメニューから会場を選択してください：",
+        content="🤖 **【AIレース分析・予想メニュー】**\n👇 下のメニューから会場を選択してください：",
         view=VenueSelectView()
     )
 
@@ -560,13 +447,7 @@ async def check_status(ctx):
         "data/estimate/stadium/course_win_rate.csv",
         "data/estimate/stadium/win_rate.csv"
     ]
-    file_results = []
-    for fpath in test_files:
-        df = fetch_github_csv(fpath)
-        if df is not None:
-            file_results.append(f"✅ {fpath} (取得成功: {len(df)}行)")
-        else:
-            file_results.append(f"❌ {fpath} (取得失敗)")
+    file_results = [f"✅ {f} (取得成功: {len(fetch_github_csv(f))}行)" if fetch_github_csv(f) is not None else f"❌ {f} (取得失敗)" for f in test_files]
 
     msg = (
         f"📊 **【データ取り込み状況チェック】**\n\n"
@@ -584,3 +465,4 @@ if __name__ == "__main__":
         bot.run(token)
     else:
         print("エラー: DISCORD_TOKEN 環境変数が設定されていません。")
+
