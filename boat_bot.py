@@ -306,15 +306,15 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
                     break
         boat_names.append(name)
 
-    summary_text = f"🎯 **{venue}** {r_num}R 予想結果 ({day_str})\n\n"
-    summary_text += "--- 【3連単 予想買い目（上位5点）】 ---\n"
+    # 予想計算と信頼度判定
+    status_badge = "📊 **【通常レース】AI信頼度：中**"
+    trifecta_scores = []
 
     if 1 in prob_matrix and 2 in prob_matrix and 3 in prob_matrix:
         m1, m2, m3 = prob_matrix[1], prob_matrix[2], prob_matrix[3]
         entry_courses = {i+1: i+1 for i in range(6)}
         default_kimarite_map = {1: "逃げ", 2: "差し", 3: "まくり", 4: "まくり", 5: "まくり差し", 6: "まくり差し"}
 
-        trifecta_scores = []
         for c1_idx, c2_idx, c3_idx in itertools.permutations(range(6), 3):
             b1, b2, b3 = c1_idx + 1, c2_idx + 1, c3_idx + 1
             p1, p2, p3 = float(m1[c1_idx]), float(m2[c2_idx]), float(m3[c3_idx])
@@ -330,6 +330,21 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
         trifecta_scores.sort(key=lambda x: x[1], reverse=True)
 
+        if len(trifecta_scores) >= 5:
+            top_score = trifecta_scores[0][1]
+            score_diff = trifecta_scores[0][1] - trifecta_scores[4][1]
+
+            if top_score >= 0.0025 and score_diff >= 0.0008:
+                status_badge = "🔥 **【勝負推奨】AI信頼度：高**"
+            elif top_score < 0.0018 or score_diff < 0.0003:
+                status_badge = "⚠️ **【見（見送り）推奨】AI信頼度：低（混戦）**"
+
+    # レスポンス文字列の作成
+    summary_text = f"🎯 **{venue}** {r_num}R 予想結果 ({day_str})\n"
+    summary_text += f"判定: {status_badge}\n\n"
+    summary_text += "--- 【3連単 予想買い目（上位5点）】 ---\n"
+
+    if trifecta_scores:
         for rank, (combo, score) in enumerate(trifecta_scores[:5], 1):
             summary_text += f"第{rank}位: **{combo[0]} - {combo[1]} - {combo[2]}** (スコア: {score:.4f})\n"
 
@@ -493,4 +508,3 @@ if __name__ == "__main__":
         bot.run(token)
     else:
         print("エラー: DISCORD_TOKEN 環境変数が設定されていません。")
-  
