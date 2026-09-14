@@ -9,10 +9,10 @@ import pandas as pd
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from boatrace.downloader import RateLimiter
-from boatrace.odds_realtime import ODDS_HEADERS, OddsRealtimeFetcher, build_odds_row
+from boatrace.odds_scraper import OddsScraper
 
 
-def get_target_races(limit=5):
+def get_target_races(limit=3):
     """当日のプログラムCSVから、現在時刻以降で最も締め切りが近い直近Nレースを取得"""
     now = datetime.now()
     today_str = now.strftime("%Y-%m-%d")
@@ -30,12 +30,16 @@ def get_target_races(limit=5):
         print(f"Error reading CSV: {e}")
         return []
 
-    # 時刻比較用のフル日時を作成
+    df.columns = df.columns.str.strip()
+
+    if "電話投票締切予定" not in df.columns:
+        print(f"利用可能な列名一覧: {list(df.columns)}")
+        return []
+
     df["close_datetime"] = pd.to_datetime(
         today_str + " " + df["電話投票締切予定"], format="%Y-%m-%d %H:%M"
     )
 
-    # 現在時刻以降のレースを抽出して締め切り順にソート
     upcoming = df[df["close_datetime"] >= now].sort_values("close_datetime")
 
     targets = []
@@ -51,59 +55,58 @@ def get_target_races(limit=5):
 
 
 def main():
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    year, month, _ = today_str.split("-")
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    year, month, day = now.strftime("%Y"), now.strftime("%m"), now.strftime("%d")
 
-    # サーバー負荷軽減のためのウェイト
-    fetcher = OddsRealtimeFetcher(rate_limiter=RateLimiter(interval_seconds=1.0))
-    sources = ["od2", "od3"]
+    scraper = OddsScraper(rate_limiter=RateLimiter(interval_seconds=1.0))
+    target_races = get_target_races(limit=3)
 
-    # 直近5レースのみを取得対象に指定
-    target_races = get_target_races(limit=5)
-    print(f"Target races count: {len(target_races)}")
+    print(f"Target odds count: {len(target_races)}")
 
     for target in target_races:
         stadium_code = target["stadium_code"]
         race_number = target["race_number"]
+        deadline_time = target["close_time"]
 
-        for source in sources:
-            try:
-                values = fetcher.fetch_values(
-                    source=source,
-                    date_str=today_str,
-                    stadium_code=stadium_code,
-                    race_number=race_number,
+        try:
+            data = scraper.scrape_race(
+                date=today_str,
+                stadium_code=stadium_code,
+                race_number=race_number,
+            )
+
+            if data is not None:
+                if isinstance(data, dict):
+                    df_new = pd.DataFrame([data])
+                elif isinstance(data, list):
+                    df_new = pd.DataFrame(data)
+                else:
+                    df_new = data
+
+                output_dir = f"data/previews/odds/{year}/{month}"
+                os.makedirs(output_dir, exist_ok=True)
+                output_file = f"{output_dir}/{day}.csv"
+
+                # 既にファイルがあれば末尾に追記、なければ新規作成
+                file_exists = os.path.exists(output_file)
+                df_new.to_csv(
+                    output_file,
+                    mode="a" if file_exists else "w",
+                    header=not file_exists,
+                    index=False,
+                    encoding="utf-8-sig",
                 )
 
-                if values:
-                    output_dir = f"data/previews/{year}/{month}"
-                    os.makedirs(output_dir, exist_ok=True)
-                    output_file = f"{output_dir}/{today_str.replace('-', '')}_{stadium_code:02d}_{race_number:02d}_{source}.csv"
-
-                    headers = ODDS_HEADERS[source]
-                    row = build_odds_row(
-                        race_code=f"{today_str.replace('-', '')}_{stadium_code:02d}_{race_number:02d}",
-                        date_str=today_str,
-                        stadium_code=stadium_code,
-                        race_number=race_number,
-                        deadline_time=target["close_time"],
-                        fetched_at_iso=datetime.now().isoformat(),
-                        values=values,
-                    )
-
-                    with open(
-                        output_file, "w", encoding="utf-8", newline=""
-                    ) as f:
-                        writer = csv.writer(f)
-                        writer.writerow(headers)
-                        writer.writerow(row)
-
-            except Exception as e:
                 print(
-                    f"Error processing {stadium_code}R{race_number} ({source}): {e}"
+                    f"Saved odds data to {output_file} "
+                    f"({stadium_code}R{race_number}, 締切予定:{deadline_time})"
                 )
-                pass
+
+        except Exception as e:
+            print(f"Error processing odds {stadium_code}R{race_number}: {e}")
 
 
 if __name__ == "__main__":
     main()
+
