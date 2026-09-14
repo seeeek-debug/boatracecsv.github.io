@@ -32,7 +32,7 @@ def get_target_races(limit=5):
 
     # 時刻比較用のフル日時を作成
     df["close_datetime"] = pd.to_datetime(
-        today_str + " " + df["電話投票締切"], format="%Y-%m-%d %H:%M"
+        today_str + " " + df["電話投票締切予定"], format="%Y-%m-%d %H:%M"
     )
 
     # 現在時刻以降のレースを抽出して締め切り順にソート
