@@ -1,4 +1,6 @@
-name: odds-fetcher
+name: Run odds fetcher
+run: PYTHONPATH=. python scripts/run_odds_fetcher.py
+
 
 on:
   schedule:
