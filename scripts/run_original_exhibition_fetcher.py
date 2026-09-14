@@ -30,7 +30,6 @@ def get_target_races(limit=3):
         print(f"Error reading CSV: {e}")
         return []
 
-    # 列名の前後の空白を削除
     df.columns = df.columns.str.strip()
 
     if "電話投票締切予定" not in df.columns:
@@ -49,7 +48,7 @@ def get_target_races(limit=3):
             {
                 "stadium_code": int(row["レース場コード"]),
                 "race_number": int(row["レース"]),
-                "close_time": row["電話投票締切予定"],  # 電話投票締切時間予定を保持
+                "close_time": row["電話投票締切予定"],
             }
         )
     return targets
@@ -70,7 +69,7 @@ def main():
     for target in target_races:
         stadium_code = target["stadium_code"]
         race_number = target["race_number"]
-        deadline_time = target["close_time"]  # 電話投票締切時間予定
+        deadline_time = target["close_time"]
 
         try:
             data = scraper.scrape_race(
@@ -79,12 +78,28 @@ def main():
                 race_number=race_number,
             )
 
-            if data:
+            if data is not None:
+                if isinstance(data, dict):
+                    df_new = pd.DataFrame([data])
+                elif isinstance(data, list):
+                    df_new = pd.DataFrame(data)
+                else:
+                    df_new = data
+
                 output_dir = f"data/previews/original_exhibition/{year}/{month}"
                 os.makedirs(output_dir, exist_ok=True)
                 output_file = f"{output_dir}/{day}.csv"
 
-                # 取得したデータと電話投票締切時間予定を紐付けて保存する処理
+                # 既にファイルがあれば末尾に追記、なければ新規作成
+                file_exists = os.path.exists(output_file)
+                df_new.to_csv(
+                    output_file,
+                    mode="a" if file_exists else "w",
+                    header=not file_exists,
+                    index=False,
+                    encoding="utf-8-sig",
+                )
+
                 print(
                     f"Saved original exhibition data to {output_file} "
                     f"({stadium_code}R{race_number}, 締切予定:{deadline_time})"
