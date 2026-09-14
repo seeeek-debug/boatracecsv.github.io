@@ -1,9 +1,12 @@
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import os
 from pathlib import Path
 import sys
 
 import pandas as pd
+
+# 日本時間（JST: UTC+9）の定義
+JST = timezone(timedelta(hours=9))
 
 # プロジェクトルートをパスの先頭に追加
 project_root = Path(__file__).resolve().parent.parent
@@ -14,11 +17,10 @@ from boatrace.downloader import RateLimiter
 from boatrace.odds_realtime import OddsRealtimeFetcher
 
 
-def get_target_races(limit=3):
-    """当日のプログラムCSVから、現在時刻以降で最も締め切りが近い直近Nレースを取得"""
-    now = datetime.now()
-    today_str = now.strftime("%Y-%m-%d")
-    year, month, day = now.strftime("%Y"), now.strftime("%m"), now.strftime("%d")
+def get_target_races(now_jst, limit=3):
+    """日本時間（JST）ベースで当日のプログラムCSVから直近Nレースを取得"""
+    today_str = now_jst.strftime("%Y-%m-%d")
+    year, month, day = now_jst.strftime("%Y"), now_jst.strftime("%m"), now_jst.strftime("%d")
 
     csv_path = f"data/programs/title/{year}/{month}/{day}.csv"
 
@@ -32,18 +34,18 @@ def get_target_races(limit=3):
         print(f"Error reading CSV: {e}")
         return []
 
-    # 列名の前後の空白を削除
     df.columns = df.columns.str.strip()
 
     if "電話投票締切予定" not in df.columns:
         print(f"利用可能な列名一覧: {list(df.columns)}")
         return []
 
+    # JSTタイムゾーンを明示して締切日時を生成
     df["close_datetime"] = pd.to_datetime(
         today_str + " " + df["電話投票締切予定"], format="%Y-%m-%d %H:%M"
-    )
+    ).dt.tz_localize(JST)
 
-    upcoming = df[df["close_datetime"] >= now].sort_values("close_datetime")
+    upcoming = df[df["close_datetime"] >= now_jst].sort_values("close_datetime")
     race_col = "レース回" if "レース回" in df.columns else "レース"
 
     targets = []
@@ -60,14 +62,19 @@ def get_target_races(limit=3):
 
 
 def main():
-    now = datetime.now()
-    today_str = now.strftime("%Y-%m-%d")
-    year, month, day = now.strftime("%Y"), now.strftime("%m"), now.strftime("%d")
+    # 実行時の日本時間を取得
+    now_jst = datetime.now(JST)
+    today_str = now_jst.strftime("%Y-%m-%d")
+    year, month, day = now_jst.strftime("%Y"), now_jst.strftime("%m"), now_jst.strftime("%d")
 
     fetcher = OddsRealtimeFetcher(rate_limiter=RateLimiter(interval_seconds=1.0))
-    target_races = get_target_races(limit=3)
+    target_races = get_target_races(now_jst, limit=3)
 
     print(f"Target odds count: {len(target_races)}")
+
+    if not target_races:
+        print("対象レースが見つかりません（当日のプログラムCSVが存在しないか、全レース終了済みです）。")
+        return
 
     for target in target_races:
         stadium_code = target["stadium_code"]
@@ -75,15 +82,15 @@ def main():
         deadline_time = target["close_time"]
 
         try:
-            # fetch_values または scrape_race でデータを取得
-            if hasattr(fetcher, "scrape_race"):
-                data = fetcher.scrape_race(
+            # OddsRealtimeFetcher のメソッド呼び出し
+            if hasattr(fetcher, "fetch_values"):
+                data = fetcher.fetch_values(
                     date=today_str,
                     stadium_code=stadium_code,
                     race_number=race_number,
                 )
-            elif hasattr(fetcher, "fetch_values"):
-                data = fetcher.fetch_values(
+            elif hasattr(fetcher, "scrape_race"):
+                data = fetcher.scrape_race(
                     date=today_str,
                     stadium_code=stadium_code,
                     race_number=race_number,
@@ -100,7 +107,8 @@ def main():
                 else:
                     df_new = data
 
-                output_dir = f"data/previews/odds/{year}/{month}"
+                # リポジトリ構造に合わせて od3 フォルダへ保存
+                output_dir = f"data/previews/od3/{year}/{month}"
                 os.makedirs(output_dir, exist_ok=True)
                 output_file = f"{output_dir}/{day}.csv"
 
