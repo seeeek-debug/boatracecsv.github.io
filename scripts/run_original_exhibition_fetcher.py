@@ -3,7 +3,11 @@ from datetime import datetime
 import os
 import sys
 
+import pandas as pd
+
+# scriptsフォルダをモジュール検索パスに追加
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from boatrace.downloader import RateLimiter
 from boatrace.original_exhibition_scraper import OriginalExhibitionScraper
 
@@ -15,15 +19,28 @@ def get_target_races(limit=3):
     year, month, day = now.strftime("%Y"), now.strftime("%m"), now.strftime("%d")
 
     csv_path = f"data/programs/title/{year}/{month}/{day}.csv"
+
     if not os.path.exists(csv_path):
+        print(f"Program CSV not found: {csv_path}")
         return []
 
-    import pandas as pd
+    try:
+        df = pd.read_csv(csv_path)
+    except Exception as e:
+        print(f"Error reading CSV: {e}")
+        return []
 
-    df = pd.read_csv(csv_path)
+    # 列名の前後の空白を削除
+    df.columns = df.columns.str.strip()
+
+    if "電話投票締切" not in df.columns:
+        print(f"利用可能な列名一覧: {list(df.columns)}")
+        return []
+
     df["close_datetime"] = pd.to_datetime(
         today_str + " " + df["電話投票締切予定"], format="%Y-%m-%d %H:%M"
     )
+
     upcoming = df[df["close_datetime"] >= now].sort_values("close_datetime")
 
     targets = []
@@ -39,9 +56,8 @@ def get_target_races(limit=3):
 
 
 def main():
-    now = datetime.now()
-    today_str = now.strftime("%Y-%m-%d")
-    year, month, day = now.strftime("%Y"), now.strftime("%m"), now.strftime("%d")
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    year, month, day = today_str.strftime("%Y"), today_str.strftime("%m"), today_str.strftime("%d")
 
     scraper = OriginalExhibitionScraper(
         rate_limiter=RateLimiter(interval_seconds=1.0)
@@ -62,13 +78,13 @@ def main():
             )
 
             if data:
-                # 画像の構造に合わせた保存先パス（日別ファイルに追記・保存）
                 output_dir = f"data/previews/original_exhibition/{year}/{month}"
                 os.makedirs(output_dir, exist_ok=True)
                 output_file = f"{output_dir}/{day}.csv"
 
+                # 個別のデータを追記・保存する処理
                 print(
-                    f"Saved exhibition data to {output_file} ({stadium_code}R{race_number})"
+                    f"Saved original exhibition data to {output_file} ({stadium_code}R{race_number})"
                 )
 
         except Exception as e:
