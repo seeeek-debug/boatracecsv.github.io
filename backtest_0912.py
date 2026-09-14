@@ -351,7 +351,7 @@ def predict_single_race(
     trifecta_scores.sort(key=lambda x: x[1], reverse=True)
 
     # -------------------------------------------------------------
-    # 🎯 直前オッズ (od3) 解析 ＆ 期待値フィルター
+    # 🎯 直前オッズ (od3) 解析 ＆ スマートレース厳選フィルター
     # -------------------------------------------------------------
     odds_map = {}
     if df_odds is not None and not df_odds.empty:
@@ -384,18 +384,17 @@ def predict_single_race(
                                 pass
                     break
 
-    # AI上位8点以内の中から期待値が高い買い目を抽出
+    # AI上位8点以内の中から期待値フィルターを満たす買い目を抽出
     candidate_combos = trifecta_scores[:8]
     selected_combos = []
 
-    MIN_PROBABILITY = 0.035  # AI推定確率 3.5% 以上
+    MIN_PROBABILITY = 0.035  # AI勝率 3.5% 以上
     MIN_EXPECTED_VALUE = 1.05  # 期待値 1.05 以上
 
     for combo, score in candidate_combos:
         combo_str = f"{combo[0]}-{combo[1]}-{combo[2]}"
         est_prob = score / total_score_sum if total_score_sum > 0 else 0.0
 
-        # AI勝率が最低ライン以下の大穴は完全無視
         if est_prob < MIN_PROBABILITY:
             continue
 
@@ -403,19 +402,23 @@ def predict_single_race(
             odds = odds_map[combo_str]
             expected_value = est_prob * odds
 
-            # 期待値条件クリア かつ ガミ回避（オッズ3.0倍以上）
+            # 期待値1.05以上 かつ オッズ3.0倍以上
             if expected_value >= MIN_EXPECTED_VALUE and odds >= 3.0:
                 selected_combos.append(combo)
 
-    # 採用する買い目（最大5点）
-    final_combos = selected_combos[:5]
+    # 買目は最大4点に絞って投資効率を向上
+    final_combos = selected_combos[:4]
 
     top_score = trifecta_scores[0][1]
 
-    # ステータス判定
-    if len(final_combos) == 0:
+    # -------------------------------------------------------------
+    # 🎯 レース絞り込み判定ロジック
+    # 1. 期待値条件クリアが「2点未満」の薄いレースは見送り
+    # 2. 自信度スコアが 0.0032 未満のレースは見送り
+    # -------------------------------------------------------------
+    if len(final_combos) < 2 or top_score < 0.0032:
         status = "見"
-    elif top_score >= 0.0030:
+    elif top_score >= 0.0035:
         status = "勝負"
     else:
         status = "通常"
@@ -441,7 +444,7 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
     logs = []
     curr_dt = start_dt
 
-    print(f"🚀 バックテスト開始: {start_date_str} ～ {end_date_str}")
+    print(f"🚀 バックテスト開始（スマート厳選モード）: {start_date_str} ～ {end_date_str}")
 
     while curr_dt <= end_dt:
         year = curr_dt.strftime("%Y")
@@ -567,7 +570,7 @@ def run_backtest(start_date_str, end_date_str, bet_per_combo=100):
         curr_dt += timedelta(days=1)
 
     print("\n" + "=" * 50)
-    print("📊 【バックテスト結果レポート】")
+    print("📊 【バックテスト結果レポート（スマート厳選モード）】")
     print("=" * 50)
 
     def calc_rate(hits, races):
