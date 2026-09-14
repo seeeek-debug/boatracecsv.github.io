@@ -25,7 +25,7 @@ jobs:
 
       - name: Run original exhibition scraper
         run: |
-          python original_exhibition_scraper.py
+          python scripts/boatrace/original_exhibition_scraper.py
 
       - name: Commit and push results
         run: |
