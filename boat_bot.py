@@ -5,7 +5,7 @@ import os
 import threading
 import time
 import traceback
-from flask import Flask
+from flask import Flask  # 小文字に修正
 import discord
 from discord.ext import commands
 import numpy as np
@@ -31,12 +31,13 @@ def keep_alive():
     t.start()
 
 def clean_name(val):
-    if pd.isna(val): return ""
+    if pd.isna(val):
+        return ""
     return str(val).replace(" ", "").replace("　", "").strip()
 
 # --- Discordボット設定 ---
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/seeeek-debug/boatracecsv.github.io/main/"
-NOTIFICATION_CHANNEL_ID = 156632996264511610
+NOTIFICATION_CHANNEL_ID = 136832996264511610
 
 JST = timezone(timedelta(hours=9))
 
@@ -48,26 +49,28 @@ VENUES = [
 ]
 
 VENUE_MAPPING = {
-    "桐生": "01", "戸田": "02", "江戸川": "03", "平和島": "04", "多摩川": "05", "浜名湖": "06",
-    "蒲郡": "07", "常滑": "08", "津": "09", "三国": "10", "びわこ": "11", "住之江": "12",
-    "尼崎": "13", "鳴門": "14", "丸亀": "15", "児島": "16", "宮島": "17", "徳山": "18",
-    "下関": "19", "若松": "20", "芦屋": "21", "福岡": "22", "唐津": "23", "大村": "24"
+    "桐生": "01", "戸田": "02", "江戸川": "03", "平和島": "04", "多摩川": "05",
+    "浜名湖": "06", "蒲郡": "07", "常滑": "08", "津": "09", "三国": "10",
+    "びわこ": "11", "住之江": "12", "尼崎": "13", "鳴門": "14", "丸亀": "15",
+    "児島": "16", "宮島": "17", "徳山": "18", "下関": "19", "若松": "20",
+    "芦屋": "21", "福岡": "22", "唐津": "23", "大村": "24"
 }
 
 VENUE_PREVIEW_CODE_MAP = {
-    "01": "kir", "02": "tod", "03": "edg", "04": "hei", "05": "tam", "06": "ham",
-    "07": "gam", "08": "tkz", "09": "tsu", "10": "mik", "11": "biw", "12": "sum",
-    "13": "ama", "14": "nar", "15": "mar", "16": "koj", "17": "miy", "18": "tok",
-    "19": "shm", "20": "wkm", "21": "ash", "22": "fuk", "23": "ktu", "24": "omr"
+    "01": "kir", "02": "tod", "03": "edg", "04": "hei", "05": "tam",
+    "06": "ham", "07": "gam", "08": "tkz", "09": "tsu", "10": "mik",
+    "11": "biw", "12": "sum", "13": "ama", "14": "nar", "15": "mar",
+    "16": "koj", "17": "miy", "18": "tok", "19": "shm", "20": "wkm",
+    "21": "ash", "22": "fuk", "23": "ktu", "24": "omr"
 }
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- 5分間スマートキャッシュ (TTLキャッシュ) ---
+# --- スマートキャッシュ (TTLキャッシュ) ---
 CSV_CACHE = {}  # key: file_path, val: (timestamp, df)
-CACHE_TTL = 300 # 300秒 = 5分間キャッシュ
+CACHE_TTL = 180  # 本番リアルタイム用に3分キャッシュ
 
 def fetch_github_csv(file_path, use_cache=True):
     now = time.time()
@@ -75,13 +78,13 @@ def fetch_github_csv(file_path, use_cache=True):
         ts, cached_df = CSV_CACHE[file_path]
         if now - ts < CACHE_TTL:
             return cached_df
-    
+
     timestamp = int(now)
     uri = f"{GITHUB_RAW_BASE}{file_path}?t={timestamp}"
     try:
         res = requests.get(uri, timeout=10)
         if res.status_code == 200:
-            df = pd.read_csv(io.StringIO(res.text), encoding="utf-8-sig")
+            df = pd.read_csv(io.StringIO(res.text), encoding="utf-8-sig", dtype=str)
             df.columns = df.columns.str.strip()
             CSV_CACHE[file_path] = (now, df)
             return df
@@ -155,10 +158,10 @@ def load_kimarite_table_from_github():
     if df_pair is not None:
         try:
             for _, row in df_pair.iterrows():
-                k_type = str(row['セル']).strip()
-                c2 = int(row['2着コース'])
-                c3 = int(row['3着コース'])
-                prob = float(row['確率'])
+                k_type = str(row["セル"]).strip()
+                c2 = int(row["2着コース"])
+                c3 = int(row["3着コース"])
+                prob = float(row["確率"])
                 kimarite_prob_dict[(k_type, c2, c3)] = prob
         except Exception as e:
             print(f"pair_table.csv パースエラー: {e}")
@@ -171,8 +174,19 @@ def get_season(m):
     elif m in [9, 10, 11]: return "秋"
     else: return "冬"
 
+def get_matched_row(df, code):
+    if df is None:
+        return None
+    for col in df.columns:
+        if "レースコード" in col or "code" in col.lower():
+            col_vals = df[col].astype(str).str.replace(r"\.0$", "", regex=True).str.strip()
+            matched = df[col_vals == str(code)]
+            if len(matched) > 0:
+                return matched.iloc[0].to_dict()
+    return None
+
 def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_num):
-    header_text = f"🎯 **{venue}** {r_num}R 予想結果 ({day_str})\n"
+    header_text = f"🏁 **【{venue}】 {r_num}R 予想結果 ({day_str})**\n"
 
     if not models or "rank_1" not in models or models["rank_1"] is None:
         return header_text + "⚠️ エラー: 予測モデルが読み込まれていません。"
@@ -198,16 +212,20 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     stt_p1 = f"data/previews/stt/{year}/{month_str}/{day_str_zf}.csv"
     stt_p2 = f"data/previews/stt/{year}/{month_raw}/{day_raw}.csv"
 
+    # 直前オッズデータ ( od3 )
+    odds_p1 = f"data/previews/od3/{year}/{month_str}/{day_str_zf}.csv"
+    odds_p2 = f"data/previews/od3/{year}/{month_raw}/{day_raw}.csv"
+
     prev_code = VENUE_PREVIEW_CODE_MAP.get(venue_s, "")
     venue_preview_p1 = f"data/previews/{prev_code}/{year}/{month_str}/{day_str_zf}.csv" if prev_code else None
     venue_preview_p2 = f"data/previews/{prev_code}/{year}/{month_raw}/{day_raw}.csv" if prev_code else None
 
-    # スマートキャッシュ(use_cache=True)を利用して通信量を激減
     df_cards = fetch_github_csv_with_fallback(race_card_p1, race_card_p2, use_cache=True)
     df_sui = fetch_github_csv_with_fallback(sui_p1, sui_p2, use_cache=True)
     df_orig = fetch_github_csv_with_fallback(orig_p1, orig_p2, use_cache=True)
     df_stt = fetch_github_csv_with_fallback(stt_p1, stt_p2, use_cache=True)
     df_venue_preview = fetch_github_csv_with_fallback(venue_preview_p1, venue_preview_p2, use_cache=True)
+    df_odds = fetch_github_csv_with_fallback(odds_p1, odds_p2, use_cache=False)  # オッズはリアルタイム取得
 
     df_course_win = fetch_github_csv("data/estimate/stadium/course_win_rate.csv", use_cache=True)
     df_season_win = fetch_github_csv("data/estimate/stadium/win_rate.csv", use_cache=True)
@@ -218,19 +236,9 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     r_str = str(r_num).zfill(2)
     target_race_code = f"{year}{month_str}{day_str_zf}{venue_s}{r_str}"
 
-    def get_matched_row(df, code):
-        if df is None: return None
-        for col in df.columns:
-            if "レースコード" in col or "code" in col.lower():
-                col_vals = df[col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-                matched = df[col_vals == str(code)]
-                if len(matched) > 0:
-                    return matched.iloc[0].to_dict()
-        return None
-
     card_row = get_matched_row(df_cards, target_race_code)
     if not card_row:
-        return header_text + f"⚠️ エラー: レースコード '{target_race_code}' のデータが見つかりません。"
+        return header_text + f"⚠️ エラー: レースコード '{target_race_code}' のデータが存在しません。"
 
     combined_row = {}
     combined_row.update(card_row)
@@ -243,7 +251,8 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         for _, row in df_course_win.iterrows():
             if str(row.get("場コード", "")).strip().zfill(2) == venue_s and str(row.get("レース回", "")).strip() == str(int(r_num)):
                 for k, v in row.items():
-                    if k not in ["場コード", "レース回"]: combined_row[f"est_course_{k}"] = v
+                    if k not in ["場コード", "レース回"]:
+                        combined_row[f"est_course_{k}"] = v
                 break
 
     if df_season_win is not None:
@@ -251,7 +260,8 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         for _, row in df_season_win.iterrows():
             if str(row.get("場コード", "")).strip().zfill(2) == venue_s and str(row.get("季節", "")).strip() == season_name:
                 for k, v in row.items():
-                    if k not in ["場コード", "季節"]: combined_row[f"est_season_{k}"] = v
+                    if k not in ["場コード", "季節"]:
+                        combined_row[f"est_season_{k}"] = v
                 break
 
     df_pred = pd.DataFrame([combined_row])
@@ -259,7 +269,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     if player_fav_kimarite:
         dummy_k_keys = list(next(iter(player_fav_kimarite.values())).keys()) if player_fav_kimarite else []
         for i in range(1, 7):
-            p_col_candidates = [f"艇{i}_選手名", f"{i}号艇_選手名", f"選手名_{i}", f"艇{i}_氏名", f"{i}号艇_氏名", f"氏名_{i}", f"艇{i}_選手", f"{i}号艇_選手"]
+            p_col_candidates = [f"艇{i}_選手名", f"{i}号艇_選手名", f"選手名_{i}", f"艇{i}_氏名", f"{i}号艇_氏名", f"氏名_{i}"]
             p_val = ""
             for c in p_col_candidates:
                 if c in df_pred.columns and pd.notna(df_pred.iloc[0][c]):
@@ -267,12 +277,10 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
                     if val and val != "nan":
                         p_val = val
                         break
-            
             for k_name in dummy_k_keys:
                 df_pred[f"艇{i}_kimarite_{k_name}"] = player_fav_kimarite.get(p_val, {}).get(k_name, 0.0)
 
     X_input = df_pred.reindex(columns=expected_features)
-
     cat_cols = ["レース場", "風向", "天候"]
     for col in expected_features:
         if col in cat_cols and col in X_input.columns:
@@ -280,9 +288,9 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
             if saved_cats:
                 X_input[col] = pd.Categorical(X_input[col], categories=saved_cats)
             else:
-                X_input[col] = X_input[col].astype('category')
+                X_input[col] = X_input[col].astype("category")
         elif col not in cat_cols:
-            X_input[col] = pd.to_numeric(X_input[col], errors='coerce')
+            X_input[col] = pd.to_numeric(X_input[col], errors="coerce")
             X_input[col] = X_input[col].fillna(feature_medians.get(col, 0.0) if isinstance(feature_medians, dict) else 0.0)
 
     prob_matrix = {}
@@ -293,10 +301,9 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
                 prob_matrix[rank_idx] = np.array(preds[0])
 
     boat_names = []
-    for i in range(6):
-        b_num = i + 1
-        name = f"選手{b_num}"
-        for c in [f"艇{b_num}_選手名", f"{b_num}号艇_選手名", f"選手名_{b_num}", f"艇{b_num}_氏名", f"{b_num}号艇_氏名", f"氏名_{b_num}", f"艇{b_num}_選手", f"{b_num}号艇_選手"]:
+    for i in range(1, 7):
+        name = f"{i}号艇"
+        for c in [f"艇{i}_選手名", f"{i}号艇_選手名", f"選手名_{i}", f"艇{i}_氏名", f"{i}号艇_氏名", f"氏名_{i}"]:
             if c in df_pred.columns and pd.notna(df_pred.iloc[0][c]):
                 val = str(df_pred.iloc[0][c]).strip()
                 if val and val != "nan":
@@ -304,9 +311,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
                     break
         boat_names.append(name)
 
-    status_badge = "📊 **【通常レース】AI信頼度：中**"
     trifecta_scores = []
-
     if 1 in prob_matrix and 2 in prob_matrix and 3 in prob_matrix:
         m1, m2, m3 = prob_matrix[1], prob_matrix[2], prob_matrix[3]
         entry_courses = {i+1: i+1 for i in range(6)}
@@ -315,7 +320,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         for c1_idx, c2_idx, c3_idx in itertools.permutations(range(6), 3):
             b1, b2, b3 = c1_idx + 1, c2_idx + 1, c3_idx + 1
             p1, p2, p3 = float(m1[c1_idx]), float(m2[c2_idx]), float(m3[c3_idx])
-
             ai_base_score = (p1 ** 1.8) * (p2 ** 1.3) * (p3 ** 1.0)
             c1_course, c2_course, c3_course = entry_courses[b1], entry_courses[b2], entry_courses[b3]
             primary_kimarite = default_kimarite_map.get(b1, "差し")
@@ -327,22 +331,64 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
 
         trifecta_scores.sort(key=lambda x: x[1], reverse=True)
 
-        if len(trifecta_scores) >= 5:
-            top_score = trifecta_scores[0][1]
-            score_diff = trifecta_scores[0][1] - trifecta_scores[4][1]
+    # -------------------------------------------------------------
+    # 直前オッズ解析＆条件判定 (①, ②, ④ 組み込み)
+    # -------------------------------------------------------------
+    odds_map = {}
+    matched_odds = get_matched_row(df_odds, target_race_code) if df_odds is not None else None
+    if matched_odds:
+        for c1, c2, c3 in itertools.permutations(range(1, 7), 3):
+            combo_key = f"{c1}-{c2}-{c3}"
+            col_name = f"3連単_{combo_key}"
+            if col_name in matched_odds and pd.notna(matched_odds[col_name]):
+                try:
+                    val = float(str(matched_odds[col_name]).replace(",", "").strip())
+                    if val > 0:
+                        odds_map[combo_key] = val
+                except ValueError:
+                    pass
 
-            if top_score >= 0.0025 and score_diff >= 0.0008:
-                status_badge = "🔥 **【勝負推奨】AI信頼度：高**"
-            elif top_score < 0.0018 or score_diff < 0.0003:
-                status_badge = "⚠️ **【見（見送り）推奨】AI信頼度：低（混戦）**"
+    top_score = trifecta_scores[0][1] if len(trifecta_scores) > 0 else 0.0
+    score_diff = trifecta_scores[0][1] - trifecta_scores[4][1] if len(trifecta_scores) >= 5 else 0.0
 
-    summary_text = f"🎯 **{venue}** {r_num}R 予想結果 ({day_str})\n"
+    # 判定①: 1号艇の1着予測確率 45%以下
+    m1_arr = prob_matrix.get(1, np.array([]))
+    in_1st_prob = float(m1_arr[0]) if len(m1_arr) > 0 else 1.0
+    is_in_weak = in_1st_prob <= 0.45
+
+    # 判定②: AI上位4点のオッズがすべて 50〜500倍
+    top4_combos = [c[0] for c in trifecta_scores[:4]]
+    top4_odds = [odds_map.get(f"{c[0]}-{c[1]}-{c[2]}", 0.0) for c in top4_combos]
+    is_odds_high_range = (len(top4_odds) == 4) and all(50.0 <= o <= 500.0 for o in top4_odds)
+
+    # 判定④: 風速 5m/s 以上
+    wind_val = combined_row.get("風速", 0)
+    try:
+        wind_speed = float(str(wind_val).replace("m", "").replace("m/s", "").strip())
+    except (ValueError, TypeError):
+        wind_speed = 0.0
+    is_windy = wind_speed >= 5.0
+
+    # ステータス決定
+    if is_in_weak and is_odds_high_range and is_windy:
+        status_badge = "💥 **【荒れ予想】高配当狙い**"
+    elif top_score >= 0.0025 and score_diff >= 0.0008:
+        status_badge = "🔥 **【勝負推奨】AI信頼度：高**"
+    elif top_score < 0.0018 or score_diff < 0.0003:
+        status_badge = "⚠️ **【見（見送り）推奨】AI信頼度：低**"
+    else:
+        status_badge = "📊 **【通常レース】AI信頼度：中**"
+
+    summary_text = f"🏁 **【{venue}】 {r_num}R 予想結果 ({day_str})**\n"
     summary_text += f"判定: {status_badge}\n\n"
-    summary_text += "--- 【3連単 予想買い目（上位5点）】 ---\n"
+    summary_text += "--- 【3連単 予想買い目 (上位5点)】 ---\n"
 
     if trifecta_scores:
         for rank, (combo, score) in enumerate(trifecta_scores[:5], 1):
-            summary_text += f"第{rank}位: **{combo[0]} - {combo[1]} - {combo[2]}** (スコア: {score:.4f})\n"
+            combo_str = f"{combo[0]}-{combo[1]}-{combo[2]}"
+            odds_val = odds_map.get(combo_str, None)
+            odds_disp = f" (オッズ: {odds_val:.1f}倍)" if odds_val else ""
+            summary_text += f"{rank}位: **{combo_str}**{odds_disp}\n"
 
     summary_text += "\n--- 【各艇の予測確率】 ---\n"
     arr_1 = prob_matrix.get(1, np.zeros(6))
@@ -353,25 +399,21 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         p1 = float(arr_1[i]) * 100 if len(arr_1) > i else 0.0
         p2 = float(arr_2[i]) * 100 if len(arr_2) > i else 0.0
         p3 = float(arr_3[i]) * 100 if len(arr_3) > i else 0.0
-
-        p_2ren = min(p1 + p2, 100.0)
-        p_3ren = min(p1 + p2 + p3, 100.0)
-
-        summary_text += f"・{i+1}号艇 {boat_names[i]}: 1着率 {p1:.1f}% | 2連率 {p_2ren:.1f}% | 3連率 {p_3ren:.1f}%\n"
+        summary_text += f"{i+1}号艇 ({boat_names[i]}): 1着率 {p1:.1f}% | 2着率 {p2:.1f}% | 3着率 {p3:.1f}%\n"
 
     return summary_text
 
 # --- Discord UI部分 ---
-
 class InteractiveRaceControlView(discord.ui.View):
     def __init__(self, current_venue: str):
         super().__init__(timeout=None)
         self.current_venue = current_venue
 
-        options = [discord.SelectOption(label=v, description=f"{v} のレース予想を表示") for v in VENUES]
+        options = [discord.SelectOption(label=v, description=f"{v}のレース") for v in VENUES]
         venue_select = discord.ui.Select(
-            placeholder=f"🏟️ 現在: {current_venue} (会場変更はこちら)",
-            min_values=1, max_values=1,
+            placeholder=f"📍 現在: {current_venue} (会場変更はこちら)",
+            min_values=1,
+            max_values=1,
             options=options,
             custom_id=f"p_venue_select_{current_venue}"
         )
@@ -386,13 +428,13 @@ class InteractiveRaceControlView(discord.ui.View):
         all_btn.callback = self.all_callback
         self.add_item(all_btn)
 
-        for r in range(1, 13):
+        for r_num in range(1, 13):
             r_btn = discord.ui.Button(
-                label=f"{r}R",
+                label=f"{r_num}R",
                 style=discord.ButtonStyle.primary,
-                custom_id=f"p_r_btn_{current_venue}_{r}"
+                custom_id=f"p_r_btn_{current_venue}_{r_num}"
             )
-            r_btn.callback = self.make_race_callback(r)
+            r_btn.callback = self.make_race_callback(r_num)
             self.add_item(r_btn)
 
     def make_race_callback(self, r_num: int):
@@ -404,7 +446,7 @@ class InteractiveRaceControlView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         selected_venue = interaction.data["values"][0]
         await interaction.followup.send(
-            content=f"🏟️ **{self.current_venue}** から **{selected_venue}** に切り替えました。",
+            content=f"🔄 **{self.current_venue}** から **{selected_venue}** に切り替えました。",
             view=InteractiveRaceControlView(selected_venue),
             ephemeral=True
         )
@@ -416,14 +458,13 @@ class InteractiveRaceControlView(discord.ui.View):
         target_date = datetime.now(JST)
         year, month, day_str = target_date.strftime("%Y"), target_date.strftime("%m"), target_date.strftime("%Y-%m-%d")
 
-        await interaction.followup.send(content=f"🤖 **{venue}** 全12レースの解析を開始します...", ephemeral=True)
+        await interaction.followup.send(content=f"🚀 **{venue}** 全12レースの予想を開始します...", ephemeral=True)
         for r_num in range(1, 13):
-            # 非同期スレッド（to_thread）で実行してボットのフリーズを防ぐ
             res_text = await asyncio.to_thread(
                 calculate_single_race_analysis, venue, venue_code, year, month, day_str, r_num
             )
             await interaction.followup.send(content=res_text, ephemeral=True)
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.3)  # レートリミット制限対策ウェイト
 
     async def race_callback(self, interaction: discord.Interaction, r_num: int):
         await interaction.response.defer(ephemeral=True)
@@ -433,18 +474,17 @@ class InteractiveRaceControlView(discord.ui.View):
             target_date = datetime.now(JST)
             year, month, day_str = target_date.strftime("%Y"), target_date.strftime("%m"), target_date.strftime("%Y-%m-%d")
 
-            # 非同期スレッド（to_thread）で実行
             result_text = await asyncio.to_thread(
                 calculate_single_race_analysis, venue, venue_code, year, month, day_str, r_num
             )
             await interaction.followup.send(content=result_text, ephemeral=True)
         except Exception as e:
             tb = traceback.format_exc()
-            await interaction.followup.send(content=f"⚠️ エラーが発生しました:\n```python\n{tb}\n```", ephemeral=True)
+            await interaction.followup.send(content=f"⚠️ エラーが発生しました:\n```{tb}```", ephemeral=True)
 
 class VenueSelect(discord.ui.Select):
     def __init__(self):
-        options = [discord.SelectOption(label=v, description=f"{v} のレース予想を表示") for v in VENUES]
+        options = [discord.SelectOption(label=v, description=f"{v}のレース") for v in VENUES]
         super().__init__(
             placeholder="最初にする会場を選択してください...",
             min_values=1,
@@ -457,7 +497,7 @@ class VenueSelect(discord.ui.Select):
         await interaction.response.defer(ephemeral=True)
         venue = self.values[0]
         await interaction.followup.send(
-            content=f"🏟️ **{venue}** が選択されました。このメニューからいつでも操作できます。",
+            content=f"🎯 **{venue}** が選択されました。このメニューからいつでもレース予想が可能です。",
             view=InteractiveRaceControlView(venue),
             ephemeral=True
         )
@@ -481,7 +521,7 @@ async def on_ready():
 async def setup(ctx):
     await ctx.message.delete()
     await ctx.send(
-        content="🤖 **【AIレース分析・予想メニュー】**\n👇 下のメニューから会場を選択してください：",
+        content="🎯 **【AIレース分析・予想メニュー】**\n👇 下のメニューから会場を選択してください。",
         view=VenueSelectView()
     )
 
@@ -492,14 +532,20 @@ async def check_status(ctx):
         "data/estimate/stadium/course_win_rate.csv",
         "data/estimate/stadium/win_rate.csv"
     ]
-    file_results = [f"✅ {f} (取得成功: {len(fetch_github_csv(f, use_cache=True))}行)" if fetch_github_csv(f, use_cache=True) is not None else f"❌ {f} (取得失敗)" for f in test_files]
+    file_results = []
+    for f in test_files:
+        df_res = fetch_github_csv(f, use_cache=True)
+        if df_res is not None:
+            file_results.append(f"✅ {f} (取得成功: {len(df_res)}行)")
+        else:
+            file_results.append(f"❌ {f} (取得失敗)")
 
     msg = (
-        f"📊 **【データ取り込み状況チェック】**\n\n"
-        f"***1. モデル読み込み状態**: {'成功' if models and 'rank_1' in models else '失敗'}\n"
-        f"***2. モデルの特徴量数**: {len(expected_features)} 個\n"
-        f"***3. 決まり手テーブル件数**: {len(kimarite_prob_dict)} 件\n"
-        f"***4. GitHubファイル取得テスト**:\n" + "\n".join(file_results)
+        "📊 **【データ読み込み状況チェック】**\n\n"
+        f"1. モデル読み込み状態: {'✅ 成功' if models and 'rank_1' in models else '❌ 失敗'}\n"
+        f"2. モデルの特徴量数: {len(expected_features)} 個\n"
+        f"3. 決まり手テーブル件数: {len(kimarite_prob_dict)} 件\n"
+        f"4. GitHubファイル取得テスト:\n" + "\n".join(file_results)
     )
     await ctx.send(msg)
 
