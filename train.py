@@ -236,6 +236,7 @@ def train_model():
         print("有効な学習データがありません。")
         return
 
+    # 決まり手特徴量の付与
     if player_fav_kimarite:
         dummy_k_keys = list(next(iter(player_fav_kimarite.values())).keys()) if player_fav_kimarite else []
         for i in range(1, 7):
@@ -256,8 +257,34 @@ def train_model():
                     lambda name: player_fav_kimarite.get(name, {}).get(k_name, 0.0)
                 )
 
+    # ---------------------------------------------------------
+    # 【改修】6艇内の相対差分（_diff）特徴量の自動生成
+    # ---------------------------------------------------------
+    diff_target_stats = ["展示タイム", "チルト", "直線タイム", "まわり足タイム", "モーター2連率", "ボート2連率", "ST", "平均ST", "当地勝率"]
+    for stat in diff_target_stats:
+        cols_6 = [f"艇{i}_{stat}" for i in range(1, 7)]
+        if all(c in df_train.columns for c in cols_6):
+            # 数値化
+            for c in cols_6:
+                df_train[c] = pd.to_numeric(df_train[c], errors="coerce")
+            # 6艇の平均値
+            mean_series = df_train[cols_6].mean(axis=1)
+            # 各艇の平均との差分を生成
+            for i, c in enumerate(cols_6, start=1):
+                df_train[f"艇{i}_{stat}_diff"] = df_train[c] - mean_series
+
+    # 除外列の設定
     exclude_cols = [col for col in df_train.columns if col.startswith("res_")]
     feature_cols = [col for col in df_train.columns if col not in exclude_cols]
+
+    # ---------------------------------------------------------
+    # 【改修】A1・級別・全国勝率による固定バイアスの排除
+    # ---------------------------------------------------------
+    bias_keywords = ["級別", "全国勝率", "全国2連率", "級"]
+    feature_cols = [
+        col for col in feature_cols 
+        if not any(b_kw in col for b_kw in bias_keywords)
+    ]
 
     cat_cols = ["レース場", "風向", "天候"]
     cat_categories = {}
