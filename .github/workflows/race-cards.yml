@@ -1,10 +1,10 @@
-name: race-cards
+name: race-cards-daily
 
 on:
   schedule:
-    # UTC 23:00（日本時間の朝 08:00）に自動実行
+    # 毎日日本時間 8:00 (UTC 23:00) に1回実行
     - cron: '0 23 * * *'
-  workflow_dispatch: # 手動実行ボタンも画面に表示
+  workflow_dispatch: # 手動実行ボタン
 
 jobs:
   run-scraper:
@@ -23,15 +23,15 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Run scraper
+      # 正しいまとめ役のスクリプトを実行する
+      - name: Run race cards fetcher
         run: |
-              python scripts/boatrace/race_card_scraper.py
-
+          python scripts/run_race_cards_fetcher.py
 
       - name: Commit and push results
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add .
-          git diff --staged --quiet || (git commit -m "Auto update race card data" && git push)
+          git diff --staged --quiet || (git commit -m "Auto update daily race cards" && git push)
 
