@@ -44,7 +44,7 @@ def get_target_races(limit=5):
             {
                 "stadium_code": int(row["レース場コード"]),
                 "race_number": int(row["レース"]),
-                "close_time": row["電話投票締切"],
+                "close_time": row["電話投票締切予定"],
             }
         )
     return targets
