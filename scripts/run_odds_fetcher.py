@@ -1,15 +1,21 @@
-import csv
 from datetime import datetime
 import os
+
+from pathlib import Path
 import sys
 
 import pandas as pd
 
-# scriptsフォルダをモジュール検索パスに追加
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# プロジェクトルートディレクトリをパスの先頭に追加
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 from boatrace.downloader import RateLimiter
-from boatrace.odds import OddsScraper  # モジュール名を odds に修正
+# odds.py ではなく odds_realtime.py からインポート
+from boatrace.odds_realtime import (
+    RealtimeOddsScraper,  # クラス名が異なる場合はモジュール内の対応するクラス名に調整してください
+)
 
 
 def get_target_races(limit=3):
@@ -43,12 +49,17 @@ def get_target_races(limit=3):
 
     upcoming = df[df["close_datetime"] >= now].sort_values("close_datetime")
 
+    # 列名の対応: "レース回" (例: "1R") または "レース" の両方に対応
+    race_col = "レース回" if "レース回" in df.columns else "レース"
+
     targets = []
     for _, row in upcoming.head(limit).iterrows():
+        # "1R" などの文字列から数字のみを抽出
+        race_num_raw = str(row[race_col]).replace("R", "").strip()
         targets.append(
             {
                 "stadium_code": int(row["レース場コード"]),
-                "race_number": int(row["レース"]),
+                "race_number": int(race_num_raw),
                 "close_time": row["電話投票締切予定"],
             }
         )
@@ -60,7 +71,8 @@ def main():
     today_str = now.strftime("%Y-%m-%d")
     year, month, day = now.strftime("%Y"), now.strftime("%m"), now.strftime("%d")
 
-    scraper = OddsScraper(rate_limiter=RateLimiter(interval_seconds=1.0))
+    # RealtimeOddsScraper のインスタンス化
+    scraper = RealtimeOddsScraper(rate_limiter=RateLimiter(interval_seconds=1.0))
     target_races = get_target_races(limit=3)
 
     print(f"Target odds count: {len(target_races)}")
