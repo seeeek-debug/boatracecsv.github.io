@@ -306,6 +306,22 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
             for k_name in dummy_k_keys:
                 df_pred[f"艇{i}_kimarite_{k_name}"] = player_fav_kimarite.get(p_val, {}).get(k_name, 0.0)
 
+    # ---------------------------------------------------------
+    # 【追加】学習用コードと統合：6艇内の相対差分（_diff）特徴量の生成
+    # ---------------------------------------------------------
+    diff_target_stats = ["展示タイム", "チルト", "直線タイム", "まわり足タイム", "モーター2連率", "ボート2連率", "ST", "平均ST", "当地勝率"]
+    for stat in diff_target_stats:
+        cols_6 = [f"艇{i}_{stat}" for i in range(1, 7)]
+        for c in cols_6:
+            if c in df_pred.columns:
+                df_pred[c] = pd.to_numeric(df_pred[c], errors="coerce")
+        
+        existing_cols = [c for c in cols_6 if c in df_pred.columns]
+        if len(existing_cols) == 6:
+            mean_series = df_pred[existing_cols].mean(axis=1)
+            for i, c in enumerate(cols_6, start=1):
+                df_pred[f"艇{i}_{stat}_diff"] = df_pred[c] - mean_series
+
     X_input = df_pred.reindex(columns=expected_features)
     cat_cols = ["レース場", "風向", "天候"]
     for col in expected_features:
