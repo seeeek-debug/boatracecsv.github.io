@@ -2,8 +2,8 @@ name: Run Race Cards Fetcher
 
 on:
   schedule:
-    - cron: '0 23 * * *'  # JST朝8時（UTC 23:00）に自動実行
-  workflow_dispatch:      # GitHub画面からの手動実行ボタン
+    - cron: '0 23 * * *'  # JST朝8時（UTC 23:00）
+  workflow_dispatch:
 
 jobs:
   run-scraper:
@@ -26,7 +26,7 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Run race cards fetcher
-        run: python scripts/race-title.py --force --no-push
+        run: python scripts/race-card.py
 
       - name: Commit and push results
         run: |
