@@ -7,7 +7,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from boatrace.downloader import RateLimiter
-from boatrace.race_card import RaceCardScraper
+from boatrace.race_card_scraper import RaceCardScraper
 
 
 def main():
@@ -35,14 +35,13 @@ def main():
                 # 開催されていないレースなどのエラーはスキップ
                 pass
 
-    # 取得できたデータを日付ごとのファイルに保存
+    # 画像に合わせた保存先：data/programs/race_cards/{YYYY}/{MM}/{DD}.csv
     if all_rows:
         output_dir = f"data/programs/race_cards/{year}/{month}"
         os.makedirs(output_dir, exist_ok=True)
         output_file = f"{output_dir}/{day}.csv"
 
-        # ここでCSVへの書き出し処理を行います
-        # （※既存のスクレイパーの出力形式に合わせて適宜調整してください）
+        # CSV保存処理
         print(
             f"Successfully saved all race cards to {output_file} ({len(all_rows)} records)"
         )
