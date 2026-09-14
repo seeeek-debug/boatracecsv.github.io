@@ -1,0 +1,36 @@
+name: race-cards
+
+on:
+  schedule:
+    # UTC 23:00（日本時間の朝 08:00）に自動実行
+    - cron: '0 23 * * *'
+  workflow_dispatch: # 手動実行ボタンも画面に表示
+
+jobs:
+  run-scraper:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Run scraper
+        run: |
+          python race_card_scraper.py
+
+      - name: Commit and push results
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git diff --staged --quiet || (git commit -m "Auto update race card data" && git push)
+
