@@ -22,7 +22,7 @@ def get_target_races(limit=3):
 
     df = pd.read_csv(csv_path)
     df["close_datetime"] = pd.to_datetime(
-        today_str + " " + df["電話投票締切"], format="%Y-%m-%d %H:%M"
+        today_str + " " + df["電話投票締切予定"], format="%Y-%m-%d %H:%M"
     )
     upcoming = df[df["close_datetime"] >= now].sort_values("close_datetime")
 
@@ -32,7 +32,7 @@ def get_target_races(limit=3):
             {
                 "stadium_code": int(row["レース場コード"]),
                 "race_number": int(row["レース"]),
-                "close_time": row["電話投票締切"],
+                "close_time": row["電話投票締切予定"],
             }
         )
     return targets
