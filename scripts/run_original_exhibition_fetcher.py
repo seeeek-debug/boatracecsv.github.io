@@ -3,11 +3,7 @@ from datetime import datetime
 import os
 import sys
 
-import pandas as pd
-
-# scriptsフォルダをモジュール検索パスに追加
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
 from boatrace.downloader import RateLimiter
 from boatrace.original_exhibition_scraper import OriginalExhibitionScraper
 
@@ -19,21 +15,15 @@ def get_target_races(limit=3):
     year, month, day = now.strftime("%Y"), now.strftime("%m"), now.strftime("%d")
 
     csv_path = f"data/programs/title/{year}/{month}/{day}.csv"
-
     if not os.path.exists(csv_path):
-        print(f"Program CSV not found: {csv_path}")
         return []
 
-    try:
-        df = pd.read_csv(csv_path)
-    except Exception as e:
-        print(f"Error reading CSV: {e}")
-        return []
+    import pandas as pd
 
+    df = pd.read_csv(csv_path)
     df["close_datetime"] = pd.to_datetime(
         today_str + " " + df["電話投票締切"], format="%Y-%m-%d %H:%M"
     )
-
     upcoming = df[df["close_datetime"] >= now].sort_values("close_datetime")
 
     targets = []
@@ -49,15 +39,15 @@ def get_target_races(limit=3):
 
 
 def main():
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    year, month, _ = today_str.split("-")
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    year, month, day = now.strftime("%Y"), now.strftime("%m"), now.strftime("%d")
 
     scraper = OriginalExhibitionScraper(
         rate_limiter=RateLimiter(interval_seconds=1.0)
     )
-
-    # 直近3レースを取得対象に指定
     target_races = get_target_races(limit=3)
+
     print(f"Target original exhibition count: {len(target_races)}")
 
     for target in target_races:
@@ -72,13 +62,13 @@ def main():
             )
 
             if data:
-                output_dir = f"data/exhibition/{year}/{month}"
+                # 画像の構造に合わせた保存先パス（日別ファイルに追記・保存）
+                output_dir = f"data/previews/original_exhibition/{year}/{month}"
                 os.makedirs(output_dir, exist_ok=True)
-                output_file = f"{output_dir}/{today_str.replace('-', '')}_{stadium_code:02d}_{race_number:02d}.csv"
+                output_file = f"{output_dir}/{day}.csv"
 
-                # データをCSVへ書き出す処理
                 print(
-                    f"Saved exhibition data: {stadium_code}R{race_number} -> {output_file}"
+                    f"Saved exhibition data to {output_file} ({stadium_code}R{race_number})"
                 )
 
         except Exception as e:
@@ -89,4 +79,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
