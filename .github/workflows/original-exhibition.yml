@@ -1,0 +1,35 @@
+name: original-exhibition
+
+on:
+  schedule:
+    # JST 8:00 〜 23:00 の間、5分ごとに実行 (UTC 23:00〜14:00)
+    - cron: '*/5 23,0-14 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-scraper:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Run original exhibition scraper
+        run: |
+          python original_exhibition_scraper.py
+
+      - name: Commit and push results
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git diff --staged --quiet || (git commit -m "Auto update original exhibition data" && git push)
