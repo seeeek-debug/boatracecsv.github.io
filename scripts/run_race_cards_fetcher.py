@@ -3,11 +3,13 @@ from datetime import datetime
 import os
 import sys
 
+import pandas as pd
+
 # scriptsフォルダをモジュール検索パスに追加
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from boatrace.downloader import RateLimiter
-from boatrace.race_card_scraper import RaceCardScraper
+from boatrace.race_card import RaceCardScraper
 
 
 def main():
@@ -30,21 +32,32 @@ def main():
                     race_number=race_number,
                 )
                 if data:
-                    all_rows.append(data)
+                    # データが DataFrame の場合や辞書の場合に対応
+                    if isinstance(data, pd.DataFrame):
+                        all_rows.append(data)
+                    elif isinstance(data, list):
+                        all_rows.extend(data)
+                    else:
+                        all_rows.append(pd.DataFrame([data]))
             except Exception:
                 # 開催されていないレースなどのエラーはスキップ
                 pass
 
-    # 画像に合わせた保存先：data/programs/race_cards/{YYYY}/{MM}/{DD}.csv
+    # 取得できたデータをCSVファイルとして実際に保存する
     if all_rows:
         output_dir = f"data/programs/race_cards/{year}/{month}"
         os.makedirs(output_dir, exist_ok=True)
         output_file = f"{output_dir}/{day}.csv"
 
-        # CSV保存処理
+        # まとめて一つのデータフレームにしてCSVに書き出し
+        combined_df = pd.concat(all_rows, ignore_index=True)
+        combined_df.to_csv(output_file, index=False, encoding="utf-8-sig")
+
         print(
-            f"Successfully saved all race cards to {output_file} ({len(all_rows)} records)"
+            f"Successfully saved all race cards to {output_file} ({len(combined_df)} records)"
         )
+    else:
+        print("No race card data found to save.")
 
 
 if __name__ == "__main__":
