@@ -5,7 +5,7 @@ import os
 import threading
 import time
 import traceback
-from flask import Flask  # 小文字に修正
+from flask import Flask
 import discord
 from discord.ext import commands
 import numpy as np
@@ -13,6 +13,7 @@ import pandas as pd
 import requests
 import joblib
 import itertools
+from bs4 import BeautifulSoup
 
 # --- Render用Webサーバー ---
 app = Flask(__name__)
@@ -37,7 +38,6 @@ def clean_name(val):
 
 # --- Discordボット設定 ---
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/seeeek-debug/boatracecsv.github.io/main/"
-NOTIFICATION_CHANNEL_ID = 136832996264511610
 
 JST = timezone(timedelta(hours=9))
 
@@ -70,7 +70,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # --- スマートキャッシュ (TTLキャッシュ) ---
 CSV_CACHE = {}  # key: file_path, val: (timestamp, df)
-CACHE_TTL = 180  # 本番リアルタイム用に3分キャッシュ
+CACHE_TTL = 180  # 3分キャッシュ
 
 def fetch_github_csv(file_path, use_cache=True):
     now = time.time()
@@ -97,6 +97,37 @@ def fetch_github_csv_with_fallback(primary_path, fallback_path, use_cache=True):
     if df is None and fallback_path:
         df = fetch_github_csv(fallback_path, use_cache=use_cache)
     return df
+
+# --- 公式サイト(boatrace.jp)からのリアルタイムオッズ取得 ---
+def fetch_official_odds3t(venue_code, r_num, date_yyyymmdd):
+    """boatrace.jp から直接リアルタイム3連単オッズを取得"""
+    url = f"https://www.boatrace.jp/owpc/pc/race/odds3t?rno={r_num}&jcd={venue_code}&hd={date_yyyymmdd}"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    odds_map = {}
+    
+    try:
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code != 200:
+            return odds_map
+
+        soup = BeautifulSoup(res.text, "html.parser")
+        tables = soup.select("table.table1")
+        for table in tables:
+            rows = table.select("tr")
+            for row in rows:
+                combo_elem = row.select_one(".is-p3-1, .is-p3-2, .is-p3-3, .is-p3-4, .is-p3-5, .is-p3-6")
+                odds_elem = row.select_one(".oddsPoint")
+                if combo_elem and odds_elem:
+                    combo = combo_elem.text.strip().replace(" ", "")
+                    odds_str = odds_elem.text.strip()
+                    try:
+                        odds_map[combo] = float(odds_str)
+                    except ValueError:
+                        continue
+    except Exception as e:
+        print(f"公式サイトオッズ取得エラー ({venue_code} {r_num}R): {e}")
+    
+    return odds_map
 
 # --- モデルおよびデータの読み込み ---
 MODEL_FILENAME = "boatrace_lgb_model.pkl"
@@ -212,10 +243,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     stt_p1 = f"data/previews/stt/{year}/{month_str}/{day_str_zf}.csv"
     stt_p2 = f"data/previews/stt/{year}/{month_raw}/{day_raw}.csv"
 
-    # 直前オッズデータ ( od3 )
-    odds_p1 = f"data/previews/od3/{year}/{month_str}/{day_str_zf}.csv"
-    odds_p2 = f"data/previews/od3/{year}/{month_raw}/{day_raw}.csv"
-
     prev_code = VENUE_PREVIEW_CODE_MAP.get(venue_s, "")
     venue_preview_p1 = f"data/previews/{prev_code}/{year}/{month_str}/{day_str_zf}.csv" if prev_code else None
     venue_preview_p2 = f"data/previews/{prev_code}/{year}/{month_raw}/{day_raw}.csv" if prev_code else None
@@ -225,7 +252,6 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
     df_orig = fetch_github_csv_with_fallback(orig_p1, orig_p2, use_cache=True)
     df_stt = fetch_github_csv_with_fallback(stt_p1, stt_p2, use_cache=True)
     df_venue_preview = fetch_github_csv_with_fallback(venue_preview_p1, venue_preview_p2, use_cache=True)
-    df_odds = fetch_github_csv_with_fallback(odds_p1, odds_p2, use_cache=False)  # オッズはリアルタイム取得
 
     df_course_win = fetch_github_csv("data/estimate/stadium/course_win_rate.csv", use_cache=True)
     df_season_win = fetch_github_csv("data/estimate/stadium/win_rate.csv", use_cache=True)
@@ -332,21 +358,10 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         trifecta_scores.sort(key=lambda x: x[1], reverse=True)
 
     # -------------------------------------------------------------
-    # 直前オッズ解析＆条件判定 (①, ②, ④ 組み込み)
+    # 公式サイト(boatrace.jp)から直前オッズのリアルタイム取得 & 判定
     # -------------------------------------------------------------
-    odds_map = {}
-    matched_odds = get_matched_row(df_odds, target_race_code) if df_odds is not None else None
-    if matched_odds:
-        for c1, c2, c3 in itertools.permutations(range(1, 7), 3):
-            combo_key = f"{c1}-{c2}-{c3}"
-            col_name = f"3連単_{combo_key}"
-            if col_name in matched_odds and pd.notna(matched_odds[col_name]):
-                try:
-                    val = float(str(matched_odds[col_name]).replace(",", "").strip())
-                    if val > 0:
-                        odds_map[combo_key] = val
-                except ValueError:
-                    pass
+    date_yyyymmdd = f"{year}{month_str}{day_str_zf}"
+    odds_map = fetch_official_odds3t(venue_s, r_num, date_yyyymmdd)
 
     top_score = trifecta_scores[0][1] if len(trifecta_scores) > 0 else 0.0
     score_diff = trifecta_scores[0][1] - trifecta_scores[4][1] if len(trifecta_scores) >= 5 else 0.0
@@ -387,7 +402,7 @@ def calculate_single_race_analysis(venue, venue_code, year, month, day_str, r_nu
         for rank, (combo, score) in enumerate(trifecta_scores[:5], 1):
             combo_str = f"{combo[0]}-{combo[1]}-{combo[2]}"
             odds_val = odds_map.get(combo_str, None)
-            odds_disp = f" (オッズ: {odds_val:.1f}倍)" if odds_val else ""
+            odds_disp = f" (直前オッズ: {odds_val:.1f}倍)" if odds_val else " (オッズ取得中/未発売)"
             summary_text += f"{rank}位: **{combo_str}**{odds_disp}\n"
 
     summary_text += "\n--- 【各艇の予測確率】 ---\n"
@@ -464,7 +479,7 @@ class InteractiveRaceControlView(discord.ui.View):
                 calculate_single_race_analysis, venue, venue_code, year, month, day_str, r_num
             )
             await interaction.followup.send(content=res_text, ephemeral=True)
-            await asyncio.sleep(0.3)  # レートリミット制限対策ウェイト
+            await asyncio.sleep(0.3)
 
     async def race_callback(self, interaction: discord.Interaction, r_num: int):
         await interaction.response.defer(ephemeral=True)
@@ -524,6 +539,51 @@ async def setup(ctx):
         content="🎯 **【AIレース分析・予想メニュー】**\n👇 下のメニューから会場を選択してください。",
         view=VenueSelectView()
     )
+
+@bot.command(name="pickup")
+async def pickup_races(ctx):
+    """本日開催中の全会場から『勝負推奨』『荒れ予想』レースを厳選ピックアップ"""
+    msg = await ctx.send("🔍 本日の全開催場から勝負レースをスキャン中...（1〜2分かかります）")
+    
+    target_date = datetime.now(JST)
+    year = target_date.strftime("%Y")
+    month = target_date.strftime("%m")
+    day_str = target_date.strftime("%Y-%m-%d")
+
+    picked_races = []
+
+    for venue, v_code in VENUE_MAPPING.items():
+        for r_num in range(1, 13):
+            res_text = await asyncio.to_thread(
+                calculate_single_race_analysis, venue, v_code, year, month, day_str, r_num
+            )
+            
+            if "💥 **【荒れ予想】" in res_text or "🔥 **【勝負推奨】" in res_text:
+                badge = "💥 荒れ予想" if "💥 **【荒れ予想】" in res_text else "🔥 勝負推奨"
+                
+                top_buy = "情報なし"
+                for line in res_text.split("\n"):
+                    if "1位:" in line:
+                        top_buy = line.replace("1位:", "").strip()
+                        break
+                        
+                picked_races.append(f"• **{venue} {r_num}R** [{badge}] 👉 本命/狙い: {top_buy}")
+            
+            await asyncio.sleep(0.02)
+
+    if not picked_races:
+        await msg.edit(content="📊 本日スキャンしたレースの中に、現在条件に合致する『勝負レース』は見つかりませんでした。")
+        return
+
+    result_msg = f"🎯 **【本日の厳選勝負レース 一覧】 ({day_str})**\n\n"
+    result_msg += "\n".join(picked_races)
+    result_msg += "\n\n※各レースの詳細や直前オッズは、ボタンメニューから該当会場・Rを選択して確認してください。"
+
+    if len(result_msg) > 1900:
+        for chunk in [result_msg[i:i+1800] for i in range(0, len(result_msg), 1800)]:
+            await ctx.send(chunk)
+    else:
+        await msg.edit(content=result_msg)
 
 @bot.command(name="status")
 async def check_status(ctx):
