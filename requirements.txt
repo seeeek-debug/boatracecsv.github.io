@@ -6,3 +6,4 @@ discord.py
 numpy
 joblib
 lightgbm
+beautifulsoup4
