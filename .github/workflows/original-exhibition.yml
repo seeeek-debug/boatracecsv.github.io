@@ -2,9 +2,10 @@ name: original-exhibition
 
 on:
   schedule:
-    # JST 8:00 〜 23:00 の間、5分ごとに実行 (UTC 23:00〜14:00)
-    - cron: '*/5 23,0-14 * * *'
-  workflow_dispatch:
+    # JST 8:00 〜 22:30 の間、5分ごとに実行 (UTC 23:00〜13:30)
+    - cron: '*/5 23,0-12 * * *'
+    - cron: '0-30/5 13 * * *'
+  workflow_dispatch: # 手動実行ボタン
 
 jobs:
   run-scraper:
@@ -23,9 +24,10 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Run original exhibition scraper
+      # 必ずまとめ役のランナーファイルを実行する
+      - name: Run original exhibition fetcher
         run: |
-          python scripts/boatrace/original_exhibition_scraper.py
+          python scripts/run_original_exhibition_fetcher.py
 
       - name: Commit and push results
         run: |
