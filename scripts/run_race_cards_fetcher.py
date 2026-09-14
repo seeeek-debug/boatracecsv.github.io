@@ -9,7 +9,7 @@ import pandas as pd
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from boatrace.downloader import RateLimiter
-from boatrace.race_card import RaceCardScraper
+from boatrace.race_card_scraper import RaceCardScraper  # モジュール名を修正
 
 
 def main():
@@ -31,8 +31,7 @@ def main():
                     stadium_code=stadium_code,
                     race_number=race_number,
                 )
-                if data:
-                    # データが DataFrame の場合や辞書の場合に対応
+                if data is not None:
                     if isinstance(data, pd.DataFrame):
                         all_rows.append(data)
                     elif isinstance(data, list):
@@ -40,16 +39,15 @@ def main():
                     else:
                         all_rows.append(pd.DataFrame([data]))
             except Exception:
-                # 開催されていないレースなどのエラーはスキップ
+                # 非開催レースなどのエラーはスキップ
                 pass
 
-    # 取得できたデータをCSVファイルとして実際に保存する
+    # CSVファイルへの書き出し処理
     if all_rows:
         output_dir = f"data/programs/race_cards/{year}/{month}"
         os.makedirs(output_dir, exist_ok=True)
         output_file = f"{output_dir}/{day}.csv"
 
-        # まとめて一つのデータフレームにしてCSVに書き出し
         combined_df = pd.concat(all_rows, ignore_index=True)
         combined_df.to_csv(output_file, index=False, encoding="utf-8-sig")
 
