@@ -216,4 +216,3 @@ if __name__ == "__main__":
     if not DISCORD_BOT_TOKEN:
         raise ValueError("エラー: 環境変数 DISCORD_BOT_TOKEN が設定されていません。")
     bot.run(DISCORD_BOT_TOKEN)
-
