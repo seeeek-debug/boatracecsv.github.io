@@ -33,7 +33,7 @@ def get_target_races(limit=3):
     # 列名の前後の空白を削除
     df.columns = df.columns.str.strip()
 
-    if "電話投票締切" not in df.columns:
+    if "電話投票締切予定" not in df.columns:
         print(f"利用可能な列名一覧: {list(df.columns)}")
         return []
 
@@ -49,15 +49,16 @@ def get_target_races(limit=3):
             {
                 "stadium_code": int(row["レース場コード"]),
                 "race_number": int(row["レース"]),
-                "close_time": row["電話投票締切予定"],
+                "close_time": row["電話投票締切予定"],  # 電話投票締切時間予定を保持
             }
         )
     return targets
 
 
 def main():
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    year, month, day = today_str.strftime("%Y"), today_str.strftime("%m"), today_str.strftime("%d")
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    year, month, day = now.strftime("%Y"), now.strftime("%m"), now.strftime("%d")
 
     scraper = OriginalExhibitionScraper(
         rate_limiter=RateLimiter(interval_seconds=1.0)
@@ -69,6 +70,7 @@ def main():
     for target in target_races:
         stadium_code = target["stadium_code"]
         race_number = target["race_number"]
+        deadline_time = target["close_time"]  # 電話投票締切時間予定
 
         try:
             data = scraper.scrape_race(
@@ -82,9 +84,10 @@ def main():
                 os.makedirs(output_dir, exist_ok=True)
                 output_file = f"{output_dir}/{day}.csv"
 
-                # 個別のデータを追記・保存する処理
+                # 取得したデータと電話投票締切時間予定を紐付けて保存する処理
                 print(
-                    f"Saved original exhibition data to {output_file} ({stadium_code}R{race_number})"
+                    f"Saved original exhibition data to {output_file} "
+                    f"({stadium_code}R{race_number}, 締切予定:{deadline_time})"
                 )
 
         except Exception as e:
