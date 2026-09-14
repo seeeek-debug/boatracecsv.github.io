@@ -9,7 +9,7 @@ import pandas as pd
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from boatrace.downloader import RateLimiter
-from boatrace.odds_scraper import OddsScraper
+from boatrace.odds import OddsScraper  # モジュール名を odds に修正
 
 
 def get_target_races(limit=3):
@@ -30,6 +30,7 @@ def get_target_races(limit=3):
         print(f"Error reading CSV: {e}")
         return []
 
+    # 列名の前後の空白を削除
     df.columns = df.columns.str.strip()
 
     if "電話投票締切予定" not in df.columns:
@@ -88,7 +89,6 @@ def main():
                 os.makedirs(output_dir, exist_ok=True)
                 output_file = f"{output_dir}/{day}.csv"
 
-                # 既にファイルがあれば末尾に追記、なければ新規作成
                 file_exists = os.path.exists(output_file)
                 df_new.to_csv(
                     output_file,
