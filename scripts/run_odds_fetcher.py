@@ -1,21 +1,17 @@
 from datetime import datetime
 import os
-
 from pathlib import Path
 import sys
 
 import pandas as pd
 
-# プロジェクトルートディレクトリをパスの先頭に追加
+# プロジェクトルートをパスの先頭に追加
 project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from boatrace.downloader import RateLimiter
-# odds.py ではなく odds_realtime.py からインポート
-from boatrace.odds_realtime import (
-    RealtimeOddsScraper,  # クラス名が異なる場合はモジュール内の対応するクラス名に調整してください
-)
+from boatrace.odds_realtime import OddsRealtimeFetcher
 
 
 def get_target_races(limit=3):
@@ -48,13 +44,10 @@ def get_target_races(limit=3):
     )
 
     upcoming = df[df["close_datetime"] >= now].sort_values("close_datetime")
-
-    # 列名の対応: "レース回" (例: "1R") または "レース" の両方に対応
     race_col = "レース回" if "レース回" in df.columns else "レース"
 
     targets = []
     for _, row in upcoming.head(limit).iterrows():
-        # "1R" などの文字列から数字のみを抽出
         race_num_raw = str(row[race_col]).replace("R", "").strip()
         targets.append(
             {
@@ -71,8 +64,7 @@ def main():
     today_str = now.strftime("%Y-%m-%d")
     year, month, day = now.strftime("%Y"), now.strftime("%m"), now.strftime("%d")
 
-    # RealtimeOddsScraper のインスタンス化
-    scraper = RealtimeOddsScraper(rate_limiter=RateLimiter(interval_seconds=1.0))
+    fetcher = OddsRealtimeFetcher(rate_limiter=RateLimiter(interval_seconds=1.0))
     target_races = get_target_races(limit=3)
 
     print(f"Target odds count: {len(target_races)}")
@@ -83,11 +75,22 @@ def main():
         deadline_time = target["close_time"]
 
         try:
-            data = scraper.scrape_race(
-                date=today_str,
-                stadium_code=stadium_code,
-                race_number=race_number,
-            )
+            # fetch_values または scrape_race でデータを取得
+            if hasattr(fetcher, "scrape_race"):
+                data = fetcher.scrape_race(
+                    date=today_str,
+                    stadium_code=stadium_code,
+                    race_number=race_number,
+                )
+            elif hasattr(fetcher, "fetch_values"):
+                data = fetcher.fetch_values(
+                    date=today_str,
+                    stadium_code=stadium_code,
+                    race_number=race_number,
+                )
+            else:
+                print("Error: 適切なデータ取得メソッドが見つかりません。")
+                break
 
             if data is not None:
                 if isinstance(data, dict):
