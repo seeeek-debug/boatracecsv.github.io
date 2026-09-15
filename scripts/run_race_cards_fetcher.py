@@ -48,15 +48,13 @@ def convert_to_dataframe(data):
 
 
 def transform_to_wide(df_raw, stadium_code, race_number, today_str):
-    """取得した出走表データを画像通りの横持ちフォーマット（1レース1行）に変換"""
+    """取得した出走表データを横持ちフォーマット（1レース1行）に変換"""
     if df_raw is None or df_raw.empty:
         return None
 
-    # すでに横持ち形式（艇1_で始まる列が存在する）の場合はそのまま返す
     if any(str(col).startswith("艇1_") for col in df_raw.columns):
         return df_raw
 
-    # レース基本情報
     stadium_str = f"{int(stadium_code):02d}"
     race_str = f"{int(race_number):02d}R"
     race_code = f"{today_str.replace('-', '')}{stadium_str}{int(race_number):02d}"
@@ -68,20 +66,17 @@ def transform_to_wide(df_raw, stadium_code, race_number, today_str):
         "レース回": race_str,
     }
 
-    # 艇番を表す列名を自動特定
     boat_col = None
     for c in ["艇番", "艇", "pit_number", "boat_number"]:
         if c in df_raw.columns:
             boat_col = c
             break
 
-    # 共通ヘッダーとして除外するカラム群
     ignore_cols = {
         "レースコード", "レース日", "レース場コード", "レース場", "レース回",
         "レース", "stadium_code", "race_number", "date", boat_col
     }
 
-    # 1艇〜6艇のデータを横に結合
     for i in range(1, 7):
         if boat_col:
             sub = df_raw[df_raw[boat_col].astype(str) == str(i)]
@@ -98,42 +93,21 @@ def transform_to_wide(df_raw, stadium_code, race_number, today_str):
     return pd.DataFrame([row])
 
 
-def save_or_update_csv(df_new, output_file):
-    """既存CSVがある場合は最新データに結合・重複排除して保存"""
-    if os.path.exists(output_file):
-        try:
-            df_old = pd.read_csv(output_file, dtype=str)
-            df_combined = pd.concat([df_old, df_new], ignore_index=True)
-
-            dedup_cols = [c for c in ["レースコード", "race_code"] if c in df_combined.columns]
-            if dedup_cols:
-                df_combined = df_combined.drop_duplicates(subset=dedup_cols, keep="last")
-            else:
-                df_combined = df_combined.drop_duplicates(keep="last")
-
-            df_combined.to_csv(output_file, index=False, encoding="utf-8-sig")
-            return
-        except Exception as e:
-            print(f"[Warning] CSVのマージに失敗したため新規作成します: {e}")
-
-    df_new.to_csv(output_file, index=False, encoding="utf-8-sig")
-
-
 def main():
+    # 実行時の当日日付をJSTで自動取得
     now_jst = datetime.now(JST)
     today_str = now_jst.strftime("%Y-%m-%d")
     year, month, day = now_jst.strftime("%Y"), now_jst.strftime("%m"), now_jst.strftime("%d")
 
     scraper = RaceCardScraper(rate_limiter=RateLimiter(interval_seconds=1.0))
-    stadium_codes = range(1, 25)  # 全24場
+    stadium_codes = range(1, 25)
 
-    print(f"Start fetching and transforming all race cards for {today_str} (JST)")
+    print(f"Start fetching today's race cards: {today_str} (JST)")
 
     all_dfs = []
     for stadium_code in stadium_codes:
-        for race_number in range(1, 13):  # 1R 〜 12R
+        for race_number in range(1, 13):
             try:
-                # メソッド名の自動判別呼び出し
                 if hasattr(scraper, "scrape_race"):
                     data = scraper.scrape_race(
                         date=today_str,
@@ -158,7 +132,6 @@ def main():
                 df_raw = convert_to_dataframe(data)
 
                 if df_raw is not None and not df_raw.empty:
-                    # 1レース1行の横持ちフォーマットに変換
                     df_wide = transform_to_wide(
                         df_raw=df_raw,
                         stadium_code=stadium_code,
@@ -169,24 +142,24 @@ def main():
                         all_dfs.append(df_wide)
 
             except Exception:
-                # 非開催場・未開催レースのスキップ
                 pass
 
-    # CSVファイルへの書き出し
+    # 当日のファイル（例: 15.csv）へ横持ち形式で強制保存
     if all_dfs:
         output_dir = f"data/programs/race_cards/{year}/{month}"
         os.makedirs(output_dir, exist_ok=True)
         output_file = f"{output_dir}/{day}.csv"
 
         combined_df = pd.concat(all_dfs, ignore_index=True)
-        save_or_update_csv(combined_df, output_file)
+        combined_df.to_csv(output_file, index=False, encoding="utf-8-sig")
 
         print(
-            f"Successfully saved all race cards to {output_file} ({len(combined_df)} races)"
+            f"Successfully saved today's race cards to {output_file} ({len(combined_df)} races)"
         )
     else:
-        print("No race card data found to save.")
+        print(f"No race card data found for {today_str}.")
 
 
 if __name__ == "__main__":
     main()
+
