@@ -58,6 +58,75 @@ def convert_to_dataframe(data):
     return pd.DataFrame([data])
 
 
+def transform_to_wide(df_raw, stadium_code, race_number, deadline_time, today_str, now_jst_str):
+    """画像のヘッダー順（1レース1行の横持ちフォーマット）に整形"""
+    if df_raw is None or df_raw.empty:
+        return None
+
+    # すでに横持ち形式の場合はそのまま使用
+    if "艇1_選手名" in df_raw.columns:
+        df_wide = df_raw.copy()
+    else:
+        # 縦持ち（艇ごとの複数行）からの組み換え処理
+        race_code = f"{today_str.replace('-', '')}{stadium_code:02d}{race_number:02d}"
+
+        row = {
+            "レースコード": race_code,
+            "レース日": today_str,
+            "レース場": f"{stadium_code:02d}",
+            "レース回": f"{race_number:02d}R",
+            "締切時刻": deadline_time,
+            "取得日時": now_jst_str,
+            "計測器": df_raw["計測器"].iloc[0] if "計測器" in df_raw.columns else "3",
+            "計測項目1": df_raw["計測項目1"].iloc[0] if "計測項目1" in df_raw.columns else "一周",
+            "計測項目2": df_raw["計測項目2"].iloc[0] if "計測項目2" in df_raw.columns else "まわり足",
+            "計測項目3": df_raw["計測項目3"].iloc[0] if "計測項目3" in df_raw.columns else "直線",
+        }
+
+        # 艇番列の抽出
+        boat_col = None
+        for col in ["艇番", "艇", "pit_number", "boat_number"]:
+            if col in df_raw.columns:
+                boat_col = col
+                break
+
+        for i in range(1, 7):
+            if boat_col:
+                sub = df_raw[df_raw[boat_col].astype(str) == str(i)]
+            else:
+                sub = df_raw.iloc[i - 1 : i] if len(df_raw) >= i else pd.DataFrame()
+
+            if not sub.empty:
+                r = sub.iloc[0]
+                name_val = r.get("選手名", r.get("racer_name", r.get("player_name", "")))
+                val1 = r.get("値1", r.get("周回タイム", r.get("一周タイム", r.get("exhibition_time", ""))))
+                val2 = r.get("値2", r.get("まわり足タイム", r.get("turn_time", "")))
+                val3 = r.get("値3", r.get("直線タイム", r.get("straight_time", "")))
+            else:
+                name_val, val1, val2, val3 = "", "", "", ""
+
+            row[f"艇{i}_選手名"] = name_val
+            row[f"艇{i}_値1"] = val1
+            row[f"艇{i}_値2"] = val2
+            row[f"艇{i}_値3"] = val3
+
+        df_wide = pd.DataFrame([row])
+
+    # 画像通りの完全な列順を維持
+    expected_cols = [
+        "レースコード", "レース日", "レース場", "レース回", "締切時刻", "取得日時",
+        "計測器", "計測項目1", "計測項目2", "計測項目3"
+    ]
+    for i in range(1, 7):
+        expected_cols.extend([f"艇{i}_選手名", f"艇{i}_値1", f"艇{i}_値2", f"艇{i}_値3"])
+
+    for col in expected_cols:
+        if col not in df_wide.columns:
+            df_wide[col] = ""
+
+    return df_wide[expected_cols]
+
+
 def get_target_races(now_jst, limit=3):
     """日本時間（JST）ベースで当日のプログラムCSVから直近Nレースを取得"""
     today_str = now_jst.strftime("%Y-%m-%d")
@@ -81,7 +150,7 @@ def get_target_races(now_jst, limit=3):
         print(f"利用可能な列名一覧: {list(df.columns)}")
         return []
 
-    # 時刻表記（例: 19:40）のみを抽出（「締切」などの文字列を除去）
+    # 時刻表記（例: 19:40）のみ抽出
     df["clean_time"] = df["電話投票締切予定"].astype(str).str.extract(r"(\d{1,2}:\d{2})")[0]
     df = df.dropna(subset=["clean_time"])
 
@@ -111,11 +180,11 @@ def save_or_update_csv(df_new, output_file):
     """既存CSVがある場合は同じレースのデータを最新版へ上書き保存"""
     if os.path.exists(output_file):
         try:
-            df_old = pd.read_csv(output_file)
+            df_old = pd.read_csv(output_file, dtype=str)
             df_combined = pd.concat([df_old, df_new], ignore_index=True)
             
-            # 重複判定キー候補（レースコード等）があれば最新（last）を残す
-            dedup_cols = [c for c in ["レースコード", "race_code", "stadium_code", "race_number"] if c in df_combined.columns]
+            # レースコード等で重複排除して最新データを残す
+            dedup_cols = [c for c in ["レースコード", "race_code"] if c in df_combined.columns]
             if dedup_cols:
                 df_combined = df_combined.drop_duplicates(subset=dedup_cols, keep="last")
             else:
@@ -165,14 +234,24 @@ def main():
                 print("Error: 適切なデータ取得メソッドが見つかりません。")
                 break
 
-            df_new = convert_to_dataframe(data)
+            df_raw = convert_to_dataframe(data)
 
-            if df_new is not None and not df_new.empty:
+            if df_raw is not None and not df_raw.empty:
+                # 画像通りの横持ちフォーマット（1レース1行）に変換
+                df_wide = transform_to_wide(
+                    df_raw=df_raw,
+                    stadium_code=stadium_code,
+                    race_number=race_number,
+                    deadline_time=deadline_time,
+                    today_str=today_str,
+                    now_jst_str=now_jst.isoformat(),
+                )
+
                 output_dir = f"data/previews/original_exhibition/{year}/{month}"
                 os.makedirs(output_dir, exist_ok=True)
                 output_file = f"{output_dir}/{day}.csv"
 
-                save_or_update_csv(df_new, output_file)
+                save_or_update_csv(df_wide, output_file)
 
                 print(
                     f"Saved/Updated original exhibition data to {output_file} "
