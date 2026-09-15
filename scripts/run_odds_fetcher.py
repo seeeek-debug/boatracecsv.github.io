@@ -20,7 +20,7 @@ from boatrace.odds_realtime import OddsRealtimeFetcher
 
 
 def convert_to_dataframe(data):
-    """オブジェクト/辞書/リストを Safe に DataFrame に変換"""
+    """オブジェクト/辞書/リストを DataFrame に変換"""
     if data is None:
         return None
     if isinstance(data, pd.DataFrame):
@@ -84,56 +84,56 @@ def get_target_races(now_jst, limit=3):
 
 
 def call_fetch_method(fetcher, today_str, stadium_code, race_number):
-    """OddsRealtimeFetcher.fetch_values を正しい4つの位置引数で呼び出し"""
-    if hasattr(fetcher, "fetch_values"):
+    """OddsRealtimeFetcher.fetch_values を正しい4つの位置引数で直接呼び出し"""
+    stadium_code = int(stadium_code)
+    race_number = int(race_number)
+
+    candidates = [
+        ("3t", today_str),
+        ("3t", today_str.replace("-", "")),
+        ("official", today_str),
+        ("official", today_str.replace("-", "")),
+    ]
+
+    errors = []
+    for src, d_str in candidates:
         try:
-            print(f"[Debug] fetch_values signature: {inspect.signature(fetcher.fetch_values)}")
-        except Exception:
-            pass
+            res = fetcher.fetch_values(src, d_str, stadium_code, race_number)
+            if res is not None:
+                return res
+        except Exception as e:
+            errors.append(f"src={src}, date={d_str}: {e}")
 
-    # パラメータの候補バリエーション
-    sources = ["3t", "official", "3T"]
-    dates = [today_str, today_str.replace("-", "")]
-    stadiums = [int(stadium_code), str(stadium_code)]
-    races = [int(race_number), str(race_number)]
+    print(f"[Debug] Fetch attempts failed: {errors}")
+    raise RuntimeError(f"オッズ取得失敗 ({stadium_code}R{race_number})")
 
-    last_err = None
 
-    # パターン1: fetch_values(source, date_str, stadium_code, race_number)
-    for src in sources:
-        for d in dates:
-            for st in stadiums:
-                for r in races:
-                    try:
-                        res = fetcher.fetch_values(src, d, st, r)
-                        if res is not None:
-                            return res
-                    except Exception as e:
-                        last_err = e
+def format_odds_dataframe(data, today_str, stadium_code, race_number, deadline_time, now_jst):
+    """画像を元に、指定のメタ情報＋オッズ列ヘッダー構造へ整形"""
+    df = convert_to_dataframe(data)
+    if df is None or df.empty:
+        return None
 
-                    try:
-                        res = fetcher.fetch_values(source=src, date_str=d, stadium_code=st, race_number=r)
-                        if res is not None:
-                            return res
-                    except Exception as e:
-                        last_err = e
+    race_code = f"{today_str.replace('-', '')}{stadium_code:02d}{race_number:02d}"
 
-    # パターン2: fetch_values(date_str, stadium_code, race_number) の 3引数形式
-    for d in dates:
-        for st in stadiums:
-            for r in races:
-                try:
-                    res = fetcher.fetch_values(d, st, r)
-                    if res is not None:
-                        return res
-                except Exception as e:
-                    last_err = e
+    # メタ列が既に含まれていない場合は付与・成形
+    if "レースコード" not in df.columns:
+        renamed = {}
+        for col in df.columns:
+            c_str = str(col)
+            if not c_str.startswith("3連単_") and "-" in c_str:
+                renamed[col] = f"3連単_{c_str}"
+        if renamed:
+            df = df.rename(columns=renamed)
 
-    if last_err:
-        print(f"[Debug] Last error during fetch: {last_err}")
-        raise last_err
+        df.insert(0, "取得日時", now_jst.isoformat())
+        df.insert(0, "締切時刻", deadline_time)
+        df.insert(0, "レース回", f"{race_number:02d}R")
+        df.insert(0, "レース場", f"{stadium_code:02d}")
+        df.insert(0, "レース日付", today_str)
+        df.insert(0, "レースコード", race_code)
 
-    raise RuntimeError("OddsRealtimeFetcher の呼び出しに失敗しました。")
+    return df
 
 
 def main():
@@ -156,8 +156,10 @@ def main():
         deadline_time = target["close_time"]
 
         try:
-            data = call_fetch_method(fetcher, today_str, stadium_code, race_number)
-            df_new = convert_to_dataframe(data)
+            raw_data = call_fetch_method(fetcher, today_str, stadium_code, race_number)
+            df_new = format_odds_dataframe(
+                raw_data, today_str, stadium_code, race_number, deadline_time, now_jst
+            )
 
             if df_new is not None and not df_new.empty:
                 output_dir = f"data/previews/od3/{year}/{month}"
