@@ -1,4 +1,6 @@
+from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone, timedelta
+import inspect
 import os
 from pathlib import Path
 import sys
@@ -8,13 +10,52 @@ import pandas as pd
 # 日本時間（JST: UTC+9）の定義
 JST = timezone(timedelta(hours=9))
 
-# プロジェクトルート（boatrace パッケージのある階層）をパスに追加
+# プロジェクトルートをパスの先頭に追加
 project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from boatrace.downloader import RateLimiter
-from boatrace.original_exhibition_scraper import OriginalExhibitionScraper
+import boatrace.original_exhibition_scraper as ex_module
+
+# --- クラス自動判定処理 ---
+ScraperClass = None
+for candidate in ["OriginalExhibitionScraper", "OriginalExhibition", "ExhibitionScraper"]:
+    if hasattr(ex_module, candidate):
+        ScraperClass = getattr(ex_module, candidate)
+        break
+
+if ScraperClass is None:
+    classes = [
+        obj for name, obj in inspect.getmembers(ex_module, inspect.isclass)
+        if obj.__module__ == ex_module.__name__
+    ]
+    if classes:
+        ScraperClass = classes[0]
+    else:
+        print("Error: boatrace/original_exhibition_scraper.py 内にクラスが見つかりません。")
+        sys.exit(1)
+
+
+def convert_to_dataframe(data):
+    """OriginalExhibitionData などのカスタムオブジェクトを DataFrame に安全変換"""
+    if data is None:
+        return None
+    if isinstance(data, pd.DataFrame):
+        return data
+    if is_dataclass(data):
+        return pd.DataFrame([asdict(data)])
+    if hasattr(data, "__dict__"):
+        return pd.DataFrame([vars(data)])
+    if isinstance(data, dict):
+        return pd.DataFrame([data])
+    if isinstance(data, list):
+        rows = [
+            asdict(x) if is_dataclass(x) else (vars(x) if hasattr(x, "__dict__") else x)
+            for x in data
+        ]
+        return pd.DataFrame(rows)
+    return pd.DataFrame([data])
 
 
 def get_target_races(now_jst, limit=3):
@@ -40,14 +81,11 @@ def get_target_races(now_jst, limit=3):
         print(f"利用可能な列名一覧: {list(df.columns)}")
         return []
 
-    # JSTタイムゾーンを明示して締切日時を比較
     df["close_datetime"] = pd.to_datetime(
         today_str + " " + df["電話投票締切予定"], format="%Y-%m-%d %H:%M"
     ).dt.tz_localize(JST)
 
     upcoming = df[df["close_datetime"] >= now_jst].sort_values("close_datetime")
-
-    # 列名が「レース回」か「レース」かを判定
     race_col = "レース回" if "レース回" in df.columns else "レース"
 
     targets = []
@@ -68,9 +106,7 @@ def main():
     today_str = now_jst.strftime("%Y-%m-%d")
     year, month, day = now_jst.strftime("%Y"), now_jst.strftime("%m"), now_jst.strftime("%d")
 
-    scraper = OriginalExhibitionScraper(
-        rate_limiter=RateLimiter(interval_seconds=1.0)
-    )
+    scraper = ScraperClass(rate_limiter=RateLimiter(interval_seconds=1.0))
     target_races = get_target_races(now_jst, limit=3)
 
     print(f"Target original exhibition count: {len(target_races)}")
@@ -85,20 +121,25 @@ def main():
         deadline_time = target["close_time"]
 
         try:
-            data = scraper.scrape_race(
-                date=today_str,
-                stadium_code=stadium_code,
-                race_number=race_number,
-            )
+            if hasattr(scraper, "scrape_race"):
+                data = scraper.scrape_race(
+                    date=today_str,
+                    stadium_code=stadium_code,
+                    race_number=race_number,
+                )
+            elif hasattr(scraper, "fetch_values"):
+                data = scraper.fetch_values(
+                    date=today_str,
+                    stadium_code=stadium_code,
+                    race_number=race_number,
+                )
+            else:
+                print("Error: 適切なデータ取得メソッドが見つかりません。")
+                break
 
-            if data is not None:
-                if isinstance(data, dict):
-                    df_new = pd.DataFrame([data])
-                elif isinstance(data, list):
-                    df_new = pd.DataFrame(data)
-                else:
-                    df_new = data
+            df_new = convert_to_dataframe(data)
 
+            if df_new is not None and not df_new.empty:
                 output_dir = f"data/previews/original_exhibition/{year}/{month}"
                 os.makedirs(output_dir, exist_ok=True)
                 output_file = f"{output_dir}/{day}.csv"
