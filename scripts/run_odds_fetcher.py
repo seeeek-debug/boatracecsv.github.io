@@ -20,7 +20,7 @@ from boatrace.odds_realtime import OddsRealtimeFetcher
 
 
 def convert_to_dataframe(data):
-    """オブジェクト/辞書/リストを DataFrame に安全変換"""
+    """オブジェクト/辞書/リストを Safe に DataFrame に変換"""
     if data is None:
         return None
     if isinstance(data, pd.DataFrame):
@@ -84,65 +84,54 @@ def get_target_races(now_jst, limit=3):
 
 
 def call_fetch_method(fetcher, today_str, stadium_code, race_number):
-    """OddsRealtimeFetcher.fetch_values を複数のパターンで試行呼び出し"""
-    method = (
-        getattr(fetcher, "fetch_values", None)
-        or getattr(fetcher, "scrape_race", None)
-        or getattr(fetcher, "fetch", None)
-    )
+    """OddsRealtimeFetcher.fetch_values を正しい4つの位置引数で呼び出し"""
+    if hasattr(fetcher, "fetch_values"):
+        try:
+            print(f"[Debug] fetch_values signature: {inspect.signature(fetcher.fetch_values)}")
+        except Exception:
+            pass
 
-    if method is None:
-        raise AttributeError("OddsRealtimeFetcher に適切なメソッドが見つかりません。")
+    # パラメータの候補バリエーション
+    sources = ["3t", "official", "3T"]
+    dates = [today_str, today_str.replace("-", "")]
+    stadiums = [int(stadium_code), str(stadium_code)]
+    races = [int(race_number), str(race_number)]
 
-    # source の候補（3連単オッズ 3t, official 等）
-    sources = ["3t", "official", "3T", "3連単"]
-    # 日付フォーマットの候補 (YYYY-MM-DD, YYYYMMDD)
-    date_formats = [today_str, today_str.replace("-", "")]
+    last_err = None
 
-    sig = inspect.signature(method)
-    params = list(sig.parameters.keys())
-
-    last_error = None
-
+    # パターン1: fetch_values(source, date_str, stadium_code, race_number)
     for src in sources:
-        for d_str in date_formats:
-            # キーワード引数の組み立て
-            kwargs = {}
-            for p in params:
-                if p in ["self", "cls"]:
-                    continue
-                if p in ["source", "src", "odds_type", "type"]:
-                    kwargs[p] = src
-                elif p in ["date_str", "date", "race_date", "ymd"]:
-                    kwargs[p] = d_str
-                elif p in ["stadium_code", "stadium", "jyo_code", "place_code"]:
-                    kwargs[p] = stadium_code
-                elif p in ["race_number", "race", "race_num", "race_no"]:
-                    kwargs[p] = race_number
+        for d in dates:
+            for st in stadiums:
+                for r in races:
+                    try:
+                        res = fetcher.fetch_values(src, d, st, r)
+                        if res is not None:
+                            return res
+                    except Exception as e:
+                        last_err = e
 
-            try:
-                res = method(**kwargs)
-                if res is not None:
-                    return res
-            except Exception as e:
-                last_error = e
+                    try:
+                        res = fetcher.fetch_values(source=src, date_str=d, stadium_code=st, race_number=r)
+                        if res is not None:
+                            return res
+                    except Exception as e:
+                        last_err = e
 
-            # 位置引数でのパターン試行
-            positional_patterns = [
-                (src, d_str, stadium_code, race_number),
-                (d_str, stadium_code, race_number),
-            ]
-            for pos_args in positional_patterns:
+    # パターン2: fetch_values(date_str, stadium_code, race_number) の 3引数形式
+    for d in dates:
+        for st in stadiums:
+            for r in races:
                 try:
-                    res = method(*pos_args)
+                    res = fetcher.fetch_values(d, st, r)
                     if res is not None:
                         return res
                 except Exception as e:
-                    last_error = e
+                    last_err = e
 
-    if last_error:
-        print(f"[Debug] Inner exception during fetch: {last_error}")
-        raise last_error
+    if last_err:
+        print(f"[Debug] Last error during fetch: {last_err}")
+        raise last_err
 
     raise RuntimeError("OddsRealtimeFetcher の呼び出しに失敗しました。")
 
@@ -195,3 +184,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
