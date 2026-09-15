@@ -1,5 +1,6 @@
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone, timedelta
+import inspect
 import os
 from pathlib import Path
 import sys
@@ -15,19 +16,29 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from boatrace.downloader import RateLimiter
+import boatrace.original_exhibition_scraper as ex_module
 
-# 元のインポート構成（読み込み失敗時のみ安全にフォールバック）
-try:
-    from boatrace.original_exhibition_realtime import OriginalExhibitionRealtimeFetcher
-except ModuleNotFoundError:
-    try:
-        from boatrace.exhibition_realtime import OriginalExhibitionRealtimeFetcher
-    except ModuleNotFoundError:
-        from boatrace.official.preview.exhibition import OriginalExhibitionFetcher as OriginalExhibitionRealtimeFetcher
+# --- クラス自動判定処理 ---
+ScraperClass = None
+for candidate in ["OriginalExhibitionScraper", "OriginalExhibition", "ExhibitionScraper"]:
+    if hasattr(ex_module, candidate):
+        ScraperClass = getattr(ex_module, candidate)
+        break
+
+if ScraperClass is None:
+    classes = [
+        obj for name, obj in inspect.getmembers(ex_module, inspect.isclass)
+        if obj.__module__ == ex_module.__name__
+    ]
+    if classes:
+        ScraperClass = classes[0]
+    else:
+        print("Error: boatrace/original_exhibition_scraper.py 内にクラスが見つかりません。")
+        sys.exit(1)
 
 
 def convert_to_dataframe(data):
-    """オブジェクト/辞書/リストを DataFrame に変換"""
+    """OriginalExhibitionData などのカスタムオブジェクトを DataFrame に安全変換"""
     if data is None:
         return None
     if isinstance(data, pd.DataFrame):
@@ -70,7 +81,7 @@ def get_target_races(now_jst, limit=3):
         print(f"利用可能な列名一覧: {list(df.columns)}")
         return []
 
-    # 時刻表記（例: 19:40）のみを安全に抽出（「締切」などの文字を除去）
+    # 時刻表記（例: 19:40）のみを抽出（「締切」などの文字列を除去）
     df["clean_time"] = df["電話投票締切予定"].astype(str).str.extract(r"(\d{1,2}:\d{2})")[0]
     df = df.dropna(subset=["clean_time"])
 
@@ -97,23 +108,25 @@ def get_target_races(now_jst, limit=3):
 
 
 def save_or_update_csv(df_new, output_file):
-    """既存のCSVが存在する場合、同一の『レースコード』行を最新データに上書き"""
+    """既存CSVがある場合は同じレースのデータを最新版へ上書き保存"""
     if os.path.exists(output_file):
         try:
-            df_old = pd.read_csv(output_file, dtype={"レースコード": str, "レース場": str})
+            df_old = pd.read_csv(output_file)
             df_combined = pd.concat([df_old, df_new], ignore_index=True)
-            df_combined = df_combined.drop_duplicates(subset=["レースコード"], keep="last")
-        except Exception as e:
-            print(f"[Warning] Failed to merge with existing CSV: {e}")
-            df_combined = df_new
-    else:
-        df_combined = df_new
+            
+            # 重複判定キー候補（レースコード等）があれば最新（last）を残す
+            dedup_cols = [c for c in ["レースコード", "race_code", "stadium_code", "race_number"] if c in df_combined.columns]
+            if dedup_cols:
+                df_combined = df_combined.drop_duplicates(subset=dedup_cols, keep="last")
+            else:
+                df_combined = df_combined.drop_duplicates(keep="last")
 
-    df_combined.to_csv(
-        output_file,
-        index=False,
-        encoding="utf-8-sig",
-    )
+            df_combined.to_csv(output_file, index=False, encoding="utf-8-sig")
+            return
+        except Exception as e:
+            print(f"[Warning] Merging CSV failed, writing directly: {e}")
+
+    df_new.to_csv(output_file, index=False, encoding="utf-8-sig")
 
 
 def main():
@@ -121,13 +134,13 @@ def main():
     today_str = now_jst.strftime("%Y-%m-%d")
     year, month, day = now_jst.strftime("%Y"), now_jst.strftime("%m"), now_jst.strftime("%d")
 
-    fetcher = OriginalExhibitionRealtimeFetcher(rate_limiter=RateLimiter(interval_seconds=1.0))
+    scraper = ScraperClass(rate_limiter=RateLimiter(interval_seconds=1.0))
     target_races = get_target_races(now_jst, limit=3)
 
-    print(f"Target races count: {len(target_races)}")
+    print(f"Target original exhibition count: {len(target_races)}")
 
     if not target_races:
-        print("対象レースが見つかりません。")
+        print("対象レースが見つかりません（プログラムCSVが存在しないか全レース終了済み）。")
         return
 
     for target in target_races:
@@ -136,37 +149,40 @@ def main():
         deadline_time = target["close_time"]
 
         try:
-            raw_data = fetcher.fetch_values(
-                date_str=today_str,
-                stadium_code=stadium_code,
-                race_number=race_number,
-            )
-            df_new = convert_to_dataframe(raw_data)
+            if hasattr(scraper, "scrape_race"):
+                data = scraper.scrape_race(
+                    date=today_str,
+                    stadium_code=stadium_code,
+                    race_number=race_number,
+                )
+            elif hasattr(scraper, "fetch_values"):
+                data = scraper.fetch_values(
+                    date=today_str,
+                    stadium_code=stadium_code,
+                    race_number=race_number,
+                )
+            else:
+                print("Error: 適切なデータ取得メソッドが見つかりません。")
+                break
+
+            df_new = convert_to_dataframe(data)
 
             if df_new is not None and not df_new.empty:
-                race_code = f"{today_str.replace('-', '')}{stadium_code:02d}{race_number:02d}"
-
-                if "レースコード" not in df_new.columns:
-                    df_new.insert(0, "取得日時", now_jst.isoformat())
-                    df_new.insert(0, "締切時刻", deadline_time)
-                    df_new.insert(0, "レース回", f"{race_number:02d}R")
-                    df_new.insert(0, "レース場", f"{stadium_code:02d}")
-                    df_new.insert(0, "レース日付", today_str)
-                    df_new.insert(0, "レースコード", race_code)
-
-                output_dir = f"data/previews/exhibition/{year}/{month}"
+                output_dir = f"data/previews/original_exhibition/{year}/{month}"
                 os.makedirs(output_dir, exist_ok=True)
                 output_file = f"{output_dir}/{day}.csv"
 
                 save_or_update_csv(df_new, output_file)
 
                 print(
-                    f"Saved/Updated exhibition data to {output_file} "
+                    f"Saved/Updated original exhibition data to {output_file} "
                     f"({stadium_code}R{race_number}, 締切予定:{deadline_time})"
                 )
 
         except Exception as e:
-            print(f"Error processing exhibition {stadium_code}R{race_number}: {e}")
+            print(
+                f"Error processing exhibition {stadium_code}R{race_number}: {e}"
+            )
 
 
 if __name__ == "__main__":
