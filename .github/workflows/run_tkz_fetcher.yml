@@ -1,0 +1,36 @@
+name: Run TKZ Fetcher
+
+on:
+  schedule:
+    # 8:00〜22:30(JST) の間、8分間隔で自動実行
+    - cron: '*/8 23,0-13 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-tkz-fetcher:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas requests beautifulsoup4
+
+      - name: Run tkz fetcher
+        run: python scripts/run_tkz_fetcher.py
+
+      - name: Commit and push results
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/previews/tkz/
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update tkz preview data [skip ci]" && git push)
+
