@@ -5,7 +5,9 @@ from pathlib import Path
 import sys
 
 import pandas as pd
+import numpy as np
 
+# 日本時間（JST）の明示的設定
 JST = timezone(timedelta(hours=9))
 
 project_root = Path(__file__).resolve().parent.parent
@@ -42,9 +44,28 @@ def convert_to_df(data):
     return pd.DataFrame([data])
 
 
+def safe_val(v):
+    """配列やSeries、NaN値が含まれていてもエラーを出さずに安全に変換"""
+    if v is None:
+        return ""
+    if isinstance(v, (list, tuple, np.ndarray, pd.Series)):
+        if len(v) == 0:
+            return ""
+        v = v[0]
+    try:
+        if pd.isna(v):
+            return ""
+    except Exception:
+        pass
+    return v
+
+
 def transform_wide(df_raw, stadium_code, race_number, today_str):
     if df_raw is None or df_raw.empty:
         return None
+
+    # 重複列の削除
+    df_raw = df_raw.loc[:, ~df_raw.columns.duplicated()]
 
     if any(str(col).startswith("艇1_") for col in df_raw.columns):
         return df_raw
@@ -66,15 +87,15 @@ def transform_wide(df_raw, stadium_code, race_number, today_str):
     for i in range(1, 7):
         sub = df_raw[df_raw[boat_col].astype(str) == str(i)] if boat_col else (df_raw.iloc[i - 1 : i] if len(df_raw) >= i else pd.DataFrame())
         if not sub.empty:
-            for k, v in sub.iloc[0].to_dict().items():
+            record = sub.iloc[0].to_dict()
+            for k, v in record.items():
                 if k not in ignore_cols and k is not None:
-                    row[f"艇{i}_{k}"] = "" if pd.isna(v) else v
+                    row[f"艇{i}_{k}"] = safe_val(v)
 
     return pd.DataFrame([row])
 
 
 def fetch_single_race(scraper, target_date_obj, target_date_str, stadium_code, race_number):
-    """日付の型・フォーマットを複数パターン試して取得"""
     date_formats = [target_date_obj, target_date_str, target_date_str.replace("-", "")]
     method_names = ["scrape_race", "fetch_values", "scrape", "fetch"]
 
@@ -108,12 +129,15 @@ def main():
 
     for stadium_code in range(1, 25):
         for race_number in range(1, 13):
-            data = fetch_single_race(scraper, today_date_obj, today_str, stadium_code, race_number)
-            if data is not None:
-                df_raw = convert_to_df(data)
-                df_wide = transform_wide(df_raw, stadium_code, race_number, today_str)
-                if df_wide is not None and not df_wide.empty:
-                    all_dfs.append(df_wide)
+            try:
+                data = fetch_single_race(scraper, today_date_obj, today_str, stadium_code, race_number)
+                if data is not None:
+                    df_raw = convert_to_df(data)
+                    df_wide = transform_wide(df_raw, stadium_code, race_number, today_str)
+                    if df_wide is not None and not df_wide.empty:
+                        all_dfs.append(df_wide)
+            except Exception:
+                pass
 
     if all_dfs:
         output_dir = f"data/programs/race_cards/{year}/{month}"
