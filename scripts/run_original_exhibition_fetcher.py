@@ -1,22 +1,26 @@
-import csv
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import os
+from pathlib import Path
 import sys
 
 import pandas as pd
 
-# scriptsフォルダをモジュール検索パスに追加
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# 日本時間（JST: UTC+9）の定義
+JST = timezone(timedelta(hours=9))
+
+# プロジェクトルート（boatrace パッケージのある階層）をパスに追加
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 from boatrace.downloader import RateLimiter
 from boatrace.original_exhibition_scraper import OriginalExhibitionScraper
 
 
-def get_target_races(limit=3):
-    """当日のプログラムCSVから、現在時刻以降で最も締め切りが近い直近Nレースを取得"""
-    now = datetime.now()
-    today_str = now.strftime("%Y-%m-%d")
-    year, month, day = now.strftime("%Y"), now.strftime("%m"), now.strftime("%d")
+def get_target_races(now_jst, limit=3):
+    """日本時間（JST）ベースで当日のプログラムCSVから直近Nレースを取得"""
+    today_str = now_jst.strftime("%Y-%m-%d")
+    year, month, day = now_jst.strftime("%Y"), now_jst.strftime("%m"), now_jst.strftime("%d")
 
     csv_path = f"data/programs/title/{year}/{month}/{day}.csv"
 
@@ -36,18 +40,23 @@ def get_target_races(limit=3):
         print(f"利用可能な列名一覧: {list(df.columns)}")
         return []
 
+    # JSTタイムゾーンを明示して締切日時を比較
     df["close_datetime"] = pd.to_datetime(
         today_str + " " + df["電話投票締切予定"], format="%Y-%m-%d %H:%M"
-    )
+    ).dt.tz_localize(JST)
 
-    upcoming = df[df["close_datetime"] >= now].sort_values("close_datetime")
+    upcoming = df[df["close_datetime"] >= now_jst].sort_values("close_datetime")
+
+    # 列名が「レース回」か「レース」かを判定
+    race_col = "レース回" if "レース回" in df.columns else "レース"
 
     targets = []
     for _, row in upcoming.head(limit).iterrows():
+        race_num_raw = str(row[race_col]).replace("R", "").strip()
         targets.append(
             {
                 "stadium_code": int(row["レース場コード"]),
-                "race_number": int(row["レース"]),
+                "race_number": int(race_num_raw),
                 "close_time": row["電話投票締切予定"],
             }
         )
@@ -55,16 +64,20 @@ def get_target_races(limit=3):
 
 
 def main():
-    now = datetime.now()
-    today_str = now.strftime("%Y-%m-%d")
-    year, month, day = now.strftime("%Y"), now.strftime("%m"), now.strftime("%d")
+    now_jst = datetime.now(JST)
+    today_str = now_jst.strftime("%Y-%m-%d")
+    year, month, day = now_jst.strftime("%Y"), now_jst.strftime("%m"), now_jst.strftime("%d")
 
     scraper = OriginalExhibitionScraper(
         rate_limiter=RateLimiter(interval_seconds=1.0)
     )
-    target_races = get_target_races(limit=3)
+    target_races = get_target_races(now_jst, limit=3)
 
     print(f"Target original exhibition count: {len(target_races)}")
+
+    if not target_races:
+        print("対象レースが見つかりません（プログラムCSVが存在しないか全レース終了済み）。")
+        return
 
     for target in target_races:
         stadium_code = target["stadium_code"]
@@ -90,7 +103,6 @@ def main():
                 os.makedirs(output_dir, exist_ok=True)
                 output_file = f"{output_dir}/{day}.csv"
 
-                # 既にファイルがあれば末尾に追記、なければ新規作成
                 file_exists = os.path.exists(output_file)
                 df_new.to_csv(
                     output_file,
@@ -113,3 +125,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
