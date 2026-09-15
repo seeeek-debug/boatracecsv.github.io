@@ -84,39 +84,46 @@ def get_target_races(now_jst, limit=3):
 
 
 def call_fetch_method(fetcher, today_str, stadium_code, race_number):
-    """OddsRealtimeFetcher.fetch_values を正しい4つの位置引数で直接呼び出し"""
+    """OddsRealtimeFetcher.fetch_values に正当な source (trifecta等) を渡して実行"""
     stadium_code = int(stadium_code)
     race_number = int(race_number)
 
-    candidates = [
-        ("3t", today_str),
-        ("3t", today_str.replace("-", "")),
-        ("official", today_str),
-        ("official", today_str.replace("-", "")),
-    ]
+    # 3連単を示す source 識別子の候補（trifecta が標準的）
+    sources = ["trifecta", "3t_odds", "odds3t", "3t", "3連単", "sanrentan"]
+    dates = [today_str, today_str.replace("-", "")]
 
     errors = []
-    for src, d_str in candidates:
-        try:
-            res = fetcher.fetch_values(src, d_str, stadium_code, race_number)
-            if res is not None:
-                return res
-        except Exception as e:
-            errors.append(f"src={src}, date={d_str}: {e}")
 
-    print(f"[Debug] Fetch attempts failed: {errors}")
+    for src in sources:
+        for d_str in dates:
+            try:
+                res = fetcher.fetch_values(src, d_str, stadium_code, race_number)
+                if res is not None:
+                    return res
+            except Exception as e:
+                errors.append(f"src={src}, date={d_str}: {e}")
+
+            try:
+                res = fetcher.fetch_values(
+                    source=src, date_str=d_str, stadium_code=stadium_code, race_number=race_number
+                )
+                if res is not None:
+                    return res
+            except Exception as e:
+                errors.append(f"kwargs src={src}: {e}")
+
+    print(f"[Debug] Fetch attempts failed: {errors[:4]}")
     raise RuntimeError(f"オッズ取得失敗 ({stadium_code}R{race_number})")
 
 
 def format_odds_dataframe(data, today_str, stadium_code, race_number, deadline_time, now_jst):
-    """画像を元に、指定のメタ情報＋オッズ列ヘッダー構造へ整形"""
+    """取得データを指定のCSV構造（メタ情報＋オッズ列）へ整形"""
     df = convert_to_dataframe(data)
     if df is None or df.empty:
         return None
 
     race_code = f"{today_str.replace('-', '')}{stadium_code:02d}{race_number:02d}"
 
-    # メタ列が既に含まれていない場合は付与・成形
     if "レースコード" not in df.columns:
         renamed = {}
         for col in df.columns:
