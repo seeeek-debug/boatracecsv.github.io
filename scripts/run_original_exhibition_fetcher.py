@@ -15,7 +15,15 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from boatrace.downloader import RateLimiter
-from boatrace.original_exhibition_realtime import OriginalExhibitionRealtimeFetcher
+
+# 元のインポート構成（読み込み失敗時のみ安全にフォールバック）
+try:
+    from boatrace.original_exhibition_realtime import OriginalExhibitionRealtimeFetcher
+except ModuleNotFoundError:
+    try:
+        from boatrace.exhibition_realtime import OriginalExhibitionRealtimeFetcher
+    except ModuleNotFoundError:
+        from boatrace.official.preview.exhibition import OriginalExhibitionFetcher as OriginalExhibitionRealtimeFetcher
 
 
 def convert_to_dataframe(data):
@@ -62,11 +70,10 @@ def get_target_races(now_jst, limit=3):
         print(f"利用可能な列名一覧: {list(df.columns)}")
         return []
 
-    # 時刻表記（例: 19:40）のみを安全に抽出
+    # 時刻表記（例: 19:40）のみを安全に抽出（「締切」などの文字を除去）
     df["clean_time"] = df["電話投票締切予定"].astype(str).str.extract(r"(\d{1,2}:\d{2})")[0]
     df = df.dropna(subset=["clean_time"])
 
-    # 不正な文字列を NaT に変換して除外
     df["close_datetime"] = pd.to_datetime(
         today_str + " " + df["clean_time"], format="%Y-%m-%d %H:%M", errors="coerce"
     )
