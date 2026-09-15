@@ -65,9 +65,16 @@ def get_target_races(now_jst, limit=3):
         print(f"利用可能な列名一覧: {list(df.columns)}")
         return []
 
+    # 時刻表記（例: 19:40）のみを安全に抽出
+    df["clean_time"] = df["電話投票締切予定"].astype(str).str.extract(r"(\d{1,2}:\d{2})")[0]
+    df = df.dropna(subset=["clean_time"])
+
+    # エラーが発生する値を NaT として安全に変換
     df["close_datetime"] = pd.to_datetime(
-        today_str + " " + df["電話投票締切予定"], format="%Y-%m-%d %H:%M"
-    ).dt.tz_localize(JST)
+        today_str + " " + df["clean_time"], format="%Y-%m-%d %H:%M", errors="coerce"
+    )
+    df = df.dropna(subset=["close_datetime"])
+    df["close_datetime"] = df["close_datetime"].dt.tz_localize(JST)
 
     upcoming = df[df["close_datetime"] >= now_jst].sort_values("close_datetime")
     race_col = "レース回" if "レース回" in df.columns else "レース"
@@ -79,7 +86,7 @@ def get_target_races(now_jst, limit=3):
             {
                 "stadium_code": int(row["レース場コード"]),
                 "race_number": int(race_num_raw),
-                "close_time": row["電話投票締切予定"],
+                "close_time": row["clean_time"],
             }
         )
     return targets
@@ -140,7 +147,6 @@ def save_or_update_csv(df_new, output_file):
         try:
             df_old = pd.read_csv(output_file, dtype={"レースコード": str, "レース場": str})
             df_combined = pd.concat([df_old, df_new], ignore_index=True)
-            # 同じレースコードは最新（keep='last'）を残して重複削除
             df_combined = df_combined.drop_duplicates(subset=["レースコード"], keep="last")
         except Exception as e:
             print(f"[Warning] Failed to merge with existing CSV: {e}")
