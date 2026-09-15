@@ -84,53 +84,67 @@ def get_target_races(now_jst, limit=3):
 
 
 def call_fetch_method(fetcher, today_str, stadium_code, race_number):
-    """OddsRealtimeFetcher の引数定義（source, date_str 等）に合わせて動的に呼び出し"""
-    methods_to_try = ["fetch_values", "scrape_race", "fetch", "scrape"]
-    
-    for method_name in methods_to_try:
-        if not hasattr(fetcher, method_name):
-            continue
-        
-        method = getattr(fetcher, method_name)
-        sig = inspect.signature(method)
-        params = sig.parameters
+    """OddsRealtimeFetcher.fetch_values を複数のパターンで試行呼び出し"""
+    method = (
+        getattr(fetcher, "fetch_values", None)
+        or getattr(fetcher, "scrape_race", None)
+        or getattr(fetcher, "fetch", None)
+    )
 
-        # キーワード引数の組み立て
-        kwargs = {}
-        for param_name in params:
-            if param_name in ["self", "cls"]:
-                continue
-            if param_name in ["source", "src", "odds_type", "type"]:
-                kwargs[param_name] = "official"
-            elif param_name in ["date_str", "date", "race_date", "ymd"]:
-                kwargs[param_name] = today_str
-            elif param_name in ["stadium_code", "stadium", "jyo_code", "place_code"]:
-                kwargs[param_name] = stadium_code
-            elif param_name in ["race_number", "race", "race_num", "race_no"]:
-                kwargs[param_name] = race_number
+    if method is None:
+        raise AttributeError("OddsRealtimeFetcher に適切なメソッドが見つかりません。")
 
-        try:
-            res = method(**kwargs)
-            if res is not None:
-                return res
-        except Exception:
-            pass
+    # source の候補（3連単オッズ 3t, official 等）
+    sources = ["3t", "official", "3T", "3連単"]
+    # 日付フォーマットの候補 (YYYY-MM-DD, YYYYMMDD)
+    date_formats = [today_str, today_str.replace("-", "")]
 
-        # 位置引数での呼び出しを試行（フォールバック）
-        positional_patterns = [
-            ("official", today_str, stadium_code, race_number),
-            (today_str, stadium_code, race_number),
-            (stadium_code, race_number),
-        ]
-        for pattern in positional_patterns:
+    sig = inspect.signature(method)
+    params = list(sig.parameters.keys())
+
+    last_error = None
+
+    for src in sources:
+        for d_str in date_formats:
+            # キーワード引数の組み立て
+            kwargs = {}
+            for p in params:
+                if p in ["self", "cls"]:
+                    continue
+                if p in ["source", "src", "odds_type", "type"]:
+                    kwargs[p] = src
+                elif p in ["date_str", "date", "race_date", "ymd"]:
+                    kwargs[p] = d_str
+                elif p in ["stadium_code", "stadium", "jyo_code", "place_code"]:
+                    kwargs[p] = stadium_code
+                elif p in ["race_number", "race", "race_num", "race_no"]:
+                    kwargs[p] = race_number
+
             try:
-                res = method(*pattern)
+                res = method(**kwargs)
                 if res is not None:
                     return res
-            except Exception:
-                pass
+            except Exception as e:
+                last_error = e
 
-    raise RuntimeError("OddsRealtimeFetcher の取得メソッド呼び出しに失敗しました。")
+            # 位置引数でのパターン試行
+            positional_patterns = [
+                (src, d_str, stadium_code, race_number),
+                (d_str, stadium_code, race_number),
+            ]
+            for pos_args in positional_patterns:
+                try:
+                    res = method(*pos_args)
+                    if res is not None:
+                        return res
+                except Exception as e:
+                    last_error = e
+
+    if last_error:
+        print(f"[Debug] Inner exception during fetch: {last_error}")
+        raise last_error
+
+    raise RuntimeError("OddsRealtimeFetcher の呼び出しに失敗しました。")
 
 
 def main():
@@ -181,4 +195,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
