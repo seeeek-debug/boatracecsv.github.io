@@ -7,7 +7,6 @@ import sys
 import pandas as pd
 import numpy as np
 
-# 日本時間（JST）の明示的設定
 JST = timezone(timedelta(hours=9))
 
 project_root = Path(__file__).resolve().parent.parent
@@ -26,16 +25,11 @@ except ModuleNotFoundError:
 
 
 def convert_to_df(data):
-    if data is None:
-        return None
-    if isinstance(data, pd.DataFrame):
-        return data
-    if is_dataclass(data):
-        return pd.DataFrame([asdict(data)])
-    if hasattr(data, "__dict__"):
-        return pd.DataFrame([vars(data)])
-    if isinstance(data, dict):
-        return pd.DataFrame([data])
+    if data is None: return None
+    if isinstance(data, pd.DataFrame): return data
+    if is_dataclass(data): return pd.DataFrame([asdict(data)])
+    if hasattr(data, "__dict__"): return pd.DataFrame([vars(data)])
+    if isinstance(data, dict): return pd.DataFrame([data])
     if isinstance(data, list):
         return pd.DataFrame([
             asdict(x) if is_dataclass(x) else (vars(x) if hasattr(x, "__dict__") else x)
@@ -45,23 +39,19 @@ def convert_to_df(data):
 
 
 def safe_val(v):
-    if v is None:
-        return ""
+    if v is None: return ""
     if isinstance(v, (list, tuple, np.ndarray, pd.Series)):
-        if len(v) == 0:
-            return ""
+        if len(v) == 0: return ""
         v = v[0]
     try:
-        if pd.isna(v):
-            return ""
+        if pd.isna(v): return ""
     except Exception:
         pass
     return v
 
 
 def transform_wide(df_raw, stadium_code, race_number, today_str):
-    if df_raw is None or df_raw.empty:
-        return None
+    if df_raw is None or df_raw.empty: return None
 
     df_raw = df_raw.loc[:, ~df_raw.columns.duplicated()]
 
@@ -93,26 +83,47 @@ def transform_wide(df_raw, stadium_code, race_number, today_str):
     return pd.DataFrame([row])
 
 
-def get_working_fetcher(scraper, today_date_obj, today_str):
-    """どのメソッド・日付型が動作するか最初に1度だけ判定"""
-    date_formats = [today_date_obj, today_str, today_str.replace("-", "")]
-    method_names = ["scrape_race", "fetch_values", "scrape", "fetch"]
+# 動作する取得関数と引数型を動的に記憶する設定
+WORKING_CONFIG = {"method": None, "date": None, "is_kw": True}
 
-    for d in date_formats:
-        for m_name in method_names:
-            if hasattr(scraper, m_name):
-                method = getattr(scraper, m_name)
+def fetch_single_race(scraper, date_obj, date_str, stadium_code, race_number):
+    global WORKING_CONFIG
+
+    # すでに成功パターンが確定している場合
+    if WORKING_CONFIG["method"] is not None:
+        try:
+            m = WORKING_CONFIG["method"]
+            d = WORKING_CONFIG["date"]
+            if WORKING_CONFIG["is_kw"]:
+                return m(date=d, stadium_code=stadium_code, race_number=race_number)
+            else:
+                return m(d, stadium_code, race_number)
+        except Exception:
+            return None
+
+    # 未確定の場合、成功するパターンを検索
+    methods = ["scrape_race", "fetch_values", "scrape", "fetch"]
+    dates = [date_obj, date_str, date_str.replace("-", "")]
+
+    for m_name in methods:
+        if hasattr(scraper, m_name):
+            method = getattr(scraper, m_name)
+            for d in dates:
                 try:
-                    res = method(date=d, stadium_code=1, race_number=1)
-                    if res: return method, d, True
+                    res = method(date=d, stadium_code=stadium_code, race_number=race_number)
+                    if res:
+                        WORKING_CONFIG = {"method": method, "date": d, "is_kw": True}
+                        return res
                 except Exception:
                     pass
                 try:
-                    res = method(d, 1, 1)
-                    if res: return method, d, False
+                    res = method(d, stadium_code, race_number)
+                    if res:
+                        WORKING_CONFIG = {"method": method, "date": d, "is_kw": False}
+                        return res
                 except Exception:
                     pass
-    return None, None, False
+    return None
 
 
 def main():
@@ -124,32 +135,19 @@ def main():
     print(f"=== [START] Target Date: {today_str} (JST) ===", flush=True)
 
     scraper = RaceCardScraper(rate_limiter=RateLimiter(interval_seconds=0.2))
-    
-    # 最適な取得関数を事前判定
-    fetch_func, date_param, is_kw = get_working_fetcher(scraper, today_date_obj, today_str)
-
     all_dfs = []
 
     for stadium_code in range(1, 25):
         stadium_success = 0
         for race_number in range(1, 13):
-            data = None
-            try:
-                if fetch_func:
-                    if is_kw:
-                        data = fetch_func(date=date_param, stadium_code=stadium_code, race_number=race_number)
-                    else:
-                        data = fetch_func(date_param, stadium_code, race_number)
-                
-                if data is not None:
-                    df_raw = convert_to_df(data)
-                    df_wide = transform_wide(df_raw, stadium_code, race_number, today_str)
-                    if df_wide is not None and not df_wide.empty:
-                        all_dfs.append(df_wide)
-                        stadium_success += 1
-            except Exception:
-                pass
-        
+            data = fetch_single_race(scraper, today_date_obj, today_str, stadium_code, race_number)
+            if data is not None:
+                df_raw = convert_to_df(data)
+                df_wide = transform_wide(df_raw, stadium_code, race_number, today_str)
+                if df_wide is not None and not df_wide.empty:
+                    all_dfs.append(df_wide)
+                    stadium_success += 1
+
         if stadium_success > 0:
             print(f"  [場コード {stadium_code:02d}] {stadium_success} レース取得完了", flush=True)
 
