@@ -83,36 +83,60 @@ def get_target_races(now_jst, limit=3):
     return targets
 
 
-def call_fetch_method(fetcher, today_str, stadium_code, race_number):
-    """OddsRealtimeFetcher.fetch_values に正当な source (trifecta等) を渡して実行"""
+def discover_sources(fetcher):
+    """OddsRealtimeFetcher 内から受け入れ可能な source を自動検出＆ソースコード出力"""
+    sources = []
+
+    # 1. クラスやモジュール内の定数属性を探索
+    for attr in ["VALID_SOURCES", "SOURCES", "ALLOWED_SOURCES", "SOURCES_MAP", "ODDS_TYPES"]:
+        val = getattr(fetcher, attr, None) or getattr(fetcher.__class__, attr, None)
+        if val:
+            if isinstance(val, (list, tuple, set)):
+                sources.extend(list(val))
+            elif isinstance(val, dict):
+                sources.extend(list(val.keys()))
+
+    # 2. クラスのソースコードを出力して正確な実装を確認できるようにする
+    try:
+        class_src = inspect.getsource(fetcher.__class__)
+        print("=== [Debug] OddsRealtimeFetcher Source Code ===")
+        print(class_src)
+        print("===============================================")
+    except Exception as e:
+        print(f"[Debug] Could not get class source code: {e}")
+
+    # 3. 候補リストのフォールバック
+    fallbacks = [
+        "3t", "trifecta", "3T", "3連単", "sanrentan", "3rentan",
+        "3t_realtime", "realtime_3t", "3t_odds", "odds_3t",
+        "official_3t", "official", "1", "3"
+    ]
+    for fb in fallbacks:
+        if fb not in sources:
+            sources.append(fb)
+
+    return sources
+
+
+def call_fetch_method(fetcher, today_str, stadium_code, race_number, valid_sources):
+    """OddsRealtimeFetcher.fetch_values を検出した source で実行"""
     stadium_code = int(stadium_code)
     race_number = int(race_number)
 
-    # 3連単を示す source 識別子の候補（trifecta が標準的）
-    sources = ["trifecta", "3t_odds", "odds3t", "3t", "3連単", "sanrentan"]
     dates = [today_str, today_str.replace("-", "")]
-
     errors = []
 
-    for src in sources:
+    for src in valid_sources:
         for d_str in dates:
             try:
                 res = fetcher.fetch_values(src, d_str, stadium_code, race_number)
                 if res is not None:
+                    print(f"[Success] Fetched with source='{src}', date='{d_str}'")
                     return res
             except Exception as e:
-                errors.append(f"src={src}, date={d_str}: {e}")
+                errors.append(f"src='{src}', date='{d_str}': {e}")
 
-            try:
-                res = fetcher.fetch_values(
-                    source=src, date_str=d_str, stadium_code=stadium_code, race_number=race_number
-                )
-                if res is not None:
-                    return res
-            except Exception as e:
-                errors.append(f"kwargs src={src}: {e}")
-
-    print(f"[Debug] Fetch attempts failed: {errors[:4]}")
+    print(f"[Debug] Fetch attempts errors (first 5): {errors[:5]}")
     raise RuntimeError(f"オッズ取得失敗 ({stadium_code}R{race_number})")
 
 
@@ -157,13 +181,16 @@ def main():
         print("対象レースが見つかりません。")
         return
 
+    valid_sources = discover_sources(fetcher)
+    print(f"[Debug] Candidate sources to try: {valid_sources}")
+
     for target in target_races:
         stadium_code = target["stadium_code"]
         race_number = target["race_number"]
         deadline_time = target["close_time"]
 
         try:
-            raw_data = call_fetch_method(fetcher, today_str, stadium_code, race_number)
+            raw_data = call_fetch_method(fetcher, today_str, stadium_code, race_number, valid_sources)
             df_new = format_odds_dataframe(
                 raw_data, today_str, stadium_code, race_number, deadline_time, now_jst
             )
