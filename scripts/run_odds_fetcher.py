@@ -16,27 +16,32 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from boatrace.downloader import RateLimiter
-from boatrace.odds_realtime import OddsRealtimeFetcher
+from boatrace.odds_realtime import OddsRealtimeFetcher, _PARSERS, ODDS_HEADERS
 
 
-def convert_to_dataframe(data):
-    """オブジェクト/辞書/リストを DataFrame に変換"""
+def convert_to_dataframe(data, source="od3"):
+    """取得したオッズ値リストを DataFrame に変換"""
     if data is None:
         return None
     if isinstance(data, pd.DataFrame):
         return data
+
+    # リスト形式でオッズ値のみ返ってきた場合、ODDS_HEADERS を参照して列割り当て
+    if isinstance(data, list):
+        headers = ODDS_HEADERS.get(source, [])
+        if headers and len(headers) == len(data):
+            # ヘッダー名が 1-2-3 等の場合、3連単_1-2-3 に補正
+            cols = [f"3連単_{h}" if not str(h).startswith("3連単_") else h for h in headers]
+            return pd.DataFrame([dict(zip(cols, data))])
+        return pd.DataFrame([data])
+
     if is_dataclass(data):
         return pd.DataFrame([asdict(data)])
     if hasattr(data, "__dict__"):
         return pd.DataFrame([vars(data)])
     if isinstance(data, dict):
         return pd.DataFrame([data])
-    if isinstance(data, list):
-        rows = [
-            asdict(x) if is_dataclass(x) else (vars(x) if hasattr(x, "__dict__") else x)
-            for x in data
-        ]
-        return pd.DataFrame(rows)
+
     return pd.DataFrame([data])
 
 
@@ -83,66 +88,32 @@ def get_target_races(now_jst, limit=3):
     return targets
 
 
-def discover_sources(fetcher):
-    """OddsRealtimeFetcher 内から受け入れ可能な source を自動検出＆ソースコード出力"""
-    sources = []
-
-    # 1. クラスやモジュール内の定数属性を探索
-    for attr in ["VALID_SOURCES", "SOURCES", "ALLOWED_SOURCES", "SOURCES_MAP", "ODDS_TYPES"]:
-        val = getattr(fetcher, attr, None) or getattr(fetcher.__class__, attr, None)
-        if val:
-            if isinstance(val, (list, tuple, set)):
-                sources.extend(list(val))
-            elif isinstance(val, dict):
-                sources.extend(list(val.keys()))
-
-    # 2. クラスのソースコードを出力して正確な実装を確認できるようにする
-    try:
-        class_src = inspect.getsource(fetcher.__class__)
-        print("=== [Debug] OddsRealtimeFetcher Source Code ===")
-        print(class_src)
-        print("===============================================")
-    except Exception as e:
-        print(f"[Debug] Could not get class source code: {e}")
-
-    # 3. 候補リストのフォールバック
-    fallbacks = [
-        "3t", "trifecta", "3T", "3連単", "sanrentan", "3rentan",
-        "3t_realtime", "realtime_3t", "3t_odds", "odds_3t",
-        "official_3t", "official", "1", "3"
-    ]
-    for fb in fallbacks:
-        if fb not in sources:
-            sources.append(fb)
-
-    return sources
-
-
-def call_fetch_method(fetcher, today_str, stadium_code, race_number, valid_sources):
-    """OddsRealtimeFetcher.fetch_values を検出した source で実行"""
+def call_fetch_method(fetcher, today_str, stadium_code, race_number):
+    """OddsRealtimeFetcher.fetch_values に正解キー 'od3' を指定して呼び出し"""
     stadium_code = int(stadium_code)
     race_number = int(race_number)
 
+    # 3連単は 'od3'
+    source = "od3" if "od3" in _PARSERS else list(_PARSERS.keys())[0]
     dates = [today_str, today_str.replace("-", "")]
+
     errors = []
+    for d_str in dates:
+        try:
+            res = fetcher.fetch_values(source, d_str, stadium_code, race_number)
+            if res is not None:
+                print(f"[Success] Fetched odds for {stadium_code}R{race_number} with source='{source}'")
+                return res, source
+        except Exception as e:
+            errors.append(f"date='{d_str}': {e}")
 
-    for src in valid_sources:
-        for d_str in dates:
-            try:
-                res = fetcher.fetch_values(src, d_str, stadium_code, race_number)
-                if res is not None:
-                    print(f"[Success] Fetched with source='{src}', date='{d_str}'")
-                    return res
-            except Exception as e:
-                errors.append(f"src='{src}', date='{d_str}': {e}")
-
-    print(f"[Debug] Fetch attempts errors (first 5): {errors[:5]}")
+    print(f"[Debug] Fetch attempts errors: {errors}")
     raise RuntimeError(f"オッズ取得失敗 ({stadium_code}R{race_number})")
 
 
-def format_odds_dataframe(data, today_str, stadium_code, race_number, deadline_time, now_jst):
-    """取得データを指定のCSV構造（メタ情報＋オッズ列）へ整形"""
-    df = convert_to_dataframe(data)
+def format_odds_dataframe(data, source, today_str, stadium_code, race_number, deadline_time, now_jst):
+    """画像のフォーマットに合わせて、先頭メタ列＋オッズ列へ整形"""
+    df = convert_to_dataframe(data, source=source)
     if df is None or df.empty:
         return None
 
@@ -181,8 +152,7 @@ def main():
         print("対象レースが見つかりません。")
         return
 
-    valid_sources = discover_sources(fetcher)
-    print(f"[Debug] Candidate sources to try: {valid_sources}")
+    print(f"[Debug] Valid sources in library: {list(_PARSERS.keys())}")
 
     for target in target_races:
         stadium_code = target["stadium_code"]
@@ -190,9 +160,9 @@ def main():
         deadline_time = target["close_time"]
 
         try:
-            raw_data = call_fetch_method(fetcher, today_str, stadium_code, race_number, valid_sources)
+            raw_data, used_source = call_fetch_method(fetcher, today_str, stadium_code, race_number)
             df_new = format_odds_dataframe(
-                raw_data, today_str, stadium_code, race_number, deadline_time, now_jst
+                raw_data, used_source, today_str, stadium_code, race_number, deadline_time, now_jst
             )
 
             if df_new is not None and not df_new.empty:
