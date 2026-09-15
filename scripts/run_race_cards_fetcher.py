@@ -1,5 +1,5 @@
 from dataclasses import asdict, is_dataclass
-from datetime import datetime, timezone, timedelta, date
+from datetime import datetime, timezone, timedelta
 import os
 from pathlib import Path
 import sys
@@ -45,7 +45,6 @@ def convert_to_df(data):
 
 
 def safe_val(v):
-    """配列やSeries、NaN値が含まれていてもエラーを出さずに安全に変換"""
     if v is None:
         return ""
     if isinstance(v, (list, tuple, np.ndarray, pd.Series)):
@@ -64,7 +63,6 @@ def transform_wide(df_raw, stadium_code, race_number, today_str):
     if df_raw is None or df_raw.empty:
         return None
 
-    # 重複列の削除
     df_raw = df_raw.loc[:, ~df_raw.columns.duplicated()]
 
     if any(str(col).startswith("艇1_") for col in df_raw.columns):
@@ -95,8 +93,9 @@ def transform_wide(df_raw, stadium_code, race_number, today_str):
     return pd.DataFrame([row])
 
 
-def fetch_single_race(scraper, target_date_obj, target_date_str, stadium_code, race_number):
-    date_formats = [target_date_obj, target_date_str, target_date_str.replace("-", "")]
+def get_working_fetcher(scraper, today_date_obj, today_str):
+    """どのメソッド・日付型が動作するか最初に1度だけ判定"""
+    date_formats = [today_date_obj, today_str, today_str.replace("-", "")]
     method_names = ["scrape_race", "fetch_values", "scrape", "fetch"]
 
     for d in date_formats:
@@ -104,16 +103,16 @@ def fetch_single_race(scraper, target_date_obj, target_date_str, stadium_code, r
             if hasattr(scraper, m_name):
                 method = getattr(scraper, m_name)
                 try:
-                    res = method(date=d, stadium_code=stadium_code, race_number=race_number)
-                    if res: return res
+                    res = method(date=d, stadium_code=1, race_number=1)
+                    if res: return method, d, True
                 except Exception:
                     pass
                 try:
-                    res = method(d, stadium_code, race_number)
-                    if res: return res
+                    res = method(d, 1, 1)
+                    if res: return method, d, False
                 except Exception:
                     pass
-    return None
+    return None, None, False
 
 
 def main():
@@ -122,22 +121,37 @@ def main():
     today_str = now_jst.strftime("%Y-%m-%d")
     year, month, day = now_jst.strftime("%Y"), now_jst.strftime("%m"), now_jst.strftime("%d")
 
-    print(f"=== [START] Target Date: {today_str} (JST) ===")
+    print(f"=== [START] Target Date: {today_str} (JST) ===", flush=True)
 
-    scraper = RaceCardScraper(rate_limiter=RateLimiter(interval_seconds=1.0))
+    scraper = RaceCardScraper(rate_limiter=RateLimiter(interval_seconds=0.2))
+    
+    # 最適な取得関数を事前判定
+    fetch_func, date_param, is_kw = get_working_fetcher(scraper, today_date_obj, today_str)
+
     all_dfs = []
 
     for stadium_code in range(1, 25):
+        stadium_success = 0
         for race_number in range(1, 13):
+            data = None
             try:
-                data = fetch_single_race(scraper, today_date_obj, today_str, stadium_code, race_number)
+                if fetch_func:
+                    if is_kw:
+                        data = fetch_func(date=date_param, stadium_code=stadium_code, race_number=race_number)
+                    else:
+                        data = fetch_func(date_param, stadium_code, race_number)
+                
                 if data is not None:
                     df_raw = convert_to_df(data)
                     df_wide = transform_wide(df_raw, stadium_code, race_number, today_str)
                     if df_wide is not None and not df_wide.empty:
                         all_dfs.append(df_wide)
+                        stadium_success += 1
             except Exception:
                 pass
+        
+        if stadium_success > 0:
+            print(f"  [場コード {stadium_code:02d}] {stadium_success} レース取得完了", flush=True)
 
     if all_dfs:
         output_dir = f"data/programs/race_cards/{year}/{month}"
@@ -146,9 +160,9 @@ def main():
 
         combined_df = pd.concat(all_dfs, ignore_index=True)
         combined_df.to_csv(output_file, index=False, encoding="utf-8-sig")
-        print(f"=== [SUCCESS] Saved {len(combined_df)} races -> {output_file} ===")
+        print(f"=== [SUCCESS] Saved {len(combined_df)} races -> {output_file} ===", flush=True)
     else:
-        print(f"=== [NO DATA] No races found for {today_str} ===")
+        print(f"=== [NO DATA] No races found for {today_str} ===", flush=True)
 
 
 if __name__ == "__main__":
