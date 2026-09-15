@@ -26,6 +26,8 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Run race cards fetcher
+        env:
+          TZ: "Asia/Tokyo"  # ← ここを追加（日本時間に固定）
         run: python scripts/race-card.py
 
       - name: Commit and push results
