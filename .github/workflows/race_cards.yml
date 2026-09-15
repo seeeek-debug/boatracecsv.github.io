@@ -2,7 +2,7 @@ name: Run Race Cards Fetcher
 
 on:
   schedule:
-    - cron: '0 23 * * *'  # 日本時間あさ8時（UTC 23:00）
+    - cron: '0 23 * * *'  # 日本時間あさ8時
   workflow_dispatch:
 
 jobs:
@@ -27,9 +27,8 @@ jobs:
 
       - name: Run race cards fetcher
         env:
-          TZ: "Asia/Tokyo"  # タイムゾーンを日本時間に固定
-       run: python scripts/run_race_cards_fetcher.py
-
+          TZ: "Asia/Tokyo"
+        run: python scripts/run_race_cards_fetcher.py
 
       - name: Commit and push results
         run: |
