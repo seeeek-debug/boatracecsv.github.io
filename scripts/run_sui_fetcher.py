@@ -3,6 +3,7 @@
 Fetch real-time sui (weather & water condition) preview data for today's races
 and update data/previews/sui/YYYY/MM/DD.csv to match the official preview schema.
 """
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 import os
 import re
@@ -30,7 +31,6 @@ WIND_DIR_MAP = {
     "西": 7, "西北西": 8, "北西": 8, "北北西": 1
 }
 
-# 画像（06/18.csv）と完全に一致する13列の定義
 TARGET_COLUMNS = [
     "レースコード",
     "レース日",
@@ -49,7 +49,6 @@ TARGET_COLUMNS = [
 
 
 def parse_wind_dir(val_str: str) -> str:
-    """風向テキストまたはクラス名から1~8のコード文字列に変換（該当なしは空文字）"""
     if not val_str:
         return ""
     m = re.search(r'\d+', val_str)
@@ -64,8 +63,8 @@ def parse_wind_dir(val_str: str) -> str:
     return ""
 
 
-def fetch_sui_for_race(stadium_code: int, race_number: int, date_str: str, now_jst: datetime) -> dict | None:
-    """ボートレース公式サイトの直前情報ページから全気象項目を取得"""
+def fetch_sui_for_race(args) -> dict | None:
+    stadium_code, race_number, date_str, now_jst = args
     date_formatted = date_str.replace("-", "")
     url = f"https://www.boatrace.jp/owpc/pc/race/beforeinfo?rno={race_number}&jcd={stadium_code:02d}&hd={date_formatted}"
     
@@ -74,7 +73,7 @@ def fetch_sui_for_race(stadium_code: int, race_number: int, date_str: str, now_j
     }
 
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = requests.get(url, headers=headers, timeout=5)
         if resp.status_code != 200:
             return None
 
@@ -83,7 +82,6 @@ def fetch_sui_for_race(stadium_code: int, race_number: int, date_str: str, now_j
         if not weather_box:
             return None
 
-        # 締切時刻の取得
         deadline_time = ""
         deadline_el = soup.select_one(".tab2_time, .label2, .is-deadline")
         if deadline_el:
@@ -91,7 +89,6 @@ def fetch_sui_for_race(stadium_code: int, race_number: int, date_str: str, now_j
             if m_dl:
                 deadline_time = m_dl.group(1)
 
-        # 気象観測時刻の取得（例: 0755）
         obs_time = ""
         obs_el = weather_box.select_one(".weather1_title, .weather1_time, .weather1_bodyTime")
         if obs_el:
@@ -99,7 +96,6 @@ def fetch_sui_for_race(stadium_code: int, race_number: int, date_str: str, now_j
             if m_obs:
                 obs_time = f"{int(m_obs.group(1)):02d}{m_obs.group(2)}"
 
-        # 気温・天候・風速・風向・水温・波高の解析
         temp_el = weather_box.select_one(".weather1_bodyUnit--sora .weather1_bodyUnitLabelData")
         air_temp = float(re.search(r'[\d\.]+', temp_el.text).group()) if temp_el and re.search(r'[\d\.]+', temp_el.text) else None
 
@@ -165,17 +161,21 @@ def main():
         except Exception:
             existing_df = pd.DataFrame()
 
-    fetched_rows = []
-    for stadium_code in range(1, 25):
-        stadium_success = 0
-        for race_number in range(1, 13):
-            data = fetch_sui_for_race(stadium_code, race_number, today_str, now_jst)
-            if data:
-                fetched_rows.append(data)
-                stadium_success += 1
+    tasks = [
+        (stadium_code, race_number, today_str, now_jst)
+        for stadium_code in range(1, 25)
+        for race_number in range(1, 13)
+    ]
 
-        if stadium_success > 0:
-            print(f"  [場コード {stadium_code:02d}] {stadium_success} レースの気象データ取得完了", flush=True)
+    fetched_rows = []
+    print(f"Fetching {len(tasks)} races in parallel...", flush=True)
+
+    with ThreadPoolExecutor(max_workers=15) as executor:
+        futures = [executor.submit(fetch_sui_for_race, task) for task in tasks]
+        for future in as_completed(futures):
+            res = future.result()
+            if res:
+                fetched_rows.append(res)
 
     if not fetched_rows:
         print(f"=== [NO DATA] 新規取得データなし ({today_str}) ===", flush=True)
@@ -189,7 +189,8 @@ def main():
     else:
         combined_df = new_df
 
-    # 定義した13列の順番に並び替えて保存
+    combined_df = combined_df.sort_values(by=["レースコード"]).reset_index(drop=True)
+
     for col in TARGET_COLUMNS:
         if col not in combined_df.columns:
             combined_df[col] = ""
