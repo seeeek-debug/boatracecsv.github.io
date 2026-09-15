@@ -20,7 +20,7 @@ from boatrace.odds_realtime import OddsRealtimeFetcher
 
 
 def convert_to_dataframe(data):
-    """オブジェクト/辞書/リストを DataFrame に変換"""
+    """オブジェクト/辞書/リストを DataFrame に安全変換"""
     if data is None:
         return None
     if isinstance(data, pd.DataFrame):
@@ -84,36 +84,53 @@ def get_target_races(now_jst, limit=3):
 
 
 def call_fetch_method(fetcher, today_str, stadium_code, race_number):
-    """メソッドの受け取る引数を自動判定して安全に呼び出し"""
-    method = None
-    for name in ["fetch_values", "scrape_race", "fetch"]:
-        if hasattr(fetcher, name):
-            method = getattr(fetcher, name)
-            break
+    """OddsRealtimeFetcher の引数定義（source, date_str 等）に合わせて動的に呼び出し"""
+    methods_to_try = ["fetch_values", "scrape_race", "fetch", "scrape"]
+    
+    for method_name in methods_to_try:
+        if not hasattr(fetcher, method_name):
+            continue
+        
+        method = getattr(fetcher, method_name)
+        sig = inspect.signature(method)
+        params = sig.parameters
 
-    if method is None:
-        raise AttributeError("OddsRealtimeFetcher に適切なメソッドが見つかりません。")
+        # キーワード引数の組み立て
+        kwargs = {}
+        for param_name in params:
+            if param_name in ["self", "cls"]:
+                continue
+            if param_name in ["source", "src", "odds_type", "type"]:
+                kwargs[param_name] = "official"
+            elif param_name in ["date_str", "date", "race_date", "ymd"]:
+                kwargs[param_name] = today_str
+            elif param_name in ["stadium_code", "stadium", "jyo_code", "place_code"]:
+                kwargs[param_name] = stadium_code
+            elif param_name in ["race_number", "race", "race_num", "race_no"]:
+                kwargs[param_name] = race_number
 
-    sig = inspect.signature(method)
-    kwargs = {}
+        try:
+            res = method(**kwargs)
+            if res is not None:
+                return res
+        except Exception:
+            pass
 
-    # パラメータ名が存在する場合のみ設定
-    if "date" in sig.parameters:
-        kwargs["date"] = today_str
-    elif "race_date" in sig.parameters:
-        kwargs["race_date"] = today_str
+        # 位置引数での呼び出しを試行（フォールバック）
+        positional_patterns = [
+            ("official", today_str, stadium_code, race_number),
+            (today_str, stadium_code, race_number),
+            (stadium_code, race_number),
+        ]
+        for pattern in positional_patterns:
+            try:
+                res = method(*pattern)
+                if res is not None:
+                    return res
+            except Exception:
+                pass
 
-    if "stadium_code" in sig.parameters:
-        kwargs["stadium_code"] = stadium_code
-    elif "stadium" in sig.parameters:
-        kwargs["stadium"] = stadium_code
-
-    if "race_number" in sig.parameters:
-        kwargs["race_number"] = race_number
-    elif "race" in sig.parameters:
-        kwargs["race"] = race_number
-
-    return method(**kwargs)
+    raise RuntimeError("OddsRealtimeFetcher の取得メソッド呼び出しに失敗しました。")
 
 
 def main():
