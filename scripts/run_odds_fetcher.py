@@ -1,4 +1,6 @@
+from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone, timedelta
+import inspect
 import os
 from pathlib import Path
 import sys
@@ -15,6 +17,27 @@ if str(project_root) not in sys.path:
 
 from boatrace.downloader import RateLimiter
 from boatrace.odds_realtime import OddsRealtimeFetcher
+
+
+def convert_to_dataframe(data):
+    """オブジェクト/辞書/リストを DataFrame に変換"""
+    if data is None:
+        return None
+    if isinstance(data, pd.DataFrame):
+        return data
+    if is_dataclass(data):
+        return pd.DataFrame([asdict(data)])
+    if hasattr(data, "__dict__"):
+        return pd.DataFrame([vars(data)])
+    if isinstance(data, dict):
+        return pd.DataFrame([data])
+    if isinstance(data, list):
+        rows = [
+            asdict(x) if is_dataclass(x) else (vars(x) if hasattr(x, "__dict__") else x)
+            for x in data
+        ]
+        return pd.DataFrame(rows)
+    return pd.DataFrame([data])
 
 
 def get_target_races(now_jst, limit=3):
@@ -40,7 +63,6 @@ def get_target_races(now_jst, limit=3):
         print(f"利用可能な列名一覧: {list(df.columns)}")
         return []
 
-    # JSTタイムゾーンを明示して締切日時を生成
     df["close_datetime"] = pd.to_datetime(
         today_str + " " + df["電話投票締切予定"], format="%Y-%m-%d %H:%M"
     ).dt.tz_localize(JST)
@@ -61,8 +83,40 @@ def get_target_races(now_jst, limit=3):
     return targets
 
 
+def call_fetch_method(fetcher, today_str, stadium_code, race_number):
+    """メソッドの受け取る引数を自動判定して安全に呼び出し"""
+    method = None
+    for name in ["fetch_values", "scrape_race", "fetch"]:
+        if hasattr(fetcher, name):
+            method = getattr(fetcher, name)
+            break
+
+    if method is None:
+        raise AttributeError("OddsRealtimeFetcher に適切なメソッドが見つかりません。")
+
+    sig = inspect.signature(method)
+    kwargs = {}
+
+    # パラメータ名が存在する場合のみ設定
+    if "date" in sig.parameters:
+        kwargs["date"] = today_str
+    elif "race_date" in sig.parameters:
+        kwargs["race_date"] = today_str
+
+    if "stadium_code" in sig.parameters:
+        kwargs["stadium_code"] = stadium_code
+    elif "stadium" in sig.parameters:
+        kwargs["stadium"] = stadium_code
+
+    if "race_number" in sig.parameters:
+        kwargs["race_number"] = race_number
+    elif "race" in sig.parameters:
+        kwargs["race"] = race_number
+
+    return method(**kwargs)
+
+
 def main():
-    # 実行時の日本時間を取得
     now_jst = datetime.now(JST)
     today_str = now_jst.strftime("%Y-%m-%d")
     year, month, day = now_jst.strftime("%Y"), now_jst.strftime("%m"), now_jst.strftime("%d")
@@ -73,7 +127,7 @@ def main():
     print(f"Target odds count: {len(target_races)}")
 
     if not target_races:
-        print("対象レースが見つかりません（当日のプログラムCSVが存在しないか、全レース終了済みです）。")
+        print("対象レースが見つかりません。")
         return
 
     for target in target_races:
@@ -82,32 +136,10 @@ def main():
         deadline_time = target["close_time"]
 
         try:
-            # OddsRealtimeFetcher のメソッド呼び出し
-            if hasattr(fetcher, "fetch_values"):
-                data = fetcher.fetch_values(
-                    date=today_str,
-                    stadium_code=stadium_code,
-                    race_number=race_number,
-                )
-            elif hasattr(fetcher, "scrape_race"):
-                data = fetcher.scrape_race(
-                    date=today_str,
-                    stadium_code=stadium_code,
-                    race_number=race_number,
-                )
-            else:
-                print("Error: 適切なデータ取得メソッドが見つかりません。")
-                break
+            data = call_fetch_method(fetcher, today_str, stadium_code, race_number)
+            df_new = convert_to_dataframe(data)
 
-            if data is not None:
-                if isinstance(data, dict):
-                    df_new = pd.DataFrame([data])
-                elif isinstance(data, list):
-                    df_new = pd.DataFrame(data)
-                else:
-                    df_new = data
-
-                # リポジトリ構造に合わせて od3 フォルダへ保存
+            if df_new is not None and not df_new.empty:
                 output_dir = f"data/previews/od3/{year}/{month}"
                 os.makedirs(output_dir, exist_ok=True)
                 output_file = f"{output_dir}/{day}.csv"
