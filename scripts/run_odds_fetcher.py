@@ -1,6 +1,5 @@
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone, timedelta
-import inspect
 import os
 from pathlib import Path
 import sys
@@ -26,11 +25,9 @@ def convert_to_dataframe(data, source="od3"):
     if isinstance(data, pd.DataFrame):
         return data
 
-    # リスト形式でオッズ値のみ返ってきた場合、ODDS_HEADERS を参照して列割り当て
     if isinstance(data, list):
         headers = ODDS_HEADERS.get(source, [])
         if headers and len(headers) == len(data):
-            # ヘッダー名が 1-2-3 等の場合、3連単_1-2-3 に補正
             cols = [f"3連単_{h}" if not str(h).startswith("3連単_") else h for h in headers]
             return pd.DataFrame([dict(zip(cols, data))])
         return pd.DataFrame([data])
@@ -89,11 +86,10 @@ def get_target_races(now_jst, limit=3):
 
 
 def call_fetch_method(fetcher, today_str, stadium_code, race_number):
-    """OddsRealtimeFetcher.fetch_values に正解キー 'od3' を指定して呼び出し"""
+    """OddsRealtimeFetcher.fetch_values に 'od3' を指定して呼び出し"""
     stadium_code = int(stadium_code)
     race_number = int(race_number)
 
-    # 3連単は 'od3'
     source = "od3" if "od3" in _PARSERS else list(_PARSERS.keys())[0]
     dates = [today_str, today_str.replace("-", "")]
 
@@ -112,7 +108,7 @@ def call_fetch_method(fetcher, today_str, stadium_code, race_number):
 
 
 def format_odds_dataframe(data, source, today_str, stadium_code, race_number, deadline_time, now_jst):
-    """画像のフォーマットに合わせて、先頭メタ列＋オッズ列へ整形"""
+    """指定のCSV構造（メタ情報＋オッズ列）へ整形"""
     df = convert_to_dataframe(data, source=source)
     if df is None or df.empty:
         return None
@@ -138,6 +134,27 @@ def format_odds_dataframe(data, source, today_str, stadium_code, race_number, de
     return df
 
 
+def save_or_update_csv(df_new, output_file):
+    """既存のCSVが存在する場合、同一の『レースコード』行を最新データに上書き"""
+    if os.path.exists(output_file):
+        try:
+            df_old = pd.read_csv(output_file, dtype={"レースコード": str, "レース場": str})
+            df_combined = pd.concat([df_old, df_new], ignore_index=True)
+            # 同じレースコードは最新（keep='last'）を残して重複削除
+            df_combined = df_combined.drop_duplicates(subset=["レースコード"], keep="last")
+        except Exception as e:
+            print(f"[Warning] Failed to merge with existing CSV: {e}")
+            df_combined = df_new
+    else:
+        df_combined = df_new
+
+    df_combined.to_csv(
+        output_file,
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+
 def main():
     now_jst = datetime.now(JST)
     today_str = now_jst.strftime("%Y-%m-%d")
@@ -151,8 +168,6 @@ def main():
     if not target_races:
         print("対象レースが見つかりません。")
         return
-
-    print(f"[Debug] Valid sources in library: {list(_PARSERS.keys())}")
 
     for target in target_races:
         stadium_code = target["stadium_code"]
@@ -170,17 +185,10 @@ def main():
                 os.makedirs(output_dir, exist_ok=True)
                 output_file = f"{output_dir}/{day}.csv"
 
-                file_exists = os.path.exists(output_file)
-                df_new.to_csv(
-                    output_file,
-                    mode="a" if file_exists else "w",
-                    header=not file_exists,
-                    index=False,
-                    encoding="utf-8-sig",
-                )
+                save_or_update_csv(df_new, output_file)
 
                 print(
-                    f"Saved odds data to {output_file} "
+                    f"Saved/Updated odds data to {output_file} "
                     f"({stadium_code}R{race_number}, 締切予定:{deadline_time})"
                 )
 
